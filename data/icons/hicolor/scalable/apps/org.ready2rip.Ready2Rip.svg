@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ready2rip application icon
+  Optical disc with spectrum refraction (original design inspired by classic
+  prism-and-rainbow iconography — not a copy of any trademarked logo).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <!-- App tile: deep night blue → indigo -->
+    <linearGradient id="tile" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0%" stop-color="#1a1b26"/>
+      <stop offset="55%" stop-color="#241f31"/>
+      <stop offset="100%" stop-color="#1c0b2e"/>
+    </linearGradient>
+
+    <!-- Soft rim light on tile -->
+    <linearGradient id="tileRim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="40%" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.25"/>
+    </linearGradient>
+
+    <!-- White incoming beam -->
+    <linearGradient id="beamIn" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#f6f5f4" stop-opacity="0"/>
+      <stop offset="35%" stop-color="#f6f5f4" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.95"/>
+    </linearGradient>
+
+    <!-- Spectrum fan (red → violet) -->
+    <linearGradient id="spectrum" x1="0" y1="0" x2="1" y2="0.15">
+      <stop offset="0%" stop-color="#e01b24"/>
+      <stop offset="16%" stop-color="#ff7800"/>
+      <stop offset="33%" stop-color="#f5c211"/>
+      <stop offset="50%" stop-color="#33d17a"/>
+      <stop offset="66%" stop-color="#3584e4"/>
+      <stop offset="83%" stop-color="#9141ac"/>
+      <stop offset="100%" stop-color="#c061cb"/>
+    </linearGradient>
+
+    <!-- Disc metal -->
+    <radialGradient id="disc" cx="36%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#f6f5f4"/>
+      <stop offset="40%" stop-color="#deddda"/>
+      <stop offset="75%" stop-color="#9a9996"/>
+      <stop offset="100%" stop-color="#5e5c64"/>
+    </radialGradient>
+
+    <!-- Rainbow sheen on data side -->
+    <linearGradient id="discSheen" x1="0" y1="0.2" x2="1" y2="0.8">
+      <stop offset="0%" stop-color="#62a0ea" stop-opacity="0.35"/>
+      <stop offset="25%" stop-color="#c061cb" stop-opacity="0.30"/>
+      <stop offset="50%" stop-color="#f66151" stop-opacity="0.28"/>
+      <stop offset="75%" stop-color="#f5c211" stop-opacity="0.30"/>
+      <stop offset="100%" stop-color="#57e389" stop-opacity="0.32"/>
+    </linearGradient>
+
+    <radialGradient id="hub" cx="38%" cy="32%" r="70%">
+      <stop offset="0%" stop-color="#e8e7e4"/>
+      <stop offset="100%" stop-color="#77767b"/>
+    </radialGradient>
+
+    <!-- Soft glow behind spectrum -->
+    <radialGradient id="specGlow" cx="72%" cy="48%" r="45%">
+      <stop offset="0%" stop-color="#c061cb" stop-opacity="0.35"/>
+      <stop offset="40%" stop-color="#3584e4" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#3584e4" stop-opacity="0"/>
+    </radialGradient>
+
+    <clipPath id="tileClip">
+      <rect x="8" y="8" width="112" height="112" rx="28"/>
+    </clipPath>
+  </defs>
+
+  <!-- Rounded app plate -->
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#tile)"/>
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#tileRim)"/>
+
+  <g clip-path="url(#tileClip)">
+    <!-- Ambient spectrum glow -->
+    <ellipse cx="88" cy="64" rx="42" ry="36" fill="url(#specGlow)"/>
+
+    <!-- Incoming white light (from upper left) -->
+    <polygon
+      points="8,38 8,52 58,62 58,56"
+      fill="url(#beamIn)"
+      opacity="0.95"/>
+    <!-- Soft beam edge -->
+    <polygon
+      points="8,42 8,48 58,59 58,57"
+      fill="#ffffff"
+      opacity="0.35"/>
+
+    <!-- Refracted rainbow fan (exiting right of disc) -->
+    <!-- Individual bands for crisp Pink Floyd–like spectrum -->
+    <g opacity="0.95">
+      <polygon points="74,54 118,36 118,42 76,56" fill="#e01b24"/>
+      <polygon points="76,56 118,42 118,48 78,58" fill="#ff7800"/>
+      <polygon points="78,58 118,48 118,54 79,61" fill="#f5c211"/>
+      <polygon points="79,61 118,54 118,60 80,64" fill="#33d17a"/>
+      <polygon points="80,64 118,60 118,66 79,67" fill="#3584e4"/>
+      <polygon points="79,67 118,66 118,72 78,70" fill="#1c71d8"/>
+      <polygon points="78,70 118,72 118,78 76,72" fill="#9141ac"/>
+      <polygon points="76,72 118,78 118,84 74,74" fill="#c061cb"/>
+    </g>
+    <!-- Soft blend overlay for continuous spectrum feel -->
+    <polygon
+      points="74,54 118,36 118,84 74,74"
+      fill="url(#spectrum)"
+      opacity="0.28"/>
+
+    <!-- Optical disc (slight 3/4: ellipse would work; keep circle for clarity) -->
+    <circle cx="56" cy="66" r="30" fill="url(#disc)"/>
+    <circle cx="56" cy="66" r="30" fill="url(#discSheen)"/>
+    <!-- Data grooves -->
+    <circle cx="56" cy="66" r="25" fill="none" stroke="#ffffff" stroke-width="0.8" opacity="0.22"/>
+    <circle cx="56" cy="66" r="20" fill="none" stroke="#ffffff" stroke-width="0.7" opacity="0.18"/>
+    <circle cx="56" cy="66" r="15" fill="none" stroke="#1c71d8" stroke-width="0.9" opacity="0.25"/>
+    <!-- Rim -->
+    <circle cx="56" cy="66" r="30" fill="none" stroke="#3d3846" stroke-width="1.2" opacity="0.4"/>
+    <circle cx="56" cy="66" r="30" fill="none" stroke="#ffffff" stroke-width="1" opacity="0.35"/>
+
+    <!-- Hub + spindle hole -->
+    <circle cx="56" cy="66" r="9" fill="url(#hub)"/>
+    <circle cx="56" cy="66" r="9" fill="none" stroke="#3d3846" stroke-width="0.8" opacity="0.3"/>
+    <circle cx="56" cy="66" r="4" fill="#1a1b26"/>
+    <circle cx="56" cy="66" r="4" fill="none" stroke="#ffffff" stroke-width="0.6" opacity="0.25"/>
+
+    <!-- Specular glint on disc -->
+    <path
+      d="M 40,50 C 46,44 54,42 62,44"
+      fill="none"
+      stroke="#ffffff"
+      stroke-width="2.2"
+      stroke-linecap="round"
+      opacity="0.55"/>
+
+    <!-- Prismatic highlight where beam hits the disc edge -->
+    <circle cx="70" cy="58" r="3.5" fill="#ffffff" opacity="0.7"/>
+    <circle cx="70" cy="58" r="6" fill="#f6f5f4" opacity="0.2"/>
+  </g>
+
+  <!-- Outer tile stroke (Adwaita-like) -->
+  <rect
+    x="8.5" y="8.5" width="111" height="111" rx="27.5"
+    fill="none"
+    stroke="#ffffff"
+    stroke-opacity="0.08"
+    stroke-width="1"/>
+</svg>

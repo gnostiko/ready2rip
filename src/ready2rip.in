@@ -1,0 +1,23 @@
+#!@PYTHON@
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+import os
+import sys
+import signal
+
+# Allow running from a Meson build tree without installing system-wide.
+pkgdatadir = '@PKGDATADIR@'
+if os.path.isdir(pkgdatadir):
+    sys.path.insert(1, pkgdatadir)
+
+# Local development: also prefer the source tree next to this script's project.
+_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src')
+if os.path.isdir(_src):
+    sys.path.insert(1, _src)
+
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+from ready2rip.main import main
+
+if __name__ == '__main__':
+    sys.exit(main())

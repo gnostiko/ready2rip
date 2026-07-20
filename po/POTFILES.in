@@ -1,0 +1,4 @@
+data/org.ready2rip.Ready2Rip.desktop.in
+data/org.ready2rip.Ready2Rip.metainfo.xml.in
+src/ready2rip/application.py
+src/ready2rip/window.py

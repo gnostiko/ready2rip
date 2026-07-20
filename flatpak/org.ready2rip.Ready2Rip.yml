@@ -1,0 +1,40 @@
+# Flatpak manifest — build from the repository root with:
+#   flatpak-builder --user --install --force-clean build-flatpak flatpak/org.ready2rip.Ready2Rip.yml
+#
+# Optical drives need device access inside the sandbox.
+
+app-id: org.ready2rip.Ready2Rip
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: ready2rip
+
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  # CD/DVD drives (sr0, sg*, etc.)
+  - --device=all
+  - --filesystem=xdg-music:create
+  - --filesystem=xdg-download:ro
+  - --talk-name=org.freedesktop.Notifications
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /man
+  - /share/man
+  - /share/gtk-doc
+  - '*.la'
+  - '*.a'
+
+modules:
+  # cdparanoia is not always in the GNOME runtime; ship it when we package.
+  # For the scaffold we only build the app; add cdparanoia as a module later.
+  - name: ready2rip
+    buildsystem: meson
+    sources:
+      - type: dir
+        path: ..

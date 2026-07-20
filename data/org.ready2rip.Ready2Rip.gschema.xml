@@ -1,0 +1,272 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="ready2rip">
+  <schema id="org.ready2rip.Ready2Rip" path="/org/ready2rip/Ready2Rip/">
+
+    <key name="output-directory" type="s">
+      <default>''</default>
+      <summary>Default output directory</summary>
+      <description>
+        Where ripped audio files are written. When empty, the app uses the XDG Music
+        folder (typically ~/Music).
+      </description>
+    </key>
+
+    <key name="device" type="s">
+      <default>'/dev/sr0'</default>
+      <summary>Optical drive device path</summary>
+    </key>
+
+    <key name="encode-format" type="s">
+      <choices>
+        <choice value="flac"/>
+        <choice value="mp3"/>
+        <choice value="opus"/>
+        <choice value="wav"/>
+      </choices>
+      <default>'flac'</default>
+      <summary>Encoder / output format</summary>
+    </key>
+
+    <key name="flac-compression" type="i">
+      <range min="0" max="8"/>
+      <default>5</default>
+      <summary>FLAC compression level (0–8)</summary>
+    </key>
+
+    <key name="mp3-bitrate" type="i">
+      <range min="64" max="320"/>
+      <default>320</default>
+      <summary>MP3 CBR bitrate (kbps)</summary>
+    </key>
+
+    <key name="opus-bitrate" type="i">
+      <range min="48" max="512"/>
+      <default>160</default>
+      <summary>Opus bitrate (kbps)</summary>
+    </key>
+
+    <key name="embed-artwork" type="b">
+      <default>true</default>
+      <summary>Embed album artwork in files</summary>
+    </key>
+
+    <key name="fetch-artwork" type="b">
+      <default>true</default>
+      <summary>Download album artwork when available</summary>
+    </key>
+
+    <key name="artwork-source-itunes" type="b">
+      <default>true</default>
+      <summary>Use Apple Music / iTunes for cover art</summary>
+    </key>
+
+    <key name="artwork-source-caa" type="b">
+      <default>true</default>
+      <summary>Use Cover Art Archive (MusicBrainz) for cover art</summary>
+    </key>
+
+    <key name="artwork-source-deezer" type="b">
+      <default>true</default>
+      <summary>Use Deezer for cover art</summary>
+    </key>
+
+    <key name="artwork-max-size" type="i">
+      <range min="0" max="4000"/>
+      <default>600</default>
+      <summary>Maximum embedded artwork edge length (pixels)</summary>
+      <description>
+        Full-resolution art is always downloaded for preview. Before embedding into
+        audio files, images are scaled so the longest edge is this many pixels.
+        0 keeps the original downloaded size. Default is 600.
+      </description>
+    </key>
+
+    <key name="apply-replaygain" type="b">
+      <default>true</default>
+      <summary>Compute and write ReplayGain tags</summary>
+    </key>
+
+    <key name="use-musicbrainz" type="b">
+      <default>true</default>
+      <summary>Look up metadata on MusicBrainz</summary>
+    </key>
+
+    <key name="use-freedb" type="b">
+      <default>true</default>
+      <summary>Look up metadata on FreeDB-compatible services (gnudb)</summary>
+    </key>
+
+    <key name="auto-lookup-metadata" type="b">
+      <default>true</default>
+      <summary>Automatically look up metadata when a disc is detected</summary>
+    </key>
+
+    <key name="filename-template" type="s">
+      <default>'{track:02d} - {title}'</default>
+      <summary>Track filename template</summary>
+      <description>
+        Placeholders: {track}, {title}, {artist}, {album}, {disc}, {totaldiscs}
+      </description>
+    </key>
+
+    <key name="album-folder-template" type="s">
+      <default>'{album_artist}/{album}/{disc_folder}'</default>
+      <summary>Album folder template under the output directory</summary>
+      <description>
+        Placeholders: {album_artist}, {album}, {year}, {disc}, {totaldiscs},
+        {disc_folder} (CD1/CD2 only when total discs &gt; 1; empty otherwise).
+      </description>
+    </key>
+
+    <key name="verify-accuraterip" type="b">
+      <default>true</default>
+      <summary>Verify rips with AccurateRip</summary>
+      <description>After extraction, compare track CRCs to the AccurateRip database.</description>
+    </key>
+
+    <key name="drive-sample-offset" type="i">
+      <range min="-2000" max="2000"/>
+      <default>0</default>
+      <summary>CD drive sample read offset</summary>
+      <description>
+        AccurateRip sample offset for this drive. Set automatically by Drive setup,
+        or manually from accuraterip.com/driveoffsets.htm.
+      </description>
+    </key>
+
+    <key name="drive-offset-configured" type="b">
+      <default>false</default>
+      <summary>Drive offset setup completed</summary>
+      <description>True after the user finishes or skips drive offset calibration.</description>
+    </key>
+
+    <key name="drive-offset-device" type="s">
+      <default>''</default>
+      <summary>Device path used when the offset was calibrated</summary>
+    </key>
+
+    <key name="burst-fallback" type="b">
+      <default>true</default>
+      <summary>Burst mode fallback for scratched discs</summary>
+      <description>
+        If secure cdparanoia extraction fails or produces incomplete audio
+        (common on badly scratched discs), automatically re-rip that track
+        with paranoia disabled (burst mode).
+      </description>
+    </key>
+
+    <key name="write-rip-log" type="b">
+      <default>true</default>
+      <summary>Write detailed rip log</summary>
+      <description>
+        After extraction, write an EAC-style status log into the album folder
+        (TOC, CRC, AccurateRip, burst mode, encoder settings).
+      </description>
+    </key>
+
+    <key name="test-and-copy" type="b">
+      <default>true</default>
+      <summary>Test and copy each track</summary>
+      <description>
+        Extract every track twice (test then copy), compare CRC32 values, and
+        only accept a match. Matches whipper / cyanrip / EAC secure workflow.
+      </description>
+    </key>
+
+    <key name="defeat-audio-cache" type="b">
+      <default>true</default>
+      <summary>Defeat audio cache between test and copy</summary>
+      <description>
+        Between the test and copy passes, force a read of a distant sector range
+        so the drive cannot serve the second pass from cache. When drive setup
+        detected caching, this is forced on.
+      </description>
+    </key>
+
+    <key name="drive-cache-configured" type="b">
+      <default>false</default>
+      <summary>Drive audio-cache analysis completed</summary>
+      <description>
+        True after Drive setup has probed whether this drive caches audio.
+      </description>
+    </key>
+
+    <key name="drive-caches-audio" type="b">
+      <default>false</default>
+      <summary>Drive caches audio data</summary>
+      <description>
+        Result of cache analysis from Drive setup. When true, rips always defeat
+        the audio cache between test and copy.
+      </description>
+    </key>
+
+    <key name="drive-cache-message" type="s">
+      <default>''</default>
+      <summary>Human-readable drive cache analysis summary</summary>
+    </key>
+
+    <key name="drive-accurate-stream-configured" type="b">
+      <default>false</default>
+      <summary>Accurate Stream test completed</summary>
+    </key>
+
+    <key name="drive-accurate-stream" type="b">
+      <default>false</default>
+      <summary>Drive supports Accurate Stream</summary>
+      <description>
+        True when re-reads of the same sector range match after seeking away
+        (EAC Accurate Stream test, measured during Drive setup).
+      </description>
+    </key>
+
+    <key name="drive-accurate-stream-message" type="s">
+      <default>''</default>
+      <summary>Accurate Stream test summary</summary>
+    </key>
+
+    <key name="drive-c2-configured" type="b">
+      <default>false</default>
+      <summary>C2 error pointer probe completed</summary>
+    </key>
+
+    <key name="drive-c2-pointers" type="b">
+      <default>false</default>
+      <summary>Drive supports C2 error pointers</summary>
+      <description>
+        True when MMC CD Read Feature reports C2 Error pointers (via cd-drive).
+      </description>
+    </key>
+
+    <key name="drive-c2-message" type="s">
+      <default>''</default>
+      <summary>C2 pointer probe summary</summary>
+    </key>
+
+    <key name="rip-htoa" type="b">
+      <default>true</default>
+      <summary>Detect and rip Hidden Track One Audio</summary>
+      <description>
+        If track 1 has a pregap, extract it and save as track 00 when the audio
+        is not digitally silent (HTOA).
+      </description>
+    </key>
+
+    <key name="auto-rip" type="b">
+      <default>false</default>
+      <summary>Automatically start ripping when a disc is inserted</summary>
+      <description>
+        When enabled, ready2rip starts a full-disc rip shortly after a new audio
+        CD is detected (tray closed, media ready).
+      </description>
+    </key>
+
+    <key name="auto-eject" type="b">
+      <default>false</default>
+      <summary>Eject the disc after a successful rip</summary>
+      <description>
+        When enabled, open the drive tray after a rip finishes successfully.
+      </description>
+    </key>
+
+  </schema>
+</schemalist>

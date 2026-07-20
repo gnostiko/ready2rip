@@ -1,0 +1,38 @@
+# Build / install trees
+/build/
+/build-flatpak/
+/install/
+/.flatpak-builder/
+*.so
+*.o
+*.a
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.env
+
+# Meson / ninja leftovers outside build/
+compile_commands.json
+.meson*
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Local runtime / caches
+*.log
+.cache/
+*.gschema.compiled
+
+# Generated Meson config (source has config.py.in / dev config.py)
+# Keep src/ready2rip/config.py for local runs; it is the dev fallback.

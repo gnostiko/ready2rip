@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>@APPLICATION_ID@</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>ready2rip</name>
+  <summary>Rip audio CDs with AccurateRip and modern metadata</summary>
+  <icon type="stock">@APPLICATION_ID@</icon>
+  <description>
+    <p>
+      ready2rip is a modern GNOME application for ripping audio CDs. It aims to
+      use cdparanoia for secure extraction, verify rips with AccurateRip,
+      look up metadata via MusicBrainz (and FreeDB-compatible services),
+      apply ReplayGain, and fetch album art with optional embedded sizes.
+    </p>
+  </description>
+  <launchable type="desktop-id">@APPLICATION_ID@.desktop</launchable>
+  <url type="homepage">@PACKAGE_URL@</url>
+  <url type="bugtracker">@BUGTRACKER_URL@</url>
+  <developer id="io.github.gnostiko">
+    <name>gnostiko</name>
+  </developer>
+  <releases>
+    <release version="@APPLICATION_VERSION@" date="2026-07-19">
+      <description>
+        <p>Initial development scaffold.</p>
+      </description>
+    </release>
+  </releases>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+</component>
