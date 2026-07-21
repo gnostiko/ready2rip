@@ -1,27 +1,18 @@
 # ready2rip
 
-Modern GNOME CD ripping application for Linux (Flatpak-friendly).
+A vibe-coded personal project.
+
+I love dBpoweramp and EAC, but was unsatisfied with CD rippers available on Linux. I needed something that would automatically ensure a secure ripping process similar to EAC, pull the highest quality art, resize embedded art, and process ReplayGain v2.0. This accompishes all of that in a GNOME style GUI.
 
 **Status:** initial release candidate — GTK 4 / libadwaita UI with cdparanoia
 secure rip, AccurateRip, MusicBrainz, tags, ReplayGain, and artwork.
 
-Default rip destination is the **XDG Music** folder (`~/Music`).
 
 **Repository:** [github.com/gnostiko/ready2rip](https://github.com/gnostiko/ready2rip)  
 **Author:** [gnostiko](https://github.com/gnostiko)
 
-## Identity
 
-| Item | Value |
-|------|--------|
-| Display name | ready2rip |
-| Application ID | `org.ready2rip.Ready2Rip` |
-| Python package | `ready2rip` |
-| Binary | `ready2rip` |
-| GSettings schema | `org.ready2rip.Ready2Rip` |
-| License | GPL-3.0-or-later |
-
-## Goals
+## Features
 
 - Secure ripping with **cdparanoia**
 - **AccurateRip** verification
@@ -49,21 +40,14 @@ ready2rip/                  # project folder (may still be named GCDRIP on disk)
   meson.build
 ```
 
-## Develop on the host (Solus / any GNOME)
-
-### Dependencies
+## Dependencies
 
 - Python 3 + PyGObject (Gtk 4, Adwaita 1)
 - Meson, Ninja
 - `cdparanoia` (for disc detection and ripping)
 - Optional: `flatpak-builder`, GNOME SDK 50
 
-### Run without installing
 
-```bash
-cd "/path/to/ready2rip"   # or the GCDRIP folder if not renamed on disk
-PYTHONPATH=src GSETTINGS_SCHEMA_DIR=build/data python3 -m ready2rip.main
-```
 
 ### Build with Meson
 
@@ -77,15 +61,7 @@ meson install -C build
 ./install/bin/ready2rip
 ```
 
-## Flatpak
 
-```bash
-flatpak install flathub org.gnome.Platform//50 org.gnome.Sdk//50
-flatpak-builder --user --install --force-clean build-flatpak flatpak/org.ready2rip.Ready2Rip.yml
-flatpak run org.ready2rip.Ready2Rip
-```
-
-The manifest requests `--device=all` so optical drives are visible in the sandbox.
 
 ## License
 
