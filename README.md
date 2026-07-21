@@ -1,6 +1,6 @@
 # ready2rip
 
-A personal project: I love dBpoweramp and EAC, but wanted a Linux ripper that
+A personal vibe-coded project: I love dBpoweramp and EAC, but wanted a Linux ripper that
 defaults to a secure, EAC-like process, high-quality art (with embed resizing),
 and ReplayGain — in a modern GNOME UI.
 
