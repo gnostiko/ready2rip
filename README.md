@@ -1,8 +1,6 @@
 # ready2rip
 
-A personal vibe-coded project; I love dBpoweramp and EAC, but wanted a Linux ripper that
-defaults to a secure, EAC-like process, high-quality art (with embed resizing),
-and ReplayGain - in a modern GNOME UI.
+A personal vibe-coded project; I love dBpoweramp and EAC, but since I use linux primarily it can be a little tedious dealing with these programs under Wine. Decided to experiement with AI to build a ripper for my personal workflow and this is what I've come up with; a secure CD ripper styled for the GNOME DE.
 
 <img width="2180" height="1482" alt="Screenshot From 2026-07-21 08-28-31" src="https://github.com/user-attachments/assets/ca236dff-7f8f-4b4b-89ca-8be169fcfa54" />
 
