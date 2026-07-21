@@ -1,10 +1,8 @@
 # ready2rip
 
-A personal vibe-coded project: I love dBpoweramp and EAC, but wanted a Linux ripper that
+A personal vibe-coded project; I love dBpoweramp and EAC, but wanted a Linux ripper that
 defaults to a secure, EAC-like process, high-quality art (with embed resizing),
-and ReplayGain — in a modern GNOME UI.
-
-Modern **GNOME** CD ripper for Linux — secure extraction, AccurateRip verification, metadata, tags, ReplayGain, and album art in a **GTK 4 / libadwaita** UI.
+and ReplayGain - in a modern GNOME UI.
 
 <img width="2180" height="1482" alt="Screenshot From 2026-07-21 08-28-31" src="https://github.com/user-attachments/assets/ca236dff-7f8f-4b4b-89ca-8be169fcfa54" />
 
@@ -26,7 +24,7 @@ Modern **GNOME** CD ripper for Linux — secure extraction, AccurateRip verifica
 
 ## Typical workflow
 
-1. **Install / run** the AppImage (recommended: with [Gear Lever](https://flathub.org/apps/it.mijorus.gearlever) — see [Run the AppImage](#run-the-appimage)).
+1. **Install / run** the AppImage (recommended: with [Gear Lever](https://flathub.org/apps/it.mijorus.gearlever) - see [Run the AppImage](#run-the-appimage)).
 2. **Insert an audio CD.** ready2rip detects the disc, reads the TOC, and shows tracks.
 3. **Drive setup** (first run, or when you change drives): calibrate **sample offset**, measure Accurate Stream / cache / C2 support.
 4. **Metadata** (optional): auto-lookup when a disc is detected, or press **Lookup** and pick a release. Edit album/track fields if needed. Cover art can be fetched, chosen from disk, or cleared.
@@ -216,31 +214,10 @@ ready2rip/
   meson.build
 ```
 
----
-
-
-## Identity
-
-| Item | Value |
-|------|--------|
-| Display name | ready2rip |
-| Application ID | `org.ready2rip.Ready2Rip` |
-| Python package | `ready2rip` |
-| Binary | `ready2rip` |
-| GSettings schema | `org.ready2rip.Ready2Rip` |
-| License | GPL-3.0-or-later |
-
----
-
-## License
-
-GPL-3.0-or-later. See [LICENSE](LICENSE).
 
 ---
 
 ## Inspired by
-
-This project is inspired by:
 
 - [dBpoweramp](https://www.dbpoweramp.com/)
 - [Exact Audio Copy](https://www.exactaudiocopy.de/)
@@ -250,3 +227,10 @@ This project is inspired by:
 - [cyanrip](https://github.com/cyanreg/cyanrip)
 
 Thanks to those projects and their communities for defining what careful, accurate CD ripping looks like on every platform.
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).
+
+---
+
