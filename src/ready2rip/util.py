@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import urllib.parse
 from pathlib import Path
 
@@ -23,6 +24,11 @@ _DEVICE_BAD = re.compile(r'[\x00-\x1f;&|`$<>(){}\n\r]')
 
 # Max remote image payload we will hold in memory (bytes).
 MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
+
+
+def find_cdparanoia() -> str | None:
+    """Return path to ``cdparanoia`` or libcdio's ``cd-paranoia`` binary."""
+    return shutil.which('cdparanoia') or shutil.which('cd-paranoia')
 
 
 def validate_device_path(device: str | None, *, default: str = '/dev/sr0') -> str:

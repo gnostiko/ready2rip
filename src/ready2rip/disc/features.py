@@ -52,7 +52,9 @@ def test_accurate_stream(
       4. Compare PCM CRC. Repeat *trials* times.
     All pairs must match for a positive result.
     """
-    if shutil.which('cdparanoia') is None:
+    from ready2rip.util import find_cdparanoia
+
+    if find_cdparanoia() is None:
         return FeatureTestResult(
             supported=None,
             message='cdparanoia not found; Accurate Stream not tested',
@@ -235,8 +237,13 @@ def _stream_span(disc: DiscInfo | None) -> str | None:
 
 
 def _burst_span(device: str, span: str, wav_path: Path, *, timeout: int) -> None:
+    from ready2rip.util import find_cdparanoia
+
+    binary = find_cdparanoia()
+    if not binary:
+        raise RuntimeError('cdparanoia not found')
     cmd = [
-        'cdparanoia',
+        binary,
         '-w',
         '-d',
         device,

@@ -126,7 +126,10 @@ def calibrate_drive_offset(
             disc_id=ids.disc_id_string,
         )
 
-    if shutil.which('cdparanoia') is None:
+    from ready2rip.util import find_cdparanoia
+
+    cdparanoia = find_cdparanoia()
+    if cdparanoia is None:
         return with_cache(success=False, message='cdparanoia not found')
 
     # Try shortest middle track first, then other short tracks if needed.
@@ -156,7 +159,7 @@ def calibrate_drive_offset(
             try:
                 subprocess.run(
                     [
-                        'cdparanoia',
+                        cdparanoia,
                         '-q',
                         '-w',
                         '-d',

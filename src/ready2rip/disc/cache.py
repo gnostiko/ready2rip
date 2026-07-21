@@ -46,7 +46,9 @@ def detect_drive_cache(
     3. If both CRCs match and the second read is much faster, the drive
        almost certainly serves from cache.
     """
-    if shutil.which('cdparanoia') is None:
+    from ready2rip.util import find_cdparanoia
+
+    if find_cdparanoia() is None:
         return DriveCacheResult(
             caches=None,
             message='cdparanoia not found; cache detection skipped',
@@ -124,7 +126,9 @@ def flush_drive_cache(
     Safe to call even when cache was not detected — cheap insurance for
     test & copy.
     """
-    if shutil.which('cdparanoia') is None:
+    from ready2rip.util import find_cdparanoia
+
+    if find_cdparanoia() is None:
         return
 
     span = _flush_span(disc)
@@ -179,8 +183,13 @@ def _extract_span(
     timeout: int,
     quiet: bool = True,
 ) -> None:
+    from ready2rip.util import find_cdparanoia
+
+    binary = find_cdparanoia()
+    if not binary:
+        raise RuntimeError('cdparanoia not found')
     cmd = [
-        'cdparanoia',
+        binary,
         '-w',
         '-d',
         device,

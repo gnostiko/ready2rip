@@ -1,5 +1,7 @@
 # Flatpak manifest — build from the repository root with:
-#   flatpak-builder --user --install --force-clean build-flatpak flatpak/org.ready2rip.Ready2Rip.yml
+#   flatpak-builder --user --force-clean --repo=flatpak-repo build-flatpak \
+#     flatpak/org.ready2rip.Ready2Rip.yml
+#   flatpak build-bundle flatpak-repo ready2rip.flatpak org.ready2rip.Ready2Rip
 #
 # Optical drives need device access inside the sandbox.
 
@@ -31,8 +33,36 @@ cleanup:
   - '*.a'
 
 modules:
-  # cdparanoia is not always in the GNOME runtime; ship it when we package.
-  # For the scaffold we only build the app; add cdparanoia as a module later.
+  # libcdio + libcdio-paranoia provide the `cd-paranoia` / `cdparanoia` tools.
+  # The GNOME runtime does not ship them; without this the app cannot read discs.
+  - name: libcdio
+    buildsystem: autotools
+    config-opts:
+      - --disable-static
+      - --disable-cxx
+      - --disable-example-progs
+      - --without-cddb
+    sources:
+      - type: archive
+        url: https://ftp.gnu.org/gnu/libcdio/libcdio-2.1.0.tar.bz2
+        sha256: 8550e9589dbd594bfac93b81ecf129b1dc9d0d51e90f9696f1b2f9b2af32712b
+
+  - name: libcdio-paranoia
+    buildsystem: autotools
+    config-opts:
+      - --disable-static
+      - --disable-example-progs
+    # ready2rip looks for both names; ensure the classic name exists.
+    post-install:
+      - |
+        if [ -x ${FLATPAK_DEST}/bin/cd-paranoia ] && [ ! -e ${FLATPAK_DEST}/bin/cdparanoia ]; then
+          ln -s cd-paranoia ${FLATPAK_DEST}/bin/cdparanoia
+        fi
+    sources:
+      - type: archive
+        url: https://github.com/libcdio/libcdio-paranoia/releases/download/release-10.2%2B2.0.2/libcdio-paranoia-10.2%2B2.0.2.tar.bz2
+        sha256: 186892539dedd661276014d71318c8c8f97ecb1250a86625256abd4defbf0d0c
+
   - name: ready2rip
     buildsystem: meson
     sources:

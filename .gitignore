@@ -36,3 +36,8 @@ Thumbs.db
 
 # Generated Meson config (source has config.py.in / dev config.py)
 # Keep src/ready2rip/config.py for local runs; it is the dev fallback.
+
+/flatpak-repo/
+/build-flatpak/
+/.flatpak-builder/
+*.flatpak

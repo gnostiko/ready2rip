@@ -205,7 +205,9 @@ def _fill_from_cd_drive(info: DriveInfo) -> None:
 
 
 def _fill_from_cdparanoia(info: DriveInfo) -> None:
-    cdparanoia = shutil.which('cdparanoia')
+    from ready2rip.util import find_cdparanoia
+
+    cdparanoia = find_cdparanoia()
     if not cdparanoia:
         return
     try:

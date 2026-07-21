@@ -58,14 +58,14 @@ def probe_disc(device: str = '/dev/sr0') -> DiscInfo | None:
     Returns ``None`` if cdparanoia is missing, the device cannot be read,
     or no audio tracks are found.
     """
-    from ready2rip.util import validate_device_path
+    from ready2rip.util import find_cdparanoia, validate_device_path
 
     try:
         device = validate_device_path(device)
     except ValueError:
         return None
 
-    cdparanoia = shutil.which('cdparanoia')
+    cdparanoia = find_cdparanoia()
     if not cdparanoia:
         return None
 

@@ -42,7 +42,7 @@ from ready2rip.rip.riplog import (
     title_for_track,
 )
 from ready2rip.tags.writer import TagWriter
-from ready2rip.util import validate_device_path
+from ready2rip.util import find_cdparanoia, validate_device_path
 
 log = logging.getLogger(__name__)
 
@@ -170,8 +170,11 @@ class RipEngine:
         if not tracks and not job.rip_htoa:
             return RipResult(success=False, error='No tracks selected')
 
-        if shutil.which('cdparanoia') is None:
-            return RipResult(success=False, error='cdparanoia not found')
+        if find_cdparanoia() is None:
+            return RipResult(
+                success=False,
+                error='cdparanoia not found (install cdparanoia or libcdio-paranoia)',
+            )
 
         try:
             job.device = validate_device_path(job.device)
@@ -1118,8 +1121,11 @@ class RipEngine:
         timeout: int,
         allow_nonzero: bool = False,
     ) -> None:
+        binary = find_cdparanoia()
+        if not binary:
+            raise RuntimeError('cdparanoia not found')
         cmd = [
-            'cdparanoia',
+            binary,
             '-w',
             '-d',
             device,

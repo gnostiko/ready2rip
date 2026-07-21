@@ -103,7 +103,10 @@ def extract_htoa(
     mode: str = 'secure',
 ) -> None:
     """Extract the pregap range before track 1 into *wav_path*."""
-    if shutil.which('cdparanoia') is None:
+    from ready2rip.util import find_cdparanoia
+
+    binary = find_cdparanoia()
+    if not binary:
         raise RuntimeError('cdparanoia not found')
 
     end = htoa.length_sectors
@@ -114,7 +117,7 @@ def extract_htoa(
     # is expressed as the start of track 1 in TOC terms).
     span = f'[.0]-[.{end}]'
     cmd = [
-        'cdparanoia',
+        binary,
         '-w',
         '-d',
         device,
