@@ -6,11 +6,6 @@ and ReplayGain — in a modern GNOME UI.
 
 Modern **GNOME** CD ripper for Linux — secure extraction, AccurateRip verification, metadata, tags, ReplayGain, and album art in a **GTK 4 / libadwaita** UI.
 
-**Repository:** [github.com/gnostiko/ready2rip](https://github.com/gnostiko/ready2rip)  
-**Author:** [gnostiko](https://github.com/gnostiko)  
-**License:** GPL-3.0-or-later  
-**Distribution:** portable **AppImage** (x86_64)
----
 
 ## What it does
 
