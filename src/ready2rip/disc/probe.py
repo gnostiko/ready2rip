@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass, field
 
@@ -70,12 +69,14 @@ def probe_disc(device: str = '/dev/sr0') -> DiscInfo | None:
         return None
 
     try:
+        # Keep TOC probe short so UI / AppImage startup is not blocked for long
+        # when the tray is empty or the drive is slow to spin up.
         completed = subprocess.run(
             [cdparanoia, '-Q', '-d', device],
             check=False,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=12,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

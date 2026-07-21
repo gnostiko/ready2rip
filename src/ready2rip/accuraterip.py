@@ -24,11 +24,9 @@ log = logging.getLogger(__name__)
 AR_BASE = 'http://www.accuraterip.com/accuraterip/'
 # Samples (stereo frames) to skip at start of first / end of last track
 _SKIP_FRAMES = 5 * 588  # 5 sectors × 588 samples/sector
-_SECTOR_SAMPLES = 588
 
 
 class AccurateRipConfidence(Enum):
-    UNKNOWN = auto()
     MISMATCH = auto()
     MATCH = auto()
     NOT_IN_DB = auto()
@@ -321,18 +319,22 @@ def compute_checksums_samples(
     return v1, v2
 
 
-# Frequently seen AccurateRip drive offsets (samples). Used by drive calibration
-# when the native C scanner is unavailable. Full ±2000 scan is too slow in pure Python.
-COMMON_OFFSETS = (
-    0, 6, 12, 18, 24, 30, 48, 54, 66, 72, 84, 96, 98, 102, 108, 120, 126,
-    138, 150, 182, 234, 258, 294, 318, 366, 390, 438, 462, 564, 594, 618,
-    667, 676, 679, 685, 691, 704, 738, 784, 810, 855, 984, 1020,
-    1035, 1104, 1162, 1176, 1194, 1290, 1332, 1380, 1488, 1506, 1548, 1674,
+# Most common AccurateRip drive offsets first (samples), ordered by how often
+# they appear in the public drive-offset database / real-world rips.
+# Calibration tries these before any wider search.
+POPULAR_OFFSETS = (
+    # Very common consumer / notebook drives
+    6, 48, 102, 667, 0, 12, 18, 30, 98, 116, 594, 618, 676, 679, 685, 691,
+    704, 738, 784, 103, 86, 87, 91, 97, 99, 100, 105, 108, 112, 120, 126,
+    129, 138, 150, 182, 234, 258, 294, 318, 366, 390, 438, 462, 564,
+    690, 696, 702, 723, 739, 740, 742, 772, 810, 855, 984, 1020, 1035,
+    1104, 1162, 1176, 1194, 1290, 1332, 1380, 1488, 1506, 1548, 1674,
+    24, 54, 66, 72, 84, 96,
+    # Common negative offsets
     -6, -12, -24, -48, -54, -72, -96, -116, -147, -192, -270, -376, -436,
     -488, -540, -589, -647, -667, -685, -697, -738, -769, -784, -889, -968,
     -984, -992, -1044, -1164, -1303, -1473,
 )
-
 
 class AccurateRipVerifier:
     """Fetch DB once, then verify tracks as they are ripped."""
@@ -362,10 +364,6 @@ class AccurateRipVerifier:
         """Override disc track count used for first/last AR sample skip rules."""
         if total > 0:
             self._total_tracks = total
-
-    @property
-    def disc_id_string(self) -> str:
-        return self._ids.disc_id_string if self._ids else ''
 
     def verify_wav(self, path: Path, track_number: int) -> AccurateRipResult:
         if self._db is None:

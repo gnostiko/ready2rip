@@ -40,14 +40,6 @@ class DriveStatus:
     message: str = ''
 
     @property
-    def tray_open(self) -> bool:
-        return self.state is DriveTrayState.TRAY_OPEN
-
-    @property
-    def has_media(self) -> bool:
-        return self.state is DriveTrayState.DISC_OK
-
-    @property
     def label(self) -> str:
         return {
             DriveTrayState.UNKNOWN: 'Unknown',

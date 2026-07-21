@@ -39,16 +39,29 @@ class Application(Adw.Application):
             win.set_icon_name(config.APPLICATION_ID)
         win.present()
         # First-run (or drive-changed) offset setup — once per activate session.
+        # Defer so the main window paints before any modal drive dialog.
         if not self._setup_shown and needs_drive_setup(self.store):
             self._setup_shown = True
-            self._present_drive_setup()
+            GLib.timeout_add(400, self._deferred_drive_setup)
+
+    def _deferred_drive_setup(self) -> bool:
+        self._present_drive_setup()
+        return GLib.SOURCE_REMOVE
 
     def do_startup(self) -> None:
         Adw.Application.do_startup(self)
         # App name for shell / about; prgname matches FreeDesktop app id.
         GLib.set_application_name(config.APPLICATION_NAME)
         GLib.set_prgname(config.APPLICATION_ID)
-        register_application_icons()
+        # Icons are nice-to-have; don't block startup if theme search is slow.
+        GLib.idle_add(self._deferred_register_icons)
+
+    def _deferred_register_icons(self) -> bool:
+        try:
+            register_application_icons()
+        except Exception:  # noqa: BLE001
+            pass
+        return GLib.SOURCE_REMOVE
 
     def on_about(self, *_args) -> None:
         about = Adw.AboutDialog(

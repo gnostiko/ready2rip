@@ -9,7 +9,7 @@ __all__ = [
     'ArtworkFetcher',
     'ArtworkImage',
     'ArtworkSourceOptions',
-    'apply_artwork_to_image',
+    'apply_artwork_to_picture',
     'pixbuf_from_artwork',
 ]
 

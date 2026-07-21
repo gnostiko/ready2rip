@@ -710,28 +710,6 @@ def cover_texture_from_artwork(image: ArtworkImage, edge: int = 240):
     return _texture_from_pixbuf(cropped)
 
 
-def apply_artwork_to_image(image_widget, image: ArtworkImage, display_max: int = 160) -> bool:
-    """Show *image* on a ``Gtk.Image`` or ``Gtk.Picture`` as a paintable."""
-    texture = texture_from_artwork(image, display_max=display_max)
-    if texture is None:
-        return False
-
-    # Gtk.Picture
-    if hasattr(image_widget, 'set_paintable') and image_widget.__class__.__name__ == 'Picture':
-        image_widget.set_paintable(texture)
-        return True
-
-    # Gtk.Image
-    if hasattr(image_widget, 'set_from_paintable'):
-        image_widget.set_from_paintable(texture)
-        return True
-
-    if hasattr(image_widget, 'set_paintable'):
-        image_widget.set_paintable(texture)
-        return True
-    return False
-
-
 def apply_artwork_to_picture(
     picture_widget, image: ArtworkImage, *, edge: int = 240
 ) -> bool:

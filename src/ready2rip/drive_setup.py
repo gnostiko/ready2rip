@@ -8,25 +8,37 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 from ready2rip.accuraterip import (
     AccurateRipDatabase,
-    COMMON_OFFSETS,
+    POPULAR_OFFSETS,
     compute_checksums_samples,
     disc_ids_from_info,
     fetch_database,
     load_cdda_wav_samples,
 )
 from ready2rip.disc.cache import detect_drive_cache
-from ready2rip.disc.features import test_accurate_stream, test_c2_pointers
+from ready2rip.disc.features import (
+    FeatureTestResult,
+    test_accurate_stream,
+    test_c2_pointers,
+)
 from ready2rip.disc.probe import probe_disc
+from ready2rip.util import find_cdparanoia
 
 log = logging.getLogger(__name__)
 
 ProgressCb = Callable[[str, float], None]  # message, fraction 0..1
+
+# Hard cap for the entire calibration session (feature tests + extract + scan).
+CALIBRATION_BUDGET_SEC = 180.0
+# Leave a little room for saving results after the deadline check.
+_EXTRACT_TIMEOUT_SEC = 90
+_FEATURE_TIMEOUT_SEC = 25
 
 
 @dataclass
@@ -66,14 +78,27 @@ def calibrate_drive_offset(
     *,
     on_progress: ProgressCb | None = None,
 ) -> CalibrationResult:
-    """Analyze drive cache, then find AccurateRip sample offset.
+    """Analyze drive features, then find AccurateRip sample offset.
 
-    Both results are meant to be persisted via :func:`save_calibration`.
+    Strategy (fast path first):
+      1. Quick C2 / Accurate Stream / cache probes (time-boxed).
+      2. Burst-extract one mid-length track.
+      3. Try the most popular AccurateRip offsets first.
+      4. Only then try a wider native/Python scan if time remains.
+
+    The whole procedure is capped at :data:`CALIBRATION_BUDGET_SEC` (3 minutes).
     """
+    deadline = time.monotonic() + CALIBRATION_BUDGET_SEC
 
     def progress(msg: str, frac: float) -> None:
         if on_progress is not None:
             on_progress(msg, max(0.0, min(1.0, frac)))
+
+    def remaining() -> float:
+        return deadline - time.monotonic()
+
+    def timed_out() -> bool:
+        return remaining() <= 0.0
 
     progress('Reading disc table of contents…', 0.02)
     info = probe_disc(device)
@@ -83,18 +108,39 @@ def calibrate_drive_offset(
             message=f'No audio CD found on {device}. Insert a commercial CD and try again.',
         )
 
-    # Feature analysis first (whipper/EAC-style drive analyze) — needs a disc.
+    # Feature analysis — keep these short so offset search gets most of the budget.
     progress('Testing C2 error pointers…', 0.04)
     c2 = test_c2_pointers(device)
     progress(c2.message, 0.06)
 
-    progress('Testing Accurate Stream…', 0.07)
-    astream = test_accurate_stream(device, info)
-    progress(astream.message, 0.11)
+    if not timed_out():
+        progress('Testing Accurate Stream…', 0.07)
+        astream = test_accurate_stream(
+            device,
+            info,
+            trials=1,
+            timeout=min(_FEATURE_TIMEOUT_SEC, max(5, int(remaining() - 30))),
+        )
+        progress(astream.message, 0.11)
+    else:
+        astream = FeatureTestResult(
+            supported=None, message='Accurate Stream skipped (time budget)'
+        )
 
-    progress('Analyzing drive audio cache…', 0.12)
-    cache = detect_drive_cache(device, info)
-    progress(cache.message, 0.16)
+    if not timed_out():
+        progress('Analyzing drive audio cache…', 0.12)
+        cache = detect_drive_cache(
+            device,
+            info,
+            timeout=min(_FEATURE_TIMEOUT_SEC, max(5, int(remaining() - 20))),
+        )
+        progress(cache.message, 0.16)
+    else:
+        from ready2rip.disc.cache import DriveCacheResult
+
+        cache = DriveCacheResult(
+            caches=None, message='Cache test skipped (time budget)'
+        )
 
     def with_cache(**kwargs) -> CalibrationResult:
         return CalibrationResult(
@@ -107,6 +153,15 @@ def calibrate_drive_offset(
             **kwargs,
         )
 
+    if timed_out():
+        return with_cache(
+            success=False,
+            message=(
+                f'Calibration timed out after {int(CALIBRATION_BUDGET_SEC)}s '
+                'during drive feature tests. Try again or enter offset manually.'
+            ),
+        )
+
     ids = disc_ids_from_info(info)
     if ids is None:
         return with_cache(
@@ -114,7 +169,7 @@ def calibrate_drive_offset(
             message='Could not compute AccurateRip disc IDs for this disc.',
         )
 
-    progress(f'Looking up AccurateRip database ({ids.disc_id_string})…', 0.15)
+    progress(f'Looking up AccurateRip database ({ids.disc_id_string})…', 0.18)
     db = fetch_database(ids)
     if db is None:
         return with_cache(
@@ -126,41 +181,47 @@ def calibrate_drive_offset(
             disc_id=ids.disc_id_string,
         )
 
-    from ready2rip.util import find_cdparanoia
-
     cdparanoia = find_cdparanoia()
     if cdparanoia is None:
         return with_cache(success=False, message='cdparanoia not found')
 
-    # Try shortest middle track first, then other short tracks if needed.
+    # One mid-length track is enough for offset detection; full multi-track
+    # re-rips made calibration last tens of minutes.
     ordered = sorted(info.tracks, key=lambda t: t.length_sectors)
     middle = [
         t
         for t in ordered
         if t.number not in (1, info.track_count) or info.track_count <= 2
     ]
-    try_tracks = (middle + [t for t in ordered if t not in middle])[:3]
+    try_tracks = (middle + [t for t in ordered if t not in middle])[:1]
 
     last_track_num = None
     with tempfile.TemporaryDirectory(prefix='ready2rip-cal-') as tmp:
         tmp_path = Path(tmp)
-        for attempt, track in enumerate(try_tracks):
+        for track in try_tracks:
+            if timed_out():
+                break
             last_track_num = track.number
             targets = _targets_for_track(db, track.number)
             if not targets:
                 continue
 
+            extract_timeout = min(
+                _EXTRACT_TIMEOUT_SEC, max(15, int(remaining() - 15))
+            )
             progress(
                 f'Extracting track {track.number} ({track.duration_label}) '
-                f'for calibration…',
-                0.18 + 0.05 * attempt,
+                f'for calibration (burst, ≤{extract_timeout}s)…',
+                0.22,
             )
             wav_path = tmp_path / f'cal{track.number}.wav'
             try:
+                # Burst mode: much faster than full paranoia for offset finding.
                 subprocess.run(
                     [
                         cdparanoia,
                         '-q',
+                        '-Z',
                         '-w',
                         '-d',
                         device,
@@ -170,7 +231,7 @@ def calibrate_drive_offset(
                     check=True,
                     capture_output=True,
                     text=True,
-                    timeout=600,
+                    timeout=extract_timeout,
                 )
             except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
                 log.warning('Calibration extract track %s failed: %s', track.number, exc)
@@ -178,6 +239,9 @@ def calibrate_drive_offset(
 
             if not wav_path.is_file() or wav_path.stat().st_size < 1000:
                 continue
+
+            if timed_out():
+                break
 
             progress('Loading audio samples…', 0.40)
             try:
@@ -187,7 +251,7 @@ def calibrate_drive_offset(
                 continue
 
             progress(
-                f'Scanning sample offsets (track {track.number})…',
+                f'Trying popular sample offsets (track {track.number})…',
                 0.45,
             )
             result = _scan_offsets(
@@ -196,6 +260,7 @@ def calibrate_drive_offset(
                 info.track_count,
                 targets,
                 db,
+                deadline=deadline,
                 on_progress=on_progress,
             )
             if result is not None:
@@ -212,6 +277,18 @@ def calibrate_drive_offset(
                     disc_id=ids.disc_id_string,
                     message=offset_msg,
                 )
+
+    if timed_out():
+        return with_cache(
+            success=False,
+            message=(
+                f'Calibration stopped after {int(CALIBRATION_BUDGET_SEC)}s without a match. '
+                'Try another commercial CD, or enter an offset manually '
+                '(see accuraterip.com drive offsets).'
+            ),
+            disc_id=ids.disc_id_string,
+            track_number=last_track_num,
+        )
 
     return with_cache(
         success=False,
@@ -237,59 +314,109 @@ def _scan_offsets(
     targets: set[int],
     db: AccurateRipDatabase,
     *,
+    deadline: float,
     on_progress: ProgressCb | None = None,
 ) -> tuple[int, int, int, int] | None:
-    """Return (offset, confidence, v1, v2) or None."""
-    # Prefer native C scanner (full ±2000 in seconds).
+    """Return (offset, confidence, v1, v2) or None.
+
+    Order: popular offsets → native full-range (if available) → remaining common.
+    Respects *deadline* (monotonic seconds).
+    """
+    def remaining() -> float:
+        return deadline - time.monotonic()
+
+    # —— 1) Popular offsets first (Python, but few candidates) ——
     if on_progress is not None:
-        on_progress('Scanning offsets with fast helper…', 0.45)
-    native = _scan_with_native(samples, track_number, total_tracks, targets)
+        on_progress('Checking popular drive offsets…', 0.48)
+    hit = _try_offset_list(
+        samples,
+        track_number,
+        total_tracks,
+        targets,
+        db,
+        POPULAR_OFFSETS,
+        deadline=deadline,
+        on_progress=on_progress,
+        progress_lo=0.48,
+        progress_hi=0.72,
+    )
+    if hit is not None:
+        return hit
+    if remaining() < 5:
+        return None
+
+    # —— 2) Fast native helper over ±2000 (seconds in C) ——
+    if on_progress is not None:
+        on_progress('Scanning offsets with fast helper…', 0.74)
+    native = _scan_with_native(
+        samples,
+        track_number,
+        total_tracks,
+        targets,
+        timeout=min(45, max(5, int(remaining() - 3))),
+    )
     if native is not None:
         if native[0] is None:
-            # Helper ran; no match in range — skip slow Python rescan.
             return None
         off, v1, v2 = native[0], native[1], native[2]
         match = db.best_match(track_number, v1, v2)
         return off, match.confidence_count, v1, v2
+    return None
 
-    # Python fallback when cc/gcc is unavailable.
-    offsets: list[int] = []
-    seen: set[int] = set()
-    for off in COMMON_OFFSETS:
-        if off not in seen:
-            seen.add(off)
-            offsets.append(off)
-    for off in range(-1500, 1501, 6):
-        if off not in seen:
-            seen.add(off)
-            offsets.append(off)
 
-    total = len(offsets)
+def _try_offset_list(
+    samples,
+    track_number: int,
+    total_tracks: int,
+    targets: set[int],
+    db: AccurateRipDatabase,
+    offsets: tuple[int, ...] | list[int],
+    *,
+    deadline: float,
+    on_progress: ProgressCb | None,
+    progress_lo: float,
+    progress_hi: float,
+) -> tuple[int, int, int, int] | None:
+    total = max(1, len(offsets))
     for i, off in enumerate(offsets):
-        if on_progress is not None and i % 5 == 0:
-            on_progress(
-                f'Trying sample offset {off}… ({i + 1}/{total})',
-                0.4 + 0.55 * (i / max(1, total)),
-            )
+        if time.monotonic() >= deadline:
+            return None
+        if on_progress is not None and (i % 3 == 0 or i + 1 == total):
+            frac = progress_lo + (progress_hi - progress_lo) * (i / total)
+            on_progress(f'Trying sample offset {off}… ({i + 1}/{total})', frac)
         v1, v2 = compute_checksums_samples(
             samples, track_number, total_tracks, sample_offset=off
         )
-        if v1 in targets or v2 in targets:
-            match = db.best_match(track_number, v1, v2)
-            if match.confidence.name == 'MATCH':
-                for fine in range(off - 5, off + 6):
-                    if fine == off:
-                        continue
-                    fv1, fv2 = compute_checksums_samples(
-                        samples, track_number, total_tracks, sample_offset=fine
-                    )
-                    fm = db.best_match(track_number, fv1, fv2)
-                    if (
-                        fm.confidence.name == 'MATCH'
-                        and fm.confidence_count > match.confidence_count
-                    ):
-                        return fine, fm.confidence_count, fv1, fv2
-                return off, match.confidence_count, v1, v2
+        if v1 not in targets and v2 not in targets:
+            continue
+        match = db.best_match(track_number, v1, v2)
+        if match.confidence.name != 'MATCH':
+            continue
+        # Fine tune ±5 around the hit.
+        best_off, best_conf, best_v1, best_v2 = (
+            off,
+            match.confidence_count,
+            v1,
+            v2,
+        )
+        for fine in range(off - 5, off + 6):
+            if fine == off or time.monotonic() >= deadline:
+                continue
+            fv1, fv2 = compute_checksums_samples(
+                samples, track_number, total_tracks, sample_offset=fine
+            )
+            fm = db.best_match(track_number, fv1, fv2)
+            if (
+                fm.confidence.name == 'MATCH'
+                and fm.confidence_count > best_conf
+            ):
+                best_off, best_conf, best_v1, best_v2 = (
+                    fine,
+                    fm.confidence_count,
+                    fv1,
+                    fv2,
+                )
+        return best_off, best_conf, best_v1, best_v2
     return None
 
 
@@ -298,6 +425,8 @@ def _scan_with_native(
     track_number: int,
     total_tracks: int,
     targets: set[int],
+    *,
+    timeout: int = 45,
 ) -> tuple[int, int, int] | tuple[None, None, None] | None:
     """Use compiled C helper when available.
 
@@ -315,6 +444,7 @@ def _scan_with_native(
         raw_path.write_bytes(samples.tobytes())
         n = len(samples)
         target_args = [f'{t:08x}' for t in sorted(targets)]
+        # Prefer popular band first? Full ±2000 step 1 is still only seconds in C.
         cmd = [
             str(helper),
             str(raw_path),
@@ -332,14 +462,18 @@ def _scan_with_native(
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=max(5, timeout),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             log.warning('Native offset scan failed: %s', exc)
             return None
 
         if completed.returncode not in (0,):
-            log.warning('Native offset scan exit %s: %s', completed.returncode, completed.stderr)
+            log.warning(
+                'Native offset scan exit %s: %s',
+                completed.returncode,
+                completed.stderr,
+            )
             return None
 
         line = (completed.stdout or '').strip().splitlines()
@@ -357,7 +491,15 @@ def _scan_with_native(
 
 
 def _ensure_native_helper() -> Path | None:
-    """Compile the C offset scanner into the user cache if needed."""
+    """Locate or compile the C offset scanner.
+
+    Prefers a shipped binary (``ar_offset_scan`` on PATH, e.g. AppImage
+    ``usr/bin``), then a user-cache build from the bundled C source.
+    """
+    on_path = shutil.which('ar_offset_scan')
+    if on_path:
+        return Path(on_path)
+
     src = Path(__file__).resolve().parent / 'native' / 'ar_offset_scan.c'
     if not src.is_file():
         return None
@@ -368,7 +510,6 @@ def _ensure_native_helper() -> Path | None:
     cache = Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'ready2rip'
     cache.mkdir(parents=True, exist_ok=True)
     binary = cache / 'ar_offset_scan'
-    # Rebuild if source is newer or missing.
     if binary.is_file() and binary.stat().st_mtime >= src.stat().st_mtime:
         return binary
 
@@ -434,7 +575,6 @@ def save_calibration(
 
     store.update(**updates)
 
-    # Force backend flush so offset/features survive process exit immediately.
     try:
         from gi.repository import Gio
 

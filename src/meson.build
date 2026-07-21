@@ -15,7 +15,7 @@ install_subdir(
   install_dir: pkgdatadir,
   exclude_files: ['config.py', 'config.py.in'],
   exclude_directories: ['__pycache__'],
-  # native/ar_offset_scan.c is shipped as source and compiled into the user cache
+  # native/ar_offset_scan.c is shipped as source; AppImage also builds ar_offset_scan.
 )
 
 # Generated runtime config (paths, version, app id).

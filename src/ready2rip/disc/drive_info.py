@@ -55,15 +55,19 @@ class DriveInfo:
         return rows
 
 
-def probe_drive(device: str = '/dev/sr0') -> DriveInfo:
-    """Collect drive identity from udev, sysfs, and optional cd-drive."""
+def probe_drive(device: str = '/dev/sr0', *, allow_optical: bool = True) -> DriveInfo:
+    """Collect drive identity from udev, sysfs, and optional optical tools.
+
+    When *allow_optical* is False, only udev/sysfs/proc are used so the call
+    stays fast and never invokes cdparanoia (safe on the GTK thread at startup).
+    """
     info = DriveInfo(device=device)
     _fill_from_udev(info)
     _fill_from_sysfs(info)
     _fill_from_proc_cdrom(info)
-    if not info.model and not info.vendor:
+    if allow_optical and not info.model and not info.vendor:
         _fill_from_cd_drive(info)
-    if not info.model and not info.vendor:
+    if allow_optical and not info.model and not info.vendor:
         _fill_from_cdparanoia(info)
     return info
 

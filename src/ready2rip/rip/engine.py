@@ -35,6 +35,14 @@ from ready2rip.disc.probe import DiscInfo
 from ready2rip.metadata.providers import AlbumMetadata
 from ready2rip.paths import build_output_paths
 from ready2rip.replaygain import apply_replaygain
+from ready2rip.rip.cue import (
+    cue_file_type_for_extension,
+    image_basename,
+    multi_file_cue_basename,
+    write_cue_sheet,
+    write_multi_file_cue_sheet,
+)
+from ready2rip.rip.paranoia_stats import ParanoiaStats, parse_paranoia_stderr
 from ready2rip.rip.riplog import (
     RipLog,
     analyze_wav_for_log,
@@ -46,9 +54,13 @@ from ready2rip.util import find_cdparanoia, validate_device_path
 
 log = logging.getLogger(__name__)
 
+# EAC-like secure defaults for cdparanoia / libcdio-paranoia.
+# never-skip=N: keep re-reading imperfect data until N stuck retries.
+# -X: abort rather than silently accept a skip after never-skip is exhausted.
+SECURE_NEVER_SKIP = 200
+
 
 class RipState(Enum):
-    PENDING = auto()
     PREPARING = auto()
     RIPPING = auto()
     VERIFYING = auto()
@@ -57,7 +69,6 @@ class RipState(Enum):
     REPLAYGAIN = auto()
     DONE = auto()
     FAILED = auto()
-    CANCELLED = auto()
 
 
 @dataclass
@@ -114,14 +125,16 @@ class RipJob:
     disc_track_count: int = 0
     # If secure (paranoia) extraction fails, retry with cdparanoia -Z burst mode.
     burst_fallback: bool = True
-    # Expected minimum WAV size as a fraction of ideal CDDA size (scratched reads).
-    min_wav_size_ratio: float = 0.90
+    # Expected minimum WAV size as a fraction of ideal CDDA size (EAC-like: near complete).
+    min_wav_size_ratio: float = 0.98
     # Write an EAC-style detailed status log next to the ripped files.
     write_rip_log: bool = True
+    # Write EAC-style multi-file (or image) CUE sheet after a secure rip.
+    write_cue_file: bool = True
     # Double-rip each track and require matching CRCs (test & copy).
     test_and_copy: bool = True
     # Max extra full test+copy cycles after a CRC mismatch.
-    test_copy_max_retries: int = 2
+    test_copy_max_retries: int = 3
     # Persisted from Drive setup (None = unknown / not measured).
     drive_caches_audio: bool | None = None
     drive_cache_message: str = ''
@@ -131,8 +144,12 @@ class RipJob:
     drive_c2_message: str = ''
     # Seek/read elsewhere between test and copy when cache is present (or always).
     defeat_audio_cache: bool = True
-    # Detect pregap before track 1 and rip non-silent HTOA as track 00.
+    # EAC-style: handle extended track-1 pregap as HTOA (track 00); never
+    # prepend that pregap onto track 1. Standard 2s pause is ignored.
     rip_htoa: bool = True
+    # EAC "Copy Image": one continuous image (instead of per-track files).
+    # Pair with write_cue_file for a matching image CUE sheet.
+    copy_image: bool = False
     # Longest edge for embed when preparing from folder art (0 = no downscale).
     artwork_max_size: int = 600
 
@@ -167,7 +184,7 @@ class RipEngine:
     def run(self, job: RipJob, on_progress: ProgressCallback | None = None) -> RipResult:
         self._cancelled = False
         tracks = sorted(n for n in job.track_numbers if n > 0)
-        if not tracks and not job.rip_htoa:
+        if not tracks and not job.rip_htoa and not job.copy_image:
             return RipResult(success=False, error='No tracks selected')
 
         if find_cdparanoia() is None:
@@ -185,6 +202,12 @@ class RipEngine:
         if fmt not in self.EXTENSIONS:
             return RipResult(success=False, error=f'Unknown format: {fmt}')
 
+        # CD images + CUE need a lossless/container format (EAC: WAV/FLAC).
+        if job.copy_image and fmt not in ('flac', 'wav'):
+            log.info('Copy Image mode: using FLAC instead of %s', fmt)
+            fmt = 'flac'
+            job.encode_format = 'flac'
+
         missing = self._missing_encoder(fmt)
         if missing:
             return RipResult(success=False, error=missing)
@@ -194,6 +217,9 @@ class RipEngine:
             base.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             return RipResult(success=False, error=f'Cannot create output folder: {exc}')
+
+        if job.copy_image:
+            return self._run_copy_image(job, base, fmt, on_progress)
 
         # Work units: optional HTOA (track 0) + selected audio tracks.
         n_audio = max(1, len(tracks))
@@ -270,12 +296,17 @@ class RipEngine:
             if rip_log is not None:
                 rip_log.notes.append(f'Cover art saved before rip: {cover_path}')
 
-        # AccurateRip setup
+        # AccurateRip setup. Sample offset is applied at extract time via
+        # cdparanoia -O (EAC-style), so AR hashes the offset-corrected WAV as-is.
         ar_verifier: AccurateRipVerifier | None = None
         if job.verify_accuraterip and job.disc_info is not None:
-            ar_verifier = AccurateRipVerifier(sample_offset=job.sample_offset)
+            ar_verifier = AccurateRipVerifier(sample_offset=0)
             status = ar_verifier.prepare(job.disc_info)
             notes.append(status)
+            if job.sample_offset:
+                notes.append(
+                    f'Read offset {job.sample_offset} samples applied during extraction (-O)'
+                )
             if rip_log is not None:
                 rip_log.ar_status = status
             report(
@@ -343,6 +374,9 @@ class RipEngine:
         htoa_info = detect_htoa(job.disc_info) if job.rip_htoa else None
         total_units = float(len(tracks) + (1 if htoa_info else 0)) or 1.0
         unit_index = 0.0
+        htoa_path: Path | None = None
+        # (track_number, path) for multi-file CUE generation after encode.
+        track_output_pairs: list[tuple[int, Path]] = []
 
         try:
             with tempfile.TemporaryDirectory(prefix='ready2rip-') as tmp:
@@ -446,12 +480,14 @@ class RipEngine:
                     elapsed = 0.0
                     matched = not job.test_and_copy
                     last_err: str | None = None
+                    track_stats = ParanoiaStats()
 
                     attempts = 1 + (job.test_copy_max_retries if job.test_and_copy else 0)
                     for attempt in range(attempts):
                         if self._cancelled:
                             break
                         try:
+                            attempt_stats = ParanoiaStats()
                             # --- Test pass ---
                             if job.test_and_copy:
                                 report(
@@ -471,13 +507,14 @@ class RipEngine:
                                     total_units=total_units,
                                 )
                                 t0 = time.monotonic()
-                                mode = self._rip_track(
+                                mode, st = self._rip_track(
                                     job.device,
                                     track_no,
                                     test_wav,
                                     expected_bytes=expected,
                                     min_ratio=job.min_wav_size_ratio,
                                     burst_fallback=job.burst_fallback,
+                                    sample_offset=job.sample_offset,
                                     on_burst=lambda: report(
                                         track_no,
                                         RipState.RIPPING,
@@ -490,6 +527,7 @@ class RipEngine:
                                         total_units=total_units,
                                     ),
                                 )
+                                attempt_stats.merge(st)
                                 test_crc, peak, _ = analyze_wav_for_log(
                                     test_wav,
                                     toc_track.length_sectors if toc_track else 0,
@@ -500,7 +538,7 @@ class RipEngine:
                                         RipState.RIPPING,
                                         index=idx,
                                         sub=0.22,
-                                        message=f'Defeating drive cache…',
+                                        message='Defeating drive cache…',
                                         total_units=total_units,
                                     )
                                     flush_drive_cache(job.device, job.disc_info)
@@ -519,13 +557,14 @@ class RipEngine:
                                 total_units=total_units,
                             )
                             t0 = time.monotonic()
-                            mode = self._rip_track(
+                            mode, st = self._rip_track(
                                 job.device,
                                 track_no,
                                 copy_wav,
                                 expected_bytes=expected,
                                 min_ratio=job.min_wav_size_ratio,
                                 burst_fallback=job.burst_fallback,
+                                sample_offset=job.sample_offset,
                                 on_burst=lambda: report(
                                     track_no,
                                     RipState.RIPPING,
@@ -538,6 +577,7 @@ class RipEngine:
                                     total_units=total_units,
                                 ),
                             )
+                            attempt_stats.merge(st)
                             elapsed = time.monotonic() - t0
                             copy_crc, peak2, _ = analyze_wav_for_log(
                                 copy_wav,
@@ -551,10 +591,12 @@ class RipEngine:
                             if not job.test_and_copy:
                                 matched = True
                                 test_crc = copy_crc
+                                track_stats = attempt_stats
                                 break
 
                             if test_crc and copy_crc and test_crc == copy_crc:
                                 matched = True
+                                track_stats = attempt_stats
                                 break
 
                             matched = False
@@ -564,6 +606,7 @@ class RipEngine:
                             )
                             log.warning('%s', last_err)
                             notes.append(last_err)
+                            track_stats = attempt_stats
                             # Remove partials before retry
                             for p in (test_wav, copy_wav):
                                 try:
@@ -613,18 +656,29 @@ class RipEngine:
                             f'(secure mode failed; disc may be scratched)'
                         )
 
+                    sectors = toc_track.length_sectors if toc_track else 0
                     if log_entry is not None:
                         log_entry.extract_mode = (
                             f'{mode}+test&copy' if job.test_and_copy else mode
                         )
                         log_entry.extract_seconds = elapsed
-                        sectors = toc_track.length_sectors if toc_track else 0
                         log_entry.extract_speed_x = extraction_speed_x(
                             sectors, elapsed
                         )
                         log_entry.copy_crc = copy_crc
                         log_entry.test_crc = test_crc
                         log_entry.peak_percent = peak
+                        log_entry.quality_percent = track_stats.quality_percent(
+                            sectors
+                        )
+                        log_entry.error_correction_lines = track_stats.summary_lines(
+                            length_sectors=sectors
+                        )
+                        log_entry.had_errors = track_stats.had_errors or (
+                            mode == 'burst'
+                        )
+                        if track_stats.had_errors:
+                            log_entry.status = 'finished with errors'
                         try:
                             log_entry.wav_bytes = copy_wav.stat().st_size
                         except OSError:
@@ -632,6 +686,10 @@ class RipEngine:
                         if job.test_and_copy and matched:
                             log_entry.notes.append(
                                 'Test and copy CRCs match'
+                            )
+                        if mode == 'burst':
+                            log_entry.notes.append(
+                                'Secure paranoia failed — burst (-Z) used'
                             )
 
                     # AccurateRip on the verified copy
@@ -722,6 +780,7 @@ class RipEngine:
                             pass
 
                     outputs.append(out_path)
+                    track_output_pairs.append((track_no, out_path))
                     if log_entry is not None:
                         log_entry.output_path = out_path
                         log_entry.filename = out_path.name
@@ -753,10 +812,43 @@ class RipEngine:
                         message='Analyzing ReplayGain (track + album)…',
                         total_units=total_units,
                     )
-                    rg_notes = apply_replaygain(outputs)
+                    # Only audio tracks for ReplayGain (skip .cue if already present).
+                    audio_for_rg = [
+                        p
+                        for p in outputs
+                        if p.suffix.lower() in {'.flac', '.mp3', '.opus', '.wav'}
+                    ]
+                    rg_notes = apply_replaygain(audio_for_rg or outputs)
                     notes.extend(rg_notes)
                     if rip_log is not None:
                         rip_log.replaygain_notes.extend(rg_notes)
+
+                # EAC recommendation: multi-file CUE for secure per-track rips.
+                if (
+                    job.write_cue_file
+                    and track_output_pairs
+                    and album_dir is not None
+                    and not self._cancelled
+                ):
+                    try:
+                        cue_path = self._write_track_cue(
+                            job,
+                            album_dir=album_dir,
+                            track_files=track_output_pairs,
+                            htoa_path=htoa_path if htoa_ripped else None,
+                            ext=ext,
+                        )
+                        if cue_path is not None:
+                            outputs.append(cue_path)
+                            notes.append(f'CUE sheet: {cue_path.name}')
+                            if rip_log is not None:
+                                rip_log.notes.append(
+                                    f'CUE sheet (multi-file, left-out gaps): '
+                                    f'{cue_path.name}'
+                                )
+                    except Exception as cue_exc:  # noqa: BLE001
+                        log.warning('Failed to write multi-file CUE: %s', cue_exc)
+                        notes.append(f'CUE sheet warning: {cue_exc}')
 
         except Exception as exc:  # noqa: BLE001
             log.exception('Rip failed')
@@ -867,11 +959,23 @@ class RipEngine:
 
         try:
             report(RipState.RIPPING, 0.05, f'Extracting HTOA ({htoa_info.duration_label})…')
-            extract_htoa(job.device, htoa_info, test_wav, mode='secure')
+            extract_htoa(
+                job.device,
+                htoa_info,
+                test_wav,
+                mode='secure',
+                sample_offset=job.sample_offset,
+            )
         except Exception as exc:  # noqa: BLE001
             if job.burst_fallback:
                 try:
-                    extract_htoa(job.device, htoa_info, test_wav, mode='burst')
+                    extract_htoa(
+                        job.device,
+                        htoa_info,
+                        test_wav,
+                        mode='burst',
+                        sample_offset=job.sample_offset,
+                    )
                     notes.append('HTOA extracted in burst mode')
                 except Exception as exc2:  # noqa: BLE001
                     notes.append(f'HTOA extract failed: {exc2}')
@@ -919,10 +1023,22 @@ class RipEngine:
                 flush_drive_cache(job.device, job.disc_info)
             report(RipState.RIPPING, 0.35, 'Copying HTOA…')
             try:
-                extract_htoa(job.device, htoa_info, copy_wav, mode='secure')
+                extract_htoa(
+                    job.device,
+                    htoa_info,
+                    copy_wav,
+                    mode='secure',
+                    sample_offset=job.sample_offset,
+                )
             except Exception:
                 if job.burst_fallback:
-                    extract_htoa(job.device, htoa_info, copy_wav, mode='burst')
+                    extract_htoa(
+                        job.device,
+                        htoa_info,
+                        copy_wav,
+                        mode='burst',
+                        sample_offset=job.sample_offset,
+                    )
                     mode = 'burst'
                 else:
                     raise
@@ -935,7 +1051,13 @@ class RipEngine:
                 # One retry
                 if defeat_cache:
                     flush_drive_cache(job.device, job.disc_info)
-                extract_htoa(job.device, htoa_info, copy_wav, mode=mode)
+                extract_htoa(
+                    job.device,
+                    htoa_info,
+                    copy_wav,
+                    mode=mode,
+                    sample_offset=job.sample_offset,
+                )
                 copy_crc, peak2, _ = analyze_wav_for_log(
                     copy_wav, htoa_info.length_sectors
                 )
@@ -1002,6 +1124,32 @@ class RipEngine:
         report(RipState.DONE, 1.0, f'Finished HTOA → {out_path.name}', path=out_path)
         return True, out_path, notes
 
+    def _write_track_cue(
+        self,
+        job: RipJob,
+        *,
+        album_dir: Path,
+        track_files: list[tuple[int, Path]],
+        htoa_path: Path | None,
+        ext: str,
+    ) -> Path | None:
+        """Write EAC multi-file CUE for per-track outputs. Returns cue path or None."""
+        pairs = [(n, p) for n, p in track_files if n > 0]
+        if not pairs:
+            return None
+
+        basename = multi_file_cue_basename(job.album, job.disc_info)
+        cue_path = album_dir / f'{basename}.cue'
+        write_multi_file_cue_sheet(
+            cue_path,
+            track_files=pairs,
+            file_type=cue_file_type_for_extension(ext),
+            disc=job.disc_info,
+            album=job.album,
+            htoa_file=htoa_path if htoa_path is not None else None,
+        )
+        return cue_path
+
     def _missing_encoder(self, fmt: str) -> str | None:
         if fmt == 'flac' and not shutil.which('flac'):
             return 'flac encoder not found'
@@ -1019,25 +1167,28 @@ class RipEngine:
         wav_path: Path,
         *,
         expected_bytes: int | None = None,
-        min_ratio: float = 0.90,
+        min_ratio: float = 0.98,
         burst_fallback: bool = True,
+        sample_offset: int = 0,
         on_burst: Callable[[], None] | None = None,
-    ) -> str:
-        """Extract one track. Returns ``'secure'`` or ``'burst'``."""
+    ) -> tuple[str, ParanoiaStats]:
+        """Extract one track. Returns ``(mode, paranoia_stats)``."""
         secure_timeout = _extract_timeout(expected_bytes, mode='secure')
         burst_timeout = _extract_timeout(expected_bytes, mode='burst')
         secure_err: str | None = None
+        secure_stats = ParanoiaStats()
 
         # Prefer a complete secure WAV even when cdparanoia exits non-zero
-        # (common with -z after sector skips — file is often still full length).
+        # (e.g. -X after exhausted retries — file may still be full length).
         try:
-            self._run_cdparanoia(
+            secure_stats = self._run_cdparanoia(
                 device,
                 track_number,
                 wav_path,
                 mode='secure',
                 timeout=secure_timeout,
                 allow_nonzero=True,
+                sample_offset=sample_offset,
             )
             self._assert_wav_ok(
                 wav_path,
@@ -1045,7 +1196,7 @@ class RipEngine:
                 expected_bytes=expected_bytes,
                 min_ratio=min_ratio,
             )
-            return 'secure'
+            return 'secure', secure_stats
         except Exception as exc:  # noqa: BLE001
             if self._cancelled:
                 raise
@@ -1055,8 +1206,7 @@ class RipEngine:
                 track_number,
                 secure_err,
             )
-            # Keep a full-size secure file if we already have one (non-zero exit
-            # with complete data) — do not delete and re-burst needlessly.
+            # Keep a full-size secure file if we already have one.
             try:
                 self._assert_wav_ok(
                     wav_path,
@@ -1068,7 +1218,7 @@ class RipEngine:
                     'Track %s: accepting secure WAV despite cdparanoia error',
                     track_number,
                 )
-                return 'secure'
+                return 'secure', secure_stats
             except Exception:  # noqa: BLE001
                 pass
 
@@ -1087,13 +1237,14 @@ class RipEngine:
             pass
 
         try:
-            self._run_cdparanoia(
+            burst_stats = self._run_cdparanoia(
                 device,
                 track_number,
                 wav_path,
                 mode='burst',
                 timeout=burst_timeout,
                 allow_nonzero=True,
+                sample_offset=sample_offset,
             )
             self._assert_wav_ok(
                 wav_path,
@@ -1109,7 +1260,305 @@ class RipEngine:
             ) from exc
 
         log.info('Track %s recovered via burst mode', track_number)
-        return 'burst'
+        # Prefer burst stats; annotate that secure failed.
+        combined = secure_stats.merge(burst_stats) if secure_stats.reads else burst_stats
+        return 'burst', combined
+
+    def _run_copy_image(
+        self,
+        job: RipJob,
+        base: Path,
+        fmt: str,
+        on_progress: ProgressCallback | None,
+    ) -> RipResult:
+        """EAC-style Copy Image.
+
+        Rips a continuous sector span to one file and encodes (FLAC/WAV).
+        When *job.write_cue_file* is set, also writes a matching ``.cue``.
+        Track 1 is never extended with a standard 2s pause; extended non-silent
+        HTOA may start the image with INDEX 00.
+        """
+        notes: list[str] = []
+        disc = job.disc_info
+        if disc is None or not disc.tracks:
+            return RipResult(success=False, error='No disc TOC for Copy Image')
+
+        def report(
+            state: RipState,
+            frac: float,
+            message: str,
+            path: Path | None = None,
+        ) -> None:
+            if on_progress is None:
+                return
+            on_progress(
+                RipProgress(
+                    track_number=0,
+                    state=state,
+                    fraction=max(0.0, min(1.0, frac)),
+                    message=message,
+                    current_path=path,
+                )
+            )
+
+        # Album folder (reuse track-1 path builder for consistent layout).
+        ext = self.EXTENSIONS[fmt]
+        album_dir, _ = build_output_paths(
+            base_dir=base,
+            album_folder_template=job.album_folder_template,
+            filename_template=job.filename_template,
+            album=job.album,
+            track_number=1,
+            extension=ext,
+        )
+        try:
+            album_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return RipResult(success=False, error=f'Cannot create album folder: {exc}')
+
+        report(RipState.PREPARING, 0.02, 'Preparing album folder (Copy Image)…', album_dir)
+        embed_art, folder_art, cover_path, art_notes = _prepare_artwork(job, album_dir)
+        notes.extend(art_notes)
+
+        # Image span: EAC-style — start at track 1 INDEX 01 unless HTOA is
+        # enabled *and* an extended pregap exists (then include from sector 0).
+        t1 = disc.tracks[0]
+        t_last = disc.tracks[-1]
+        file_start = t1.start_sector
+        htoa_in_image = False
+        if job.rip_htoa:
+            htoa = detect_htoa(disc)
+            # detect_htoa already ignores ≤2s standard pause; extended → from 0
+            if htoa is not None:
+                file_start = 0
+                htoa_in_image = True
+
+        end_sector = t_last.start_sector + t_last.length_sectors
+        if end_sector <= file_start:
+            return RipResult(success=False, error='Invalid disc span for Copy Image')
+
+        total_sectors = end_sector - file_start
+        expected_bytes = 44 + total_sectors * 2352  # WAV header + CDDA
+
+        basename = image_basename(job.album, disc)
+        wav_path = album_dir / f'{basename}.wav'
+        out_path = album_dir / f'{basename}{ext}'
+        cue_path = album_dir / f'{basename}.cue'
+
+        notes.append(
+            f'Copy Image span: sectors [{file_start}, {end_sector}) '
+            f'({total_sectors} sectors, {total_sectors / 75.0:.1f}s)'
+        )
+        if htoa_in_image:
+            notes.append('Image includes track-1 pregap (HTOA region) for CUE INDEX 00')
+
+        rip_log: RipLog | None = None
+        if job.write_rip_log:
+            rip_log = RipLog()
+            rip_log.configure_from_job(job)
+            rip_log.notes.append(
+                'Mode: Copy Image (EAC-style)'
+                + (' + CUE sheet' if job.write_cue_file else '')
+            )
+
+        try:
+            with tempfile.TemporaryDirectory(prefix='ready2rip-img-') as tmp:
+                tmp_path = Path(tmp)
+                test_wav = tmp_path / 'image_test.wav'
+                copy_wav = tmp_path / 'image_copy.wav'
+
+                if self._cancelled:
+                    return RipResult(success=False, cancelled=True, notes=notes)
+
+                report(
+                    RipState.RIPPING,
+                    0.05,
+                    f'Extracting disc image ({total_sectors / 75.0 / 60.0:.1f} min)…',
+                )
+                img_stats = self._run_cdparanoia_span(
+                    job.device,
+                    file_start,
+                    end_sector,
+                    test_wav,
+                    mode='secure',
+                    timeout=max(600, total_sectors // 5),
+                    allow_nonzero=True,
+                    sample_offset=job.sample_offset,
+                )
+                self._assert_wav_ok(
+                    test_wav,
+                    0,
+                    expected_bytes=expected_bytes,
+                    min_ratio=job.min_wav_size_ratio,
+                    label='image secure',
+                )
+
+                use_wav = test_wav
+                if job.test_and_copy and not self._cancelled:
+                    if job.defeat_audio_cache or job.drive_caches_audio:
+                        report(RipState.RIPPING, 0.35, 'Defeating drive cache…')
+                        flush_drive_cache(job.device, disc)
+                    report(RipState.RIPPING, 0.40, 'Copy pass for disc image…')
+                    copy_stats = self._run_cdparanoia_span(
+                        job.device,
+                        file_start,
+                        end_sector,
+                        copy_wav,
+                        mode='secure',
+                        timeout=max(600, total_sectors // 5),
+                        allow_nonzero=True,
+                        sample_offset=job.sample_offset,
+                    )
+                    img_stats.merge(copy_stats)
+                    self._assert_wav_ok(
+                        copy_wav,
+                        0,
+                        expected_bytes=expected_bytes,
+                        min_ratio=job.min_wav_size_ratio,
+                        label='image copy',
+                    )
+                    test_crc, _, _ = analyze_wav_for_log(test_wav, total_sectors)
+                    copy_crc, _, _ = analyze_wav_for_log(copy_wav, total_sectors)
+                    if test_crc and copy_crc and test_crc != copy_crc:
+                        notes.append(
+                            f'Image test/copy CRC mismatch ({test_crc} ≠ {copy_crc}); '
+                            'keeping copy pass'
+                        )
+                    use_wav = copy_wav
+
+                for line in img_stats.summary_lines(length_sectors=total_sectors):
+                    notes.append(line)
+                if rip_log is not None:
+                    for line in img_stats.summary_lines(length_sectors=total_sectors):
+                        rip_log.notes.append(f'Image: {line}')
+
+                if self._cancelled:
+                    return RipResult(
+                        success=False, cancelled=True, notes=notes, album_dir=album_dir
+                    )
+
+                # Move/encode final audio into album folder
+                if fmt == 'wav':
+                    report(RipState.ENCODING, 0.75, 'Writing image WAV…', out_path)
+                    if out_path.exists():
+                        out_path.unlink()
+                    shutil.copy2(use_wav, out_path)
+                else:
+                    report(
+                        RipState.ENCODING,
+                        0.75,
+                        f'Encoding disc image to {fmt.upper()}…',
+                        out_path,
+                    )
+                    self._encode(fmt, use_wav, out_path, job)
+
+                if not out_path.is_file() or out_path.stat().st_size < 1000:
+                    return RipResult(
+                        success=False,
+                        error='Image encode produced no output',
+                        notes=notes,
+                        album_dir=album_dir,
+                    )
+
+                # Optional album-level tags on the image (single album file).
+                if job.album is not None:
+                    report(RipState.TAGGING, 0.88, 'Tagging disc image…', out_path)
+                    try:
+                        self._tags.write_album_tags(
+                            out_path,
+                            album=job.album,
+                            track_number=1,
+                            total_tracks=disc.track_count,
+                        )
+                        if job.embed_artwork and embed_art is not None:
+                            self._tags.embed_artwork(out_path, embed_art)
+                    except Exception as exc:  # noqa: BLE001
+                        notes.append(f'Image tagging warning: {exc}')
+
+                output_files: list[Path] = [out_path]
+                if job.write_cue_file:
+                    report(RipState.ENCODING, 0.92, 'Writing CUE sheet…', cue_path)
+                    write_cue_sheet(
+                        cue_path,
+                        image_filename=out_path.name,
+                        file_type=cue_file_type_for_extension(ext),
+                        disc=disc,
+                        album=job.album,
+                        file_start_sector=file_start,
+                        htoa_index00=htoa_in_image,
+                    )
+                    notes.append(f'CUE sheet: {cue_path.name}')
+                    output_files.append(cue_path)
+                    if rip_log is not None:
+                        rip_log.notes.append(f'CUE sheet (image): {cue_path.name}')
+                else:
+                    notes.append('CUE sheet skipped (Write .cue file is off)')
+
+                log_path = None
+                if rip_log is not None:
+                    try:
+                        log_path = rip_log.write(album_dir)
+                    except Exception as exc:  # noqa: BLE001
+                        notes.append(f'Rip log warning: {exc}')
+
+                done_label = out_path.name
+                if job.write_cue_file:
+                    done_label = f'{out_path.name} + {cue_path.name}'
+                report(
+                    RipState.DONE,
+                    1.0,
+                    f'Copy Image complete → {done_label}',
+                    album_dir,
+                )
+                return RipResult(
+                    success=True,
+                    output_files=output_files,
+                    album_dir=album_dir,
+                    notes=notes,
+                    log_path=log_path,
+                    cover_path=cover_path,
+                    htoa_ripped=htoa_in_image,
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.exception('Copy Image failed')
+            return RipResult(
+                success=False,
+                error=str(exc),
+                notes=notes,
+                album_dir=album_dir,
+                cancelled=self._cancelled,
+            )
+
+    def _paranoia_cmd_base(
+        self,
+        binary: str,
+        device: str,
+        *,
+        mode: str,
+        sample_offset: int = 0,
+    ) -> list[str]:
+        """Build shared cdparanoia argv for EAC-like secure or burst extract."""
+        cmd = [binary, '-w', '-d', device]
+        if sample_offset:
+            # Apply drive sample offset at read time (EAC “Read offset correction”).
+            cmd.extend(['-O', str(int(sample_offset))])
+        if mode == 'burst':
+            # Fast path: no paranoia, quiet.
+            cmd.extend(['-Z', '-q'])
+        else:
+            # Full paranoia + EAC-like persistence:
+            #  --never-skip=N  re-read imperfect data (do not soft-skip early)
+            #  -X              abort if a skip is still forced (no silent holes)
+            #  -e              progress/error-correction callbacks on stderr
+            # never-skip=N must be one argv token ("-z" "200" is misparsed as track 200).
+            cmd.extend(
+                [
+                    f'--never-skip={SECURE_NEVER_SKIP}',
+                    '-X',
+                    '-e',
+                ]
+            )
+        return cmd
 
     def _run_cdparanoia(
         self,
@@ -1120,28 +1569,60 @@ class RipEngine:
         mode: str,
         timeout: int,
         allow_nonzero: bool = False,
-    ) -> None:
+        sample_offset: int = 0,
+    ) -> ParanoiaStats:
         binary = find_cdparanoia()
         if not binary:
             raise RuntimeError('cdparanoia not found')
-        cmd = [
-            binary,
-            '-w',
-            '-d',
-            device,
-        ]
-        if mode == 'burst':
-            cmd.append('-Z')
-            cmd.append('-q')
-        else:
-            # never-skip=N must be one argv token. Separate "-z" "75" is parsed
-            # as track number 75 (cdparanoia track-does-not-exist failure).
-            cmd.extend(['--never-skip=75', '-q'])
-
+        cmd = self._paranoia_cmd_base(
+            binary, device, mode=mode, sample_offset=sample_offset
+        )
         cmd.extend([str(track_number), str(wav_path)])
-        self._run(
+        return self._run_paranoia(
             cmd,
             what=f'cdparanoia {mode} track {track_number}',
+            timeout=timeout,
+            allow_nonzero=allow_nonzero,
+        )
+
+    def _run_cdparanoia_span(
+        self,
+        device: str,
+        start_sector: int,
+        end_sector: int,
+        wav_path: Path,
+        *,
+        mode: str,
+        timeout: int,
+        allow_nonzero: bool = False,
+        sample_offset: int = 0,
+    ) -> ParanoiaStats:
+        """Extract absolute sector range ``[start, end)`` to *wav_path*.
+
+        libcdio-paranoia parses ``[.A]-[.B]`` as start sector *A* and a
+        *relative* end offset *B* (last inclusive sector = A+B) — not absolute
+        end sector B. Passing absolute B made Copy Image request past the
+        lead-out (“Time/sector offset goes beyond end of disc”).
+        """
+        binary = find_cdparanoia()
+        if not binary:
+            raise RuntimeError('cdparanoia not found')
+        start = int(start_sector)
+        end = int(end_sector)
+        if end <= start:
+            raise RuntimeError(
+                f'Invalid sector span [{start}, {end}) for disc image'
+            )
+        # N = end - start sectors → last inclusive = end - 1 → relative B.
+        rel_end = end - start - 1
+        span = f'[.{start}]-[.{rel_end}]'
+        cmd = self._paranoia_cmd_base(
+            binary, device, mode=mode, sample_offset=sample_offset
+        )
+        cmd.extend([span, str(wav_path)])
+        return self._run_paranoia(
+            cmd,
+            what=f'cdparanoia {mode} span {span} (sectors [{start}, {end}))',
             timeout=timeout,
             allow_nonzero=allow_nonzero,
         )
@@ -1231,6 +1712,37 @@ class RipEngine:
         if not out_path.is_file() or out_path.stat().st_size < 100:
             raise RuntimeError(f'Encoder produced no output: {out_path}')
 
+    def _run_paranoia(
+        self,
+        cmd: list[str],
+        *,
+        what: str,
+        timeout: int | None = None,
+        allow_nonzero: bool = False,
+    ) -> ParanoiaStats:
+        """Run cdparanoia, parse ``-e`` progress into :class:`ParanoiaStats`."""
+        code, stderr = self._run_capture(cmd, what=what, timeout=timeout)
+        stats = parse_paranoia_stderr(stderr, exit_code=code)
+        if self._cancelled:
+            return stats
+        if code != 0:
+            detail = (stderr or '').strip() or f'exit {code}'
+            # Prefer a short non-progress diagnostic for the exception text.
+            if stats.raw_excerpt:
+                detail = stats.raw_excerpt
+            elif len(detail) > 400:
+                detail = detail[:400] + '…'
+            if allow_nonzero:
+                log.warning(
+                    '%s exited %s (will validate output); paranoia=%s',
+                    what,
+                    code,
+                    stats.short_status(),
+                )
+                return stats
+            raise RuntimeError(f'{what} failed: {detail}')
+        return stats
+
     def _run(
         self,
         cmd: list[str],
@@ -1239,6 +1751,25 @@ class RipEngine:
         timeout: int | None = None,
         allow_nonzero: bool = False,
     ) -> None:
+        code, stderr = self._run_capture(cmd, what=what, timeout=timeout)
+        if self._cancelled:
+            return
+        if code != 0:
+            detail = (stderr or '').strip() or f'exit {code}'
+            if len(detail) > 400:
+                detail = detail[:400] + '…'
+            if allow_nonzero:
+                log.warning('%s exited %s (will validate output): %s', what, code, detail)
+                return
+            raise RuntimeError(f'{what} failed: {detail}')
+
+    def _run_capture(
+        self,
+        cmd: list[str],
+        *,
+        what: str,
+        timeout: int | None = None,
+    ) -> tuple[int, str]:
         log.info('Running %s: %s', what, ' '.join(cmd))
         try:
             self._proc = subprocess.Popen(
@@ -1256,22 +1787,12 @@ class RipEngine:
                 except Exception:  # noqa: BLE001
                     pass
                 raise RuntimeError(f'{what} timed out after {timeout}s') from None
-            code = self._proc.returncode
+            code = self._proc.returncode if self._proc is not None else -1
+            return code if code is not None else -1, stderr or ''
         except OSError as exc:
             raise RuntimeError(f'Failed to run {what}: {exc}') from exc
         finally:
             self._proc = None
-
-        if self._cancelled:
-            return
-        if code != 0:
-            detail = (stderr or '').strip() or f'exit {code}'
-            if len(detail) > 400:
-                detail = detail[:400] + '…'
-            if allow_nonzero:
-                log.warning('%s exited %s (will validate output): %s', what, code, detail)
-                return
-            raise RuntimeError(f'{what} failed: {detail}')
 
 
 def _prepare_artwork(

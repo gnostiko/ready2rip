@@ -31,17 +31,23 @@ class DiscIdentifiers:
 
 
 def identifiers_from_disc(info: DiscInfo) -> DiscIdentifiers:
-    """Compute identifiers for *info*, preferring libdiscid device read."""
-    mb_id = None
-    offsets: tuple[int, ...] = ()
+    """Compute identifiers from an already-probed TOC (no extra device I/O).
 
-    read = _libdiscid_read(info.device)
-    if read is not None:
-        mb_id, offsets = read
-    else:
-        offsets = _toc_to_mb_offsets(info)
-        mb_id = _musicbrainz_discid_from_offsets(1, info.track_count, offsets)
+    Prefer pure TOC math over ``libdiscid_read``: re-opening the drive can block
+    for tens of seconds after cdparanoia, which left the UI stuck on
+    \"Looking for an audio CD…\" during deferred startup.
+    """
+    if not info.tracks:
+        return DiscIdentifiers(
+            musicbrainz_discid=None,
+            freedb_id=info.freedb_id,
+            first_track=1,
+            last_track=0,
+            offsets=(),
+        )
 
+    offsets = _toc_to_mb_offsets(info)
+    mb_id = _musicbrainz_discid_from_offsets(1, info.track_count, offsets)
     freedb = info.freedb_id or _freedb_id_from_offsets(offsets, info.track_count)
     return DiscIdentifiers(
         musicbrainz_discid=mb_id,
@@ -128,50 +134,6 @@ def _load_libdiscid() -> ctypes.CDLL | None:
         return ctypes.CDLL(name)
     except OSError:
         return None
-
-
-def _libdiscid_read(device: str) -> tuple[str, tuple[int, ...]] | None:
-    lib = _load_libdiscid()
-    if lib is None:
-        return None
-
-    lib.discid_new.restype = ctypes.c_void_p
-    lib.discid_free.argtypes = [ctypes.c_void_p]
-    lib.discid_read.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-    lib.discid_read.restype = ctypes.c_int
-    lib.discid_get_id.argtypes = [ctypes.c_void_p]
-    lib.discid_get_id.restype = ctypes.c_char_p
-    lib.discid_get_first_track_num.argtypes = [ctypes.c_void_p]
-    lib.discid_get_first_track_num.restype = ctypes.c_int
-    lib.discid_get_last_track_num.argtypes = [ctypes.c_void_p]
-    lib.discid_get_last_track_num.restype = ctypes.c_int
-    lib.discid_get_sectors.argtypes = [ctypes.c_void_p]
-    lib.discid_get_sectors.restype = ctypes.c_int
-    lib.discid_get_track_offset.argtypes = [ctypes.c_void_p, ctypes.c_int]
-    lib.discid_get_track_offset.restype = ctypes.c_int
-
-    handle = lib.discid_new()
-    if not handle:
-        return None
-    try:
-        if not lib.discid_read(handle, device.encode()):
-            return None
-        disc_id = lib.discid_get_id(handle)
-        if not disc_id:
-            return None
-        first = lib.discid_get_first_track_num(handle)
-        last = lib.discid_get_last_track_num(handle)
-        leadout = lib.discid_get_sectors(handle)
-        track_offsets = [
-            lib.discid_get_track_offset(handle, n) for n in range(first, last + 1)
-        ]
-        offsets = tuple([leadout, *track_offsets])
-        return disc_id.decode('ascii'), offsets
-    except Exception:  # noqa: BLE001
-        log.exception('libdiscid read failed for %s', device)
-        return None
-    finally:
-        lib.discid_free(handle)
 
 
 def _libdiscid_put(

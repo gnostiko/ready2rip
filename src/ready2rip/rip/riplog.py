@@ -30,12 +30,17 @@ class TrackLogEntry:
     extract_seconds: float | None = None
     extract_speed_x: float | None = None
     peak_percent: float | None = None
+    # EAC-style quality 0–100 from paranoia fixups / skips.
+    quality_percent: float | None = None
     copy_crc: str = ''
     test_crc: str = ''
     wav_bytes: int = 0
     accuraterip: AccurateRipResult | None = None
     status: str = 'OK'
     notes: list[str] = field(default_factory=list)
+    # Pre-rendered error-correction lines (quality, counters, suspicious MSF).
+    error_correction_lines: list[str] = field(default_factory=list)
+    had_errors: bool = False
 
 
 class RipLog:
@@ -55,6 +60,7 @@ class RipLog:
         self.apply_replaygain: bool = True
         self.embed_artwork: bool = True
         self.test_and_copy: bool = True
+        self.write_cue_file: bool = True
         self.defeat_audio_cache: bool = True
         self.rip_htoa: bool = True
         self.album: AlbumMetadata | None = None
@@ -85,6 +91,7 @@ class RipLog:
         self.apply_replaygain = job.apply_replaygain
         self.embed_artwork = job.embed_artwork
         self.test_and_copy = getattr(job, 'test_and_copy', True)
+        self.write_cue_file = getattr(job, 'write_cue_file', True)
         self.defeat_audio_cache = getattr(job, 'defeat_audio_cache', True)
         self.rip_htoa = getattr(job, 'rip_htoa', True)
         self.drive_caches = getattr(job, 'drive_caches_audio', None)
@@ -150,7 +157,14 @@ class RipLog:
         lines.append(f'Host system : {platform.system()} {platform.release()} ({platform.machine()})')
         lines.append('')
 
-        lines.append('Read mode               : Secure (cdparanoia full paranoia)')
+        lines.append(
+            'Read mode               : Secure (cdparanoia full paranoia, '
+            'never-skip + abort-on-skip)'
+        )
+        lines.append(
+            'Read command            : cdparanoia -w --never-skip=200 -X '
+            '(-O offset when calibrated)'
+        )
         lines.append(
             'Test & copy             : Yes'
             if self.test_and_copy
@@ -192,18 +206,33 @@ class RipLog:
         if self.c2_message:
             lines.append(f'C2 pointer test         : {self.c2_message}')
         lines.append(
-            'Rip HTOA                : Yes'
+            'Rip HTOA / pregap       : Yes (EAC-style)'
             if self.rip_htoa
-            else 'Rip HTOA                : No'
+            else 'Rip HTOA / pregap       : No'
         )
         lines.append('')
         lines.append(f'Read offset correction                      : {self.sample_offset}')
-        lines.append('Overread into Lead-In and Lead-Out          : No')
-        lines.append('Fill up missing offset samples with silence : Yes (AccurateRip calc)')
+        lines.append(
+            'Overread into Lead-In and Lead-Out          : No'
+        )
+        lines.append(
+            'Fill up missing offset samples with silence : '
+            'Yes (cdparanoia -O / AccurateRip edges)'
+        )
         lines.append('Delete leading and trailing silent blocks   : No')
         lines.append('Null samples used in CRC calculations       : Yes')
-        lines.append('Used interface                              : Linux /dev (cdparanoia)')
-        lines.append('Gap handling                                : TOC pregap (HTOA if non-silent)')
+        lines.append(
+            'Used interface                              : Linux /dev (cdparanoia / libcdio-paranoia)'
+        )
+        lines.append(
+            'Gap handling                                : '
+            'Track 1 pregap ignored if ≤2s; longer non-silent HTOA → track 00; '
+            'track 1 never includes INDEX 00'
+        )
+        lines.append(
+            'Error recovery                              : '
+            'Full paranoia re-read + jitter fixup; never-skip=200; abort on skip (-X)'
+        )
         lines.append('')
 
         lines.append(f'Used output format              : {self.encode_format.upper()}')
@@ -222,6 +251,12 @@ class RipLog:
         lines.append(f'AccurateRip                     : {"Yes" if self.verify_accuraterip else "No"}')
         if self.ar_status:
             lines.append(f'AccurateRip database            : {self.ar_status}')
+        lines.append(
+            'Write CUE sheet                 : Yes '
+            '(EAC multi-file / left-out gaps, or image CUE)'
+            if self.write_cue_file
+            else 'Write CUE sheet                 : No'
+        )
         lines.append('')
 
         if self.disc and self.disc.tracks:
@@ -257,6 +292,14 @@ class RipLog:
                 lines.append(f'     Extraction speed {entry.extract_speed_x:.1f} X')
             if entry.extract_seconds is not None:
                 lines.append(f'     Extraction time {entry.extract_seconds:.1f} s')
+            if entry.quality_percent is not None:
+                lines.append(f'     Track quality {entry.quality_percent:.1f} %')
+            elif entry.error_correction_lines:
+                # First line from summary is usually Track quality …
+                for ec in entry.error_correction_lines:
+                    if ec.lower().startswith('track quality'):
+                        lines.append(f'     {ec}')
+                        break
             lines.append(f'     Extraction mode {entry.extract_mode}')
             if entry.test_crc:
                 lines.append(f'     Test CRC {entry.test_crc.upper()}')
@@ -271,9 +314,17 @@ class RipLog:
                 lines.append(f'     {_format_ar_line(entry.accuraterip)}')
             else:
                 lines.append('     AccurateRip not checked')
+            # EAC-style error correction block (skip duplicate quality line).
+            for ec in entry.error_correction_lines:
+                if ec.lower().startswith('track quality'):
+                    continue
+                lines.append(f'     {ec}')
             for note in entry.notes:
                 lines.append(f'     Note: {note}')
-            lines.append(f'     Copy {entry.status}')
+            if entry.had_errors and entry.status.upper() in ('OK', 'FINISHED'):
+                lines.append(f'     Copy finished with errors')
+            else:
+                lines.append(f'     Copy {entry.status}')
             lines.append('')
 
         # Summary
@@ -295,13 +346,24 @@ class RipLog:
                 )
             lines.append('')
 
-        burst = [t.number for t in self.tracks if t.extract_mode == 'burst']
+        burst = [
+            t.number
+            for t in self.tracks
+            if 'burst' in (t.extract_mode or '').lower()
+        ]
         if burst:
             lines.append(
                 f'Burst mode used for track(s): {", ".join(str(n) for n in burst)}'
             )
             lines.append(
                 '(Secure extraction failed or incomplete; re-ripped with paranoia disabled)'
+            )
+            lines.append('')
+
+        errored = [t.number for t in self.tracks if t.had_errors]
+        if errored:
+            lines.append(
+                f'There were errors on track(s): {", ".join(str(n) for n in errored)}'
             )
             lines.append('')
 
@@ -321,6 +383,11 @@ class RipLog:
             lines.append('Extraction cancelled by user')
         elif self.error:
             lines.append(f'Errors occurred: {self.error}')
+        elif any(t.had_errors for t in self.tracks):
+            lines.append(
+                'Some tracks had read errors or required heavy correction '
+                '(see per-track details above)'
+            )
         else:
             lines.append('No errors occurred')
         lines.append('')

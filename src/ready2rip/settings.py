@@ -95,6 +95,8 @@ class AppSettings:
     drive_offset_device: str = ''
     burst_fallback: bool = True
     write_rip_log: bool = True
+    # EAC recommendation for secure/accurate rips: write a multi-file .cue sheet.
+    write_cue_file: bool = True
     test_and_copy: bool = True
     defeat_audio_cache: bool = True
     drive_cache_configured: bool = False
@@ -107,6 +109,8 @@ class AppSettings:
     drive_c2_pointers: bool = False
     drive_c2_message: str = ''
     rip_htoa: bool = True
+    # EAC "Copy Image" mode (CUE is separate: write_cue_file)
+    copy_image: bool = False
     auto_rip: bool = False
     auto_eject: bool = False
 
@@ -171,6 +175,7 @@ class SettingsStore:
                 drive_offset_device=s.get_string('drive-offset-device'),
                 burst_fallback=s.get_boolean('burst-fallback'),
                 write_rip_log=s.get_boolean('write-rip-log'),
+                write_cue_file=_get_bool(s, 'write-cue-file', True),
                 test_and_copy=_get_bool(s, 'test-and-copy', True),
                 defeat_audio_cache=_get_bool(s, 'defeat-audio-cache', True),
                 drive_cache_configured=_get_bool(s, 'drive-cache-configured', False),
@@ -187,6 +192,7 @@ class SettingsStore:
                 drive_c2_pointers=_get_bool(s, 'drive-c2-pointers', False),
                 drive_c2_message=_get_string(s, 'drive-c2-message', ''),
                 rip_htoa=_get_bool(s, 'rip-htoa', True),
+                copy_image=_get_bool(s, 'copy-image', False),
                 auto_rip=_get_bool(s, 'auto-rip', False),
                 auto_eject=_get_bool(s, 'auto-eject', False),
             )
@@ -238,6 +244,7 @@ class SettingsStore:
             'drive_offset_device': ('drive-offset-device', 'string'),
             'burst_fallback': ('burst-fallback', 'bool'),
             'write_rip_log': ('write-rip-log', 'bool'),
+            'write_cue_file': ('write-cue-file', 'bool'),
             'test_and_copy': ('test-and-copy', 'bool'),
             'defeat_audio_cache': ('defeat-audio-cache', 'bool'),
             'drive_cache_configured': ('drive-cache-configured', 'bool'),
@@ -256,6 +263,7 @@ class SettingsStore:
             'drive_c2_pointers': ('drive-c2-pointers', 'bool'),
             'drive_c2_message': ('drive-c2-message', 'string'),
             'rip_htoa': ('rip-htoa', 'bool'),
+            'copy_image': ('copy-image', 'bool'),
             'auto_rip': ('auto-rip', 'bool'),
             'auto_eject': ('auto-eject', 'bool'),
         }

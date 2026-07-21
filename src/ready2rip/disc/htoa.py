@@ -1,10 +1,21 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Hidden Track One Audio (HTOA) detection and extraction."""
+"""Hidden Track One Audio (HTOA) / track-1 pregap handling (EAC-style).
+
+Exact Audio Copy behaviour we mirror:
+
+* **Track 1 is never extended** with the pregap. When track 1 is ripped,
+  extraction starts at TOC index 01 (the track's listed start sector). The
+  INDEX 00 region before that is not appended onto track 1.
+* A **standard 2-second** (150 sector) pause before track 1 is normal Red Book
+  structure and is **ignored** for HTOA purposes.
+* Only when the pregap is **longer than 2 seconds** do we treat sectors
+  ``[0, track1_start)`` as a possible hidden track. Digitally silent audio is
+  discarded; non-silent audio is saved as track 00 (HTOA).
+"""
 
 from __future__ import annotations
 
 import logging
-import shutil
 import subprocess
 import wave
 from dataclasses import dataclass
@@ -14,14 +25,13 @@ from ready2rip.disc.probe import DiscInfo
 
 log = logging.getLogger(__name__)
 
-# Ignore classic 2-second digital silence pregaps under this length unless
-# the user forces a check — whipper still extracts and tests silence.
-_MIN_INTERESTING_SECTORS = 1  # any positive pregap is a candidate
+# Red Book: 2 seconds × 75 sectors/s = 150 sectors — normal track-1 pause.
+STANDARD_TRACK1_PREGAP_SECTORS = 150
 
 
 @dataclass
 class HtoaInfo:
-    """Pregap before track 1 (possible HTOA)."""
+    """Pregap before track 1 (possible HTOA). Never part of the track 1 file."""
 
     start_sector: int  # always 0 for absolute disc start
     length_sectors: int
@@ -40,31 +50,40 @@ class HtoaInfo:
 
 
 def detect_htoa(disc: DiscInfo | None) -> HtoaInfo | None:
-    """Return HTOA candidate if track 1 has a pregap (start_sector > 0).
+    """Return an HTOA candidate using EAC-style track-1 pregap rules.
 
-    On a normal Red Book disc the first track often starts at LBA 0 after
-    the 150-sector lead-in is accounted for by the drive. When the TOC
-    reports a positive start for track 1, sectors ``[0, start)`` are the
-    hidden pregap that may contain real audio (HTOA).
+    * ``pregap <= 150`` sectors → ignore (standard pause; not a hidden track).
+    * ``pregap > 150`` → candidate for extraction as track 00; silence is
+      decided after a trial rip.
+
+    Track 1 itself is always left starting at its TOC start (index 01).
     """
     if disc is None or not disc.tracks:
         return None
 
     t1 = disc.tracks[0]
-    if t1.number != 1:
-        # Still use the first listed track if numbering is odd.
-        pass
-
-    pregap = t1.start_sector
-    if pregap < _MIN_INTERESTING_SECTORS:
+    pregap = int(t1.start_sector)
+    if pregap <= 0:
+        log.debug('Track 1 starts at sector 0 — no INDEX 00 pregap')
         return None
 
+    if pregap <= STANDARD_TRACK1_PREGAP_SECTORS:
+        log.info(
+            'Track 1 pregap is %s sectors (≤%ss standard) — ignored for HTOA '
+            '(EAC-style; track 1 is not extended with the pause)',
+            pregap,
+            STANDARD_TRACK1_PREGAP_SECTORS // 75,
+        )
+        return None
+
+    extra = pregap - STANDARD_TRACK1_PREGAP_SECTORS
     info = HtoaInfo(
         start_sector=0,
         length_sectors=pregap,
         message=(
-            f'Pregap before track 1: {pregap} sectors '
-            f'({pregap / 75.0:.2f}s) — checking for HTOA'
+            f'Extended pregap before track 1: {pregap} sectors '
+            f'({pregap / 75.0:.2f}s, {extra} sectors past the standard 2s) — '
+            f'checking for HTOA (track 1 itself starts at sector {t1.start_sector})'
         ),
     )
     log.info('%s', info.message)
@@ -76,7 +95,6 @@ def is_digitally_silent(wav_path: Path, *, threshold: int = 0) -> bool:
     try:
         with wave.open(str(wav_path), 'rb') as wf:
             if wf.getsampwidth() != 2:
-                # Non-CDDA width: treat as non-silent if any non-zero byte.
                 data = wf.readframes(wf.getnframes())
                 return not any(data)
             remaining = wf.getnframes()
@@ -101,8 +119,13 @@ def extract_htoa(
     *,
     timeout: int = 600,
     mode: str = 'secure',
+    sample_offset: int = 0,
 ) -> None:
-    """Extract the pregap range before track 1 into *wav_path*."""
+    """Extract the pregap range before track 1 into *wav_path*.
+
+    Uses an absolute sector span so track 1's own rip (by track number) never
+    includes this region — same separation as EAC HTOA vs track 01.
+    """
     from ready2rip.util import find_cdparanoia
 
     binary = find_cdparanoia()
@@ -113,21 +136,22 @@ def extract_htoa(
     if end <= 0:
         raise RuntimeError('HTOA length is zero')
 
-    # Absolute sector span: from disc start through pregap end (exclusive end
-    # is expressed as the start of track 1 in TOC terms).
-    span = f'[.0]-[.{end}]'
+    # Absolute span [0, track1_start). libcdio-paranoia: [.A]-[.B] end is
+    # relative (last inclusive = A+B), so B = end - 1 for exclusive end.
+    span = f'[.0]-[.{end - 1}]'
     cmd = [
         binary,
         '-w',
         '-d',
         device,
-        '-q',
     ]
+    if sample_offset:
+        cmd.extend(['-O', str(int(sample_offset))])
     if mode == 'burst':
-        cmd.append('-Z')
+        cmd.extend(['-Z', '-q'])
     else:
-        # Single token; "-z" "40" is misread as track 40.
-        cmd.append('--never-skip=40')
+        # Single token; "-z" "200" is misread as track 200.
+        cmd.extend(['--never-skip=200', '-X', '-e'])
     cmd.extend([span, str(wav_path)])
 
     completed = subprocess.run(
@@ -139,6 +163,13 @@ def extract_htoa(
     )
     if completed.returncode != 0 or not wav_path.is_file() or wav_path.stat().st_size < 1000:
         detail = (completed.stderr or completed.stdout or '').strip()
+        # Drop dense progress lines for the error message.
+        diag = [
+            ln
+            for ln in detail.splitlines()
+            if ln.strip() and not ln.strip().startswith('##:')
+        ]
+        detail = ' | '.join(diag[-6:]) if diag else detail
         if len(detail) > 300:
             detail = detail[:300] + '…'
         raise RuntimeError(detail or f'HTOA extract failed ({span})')

@@ -164,6 +164,17 @@
       </description>
     </key>
 
+    <key name="write-cue-file" type="b">
+      <default>true</default>
+      <summary>Write CUE sheet</summary>
+      <description>
+        After a secure rip, write an EAC-style .cue sheet into the album folder.
+        Per-track rips get a multi-file CUE (“Multiple files with left-out gaps”);
+        Copy Image mode gets a single-file image CUE. Recommended for accurate
+        archival rips.
+      </description>
+    </key>
+
     <key name="test-and-copy" type="b">
       <default>true</default>
       <summary>Test and copy each track</summary>
@@ -244,10 +255,23 @@
 
     <key name="rip-htoa" type="b">
       <default>true</default>
-      <summary>Detect and rip Hidden Track One Audio</summary>
+      <summary>Pregap / HTOA handling (EAC-style)</summary>
       <description>
-        If track 1 has a pregap, extract it and save as track 00 when the audio
-        is not digitally silent (HTOA).
+        Enable Hidden Track One Audio handling similar to Exact Audio Copy:
+        the standard 2-second pause before track 1 is ignored; only longer
+        pregaps are checked. Non-silent audio is saved as track 00. Track 1
+        itself is never extended with the pregap (always starts at index 01).
+      </description>
+    </key>
+
+    <key name="copy-image" type="b">
+      <default>false</default>
+      <summary>Copy Image</summary>
+      <description>
+        When enabled, rip like Exact Audio Copy “Copy Image”: one continuous
+        image file for the disc instead of separate per-track files. Enable
+        Write .cue file for a matching image CUE sheet. FLAC or WAV is used for
+        the image (lossy formats fall back to FLAC).
       </description>
     </key>
 

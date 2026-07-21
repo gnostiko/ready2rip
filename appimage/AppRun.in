@@ -1,0 +1,78 @@
+#!/bin/sh
+# Fast, portable AppRun for ready2rip AppImage.
+# Prefer bundled Python + GI stack so GitHub downloads work without matching host deps.
+
+HERE="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")"
+export APPDIR="$HERE"
+
+# Bundled tools first (cdparanoia, flac, ffmpeg, …)
+export PATH="$HERE/usr/bin${PATH:+:$PATH}"
+
+# ---------------------------------------------------------------------------
+# Python: prefer AppImage-bundled interpreter, then host python3
+# ---------------------------------------------------------------------------
+PYTHON=""
+if [ -x "$HERE/usr/bin/python3" ]; then
+  PYTHON="$HERE/usr/bin/python3"
+elif [ -x "$HERE/usr/bin/python3.14" ]; then
+  PYTHON="$HERE/usr/bin/python3.14"
+elif [ -x "$HERE/usr/bin/python3.13" ]; then
+  PYTHON="$HERE/usr/bin/python3.13"
+elif [ -x "$HERE/usr/bin/python3.12" ]; then
+  PYTHON="$HERE/usr/bin/python3.12"
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON="$(command -v python3)"
+else
+  echo "ready2rip: python3 not found (AppImage incomplete or broken)" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Module path: app package + mutagen + bundled PyGObject
+# ---------------------------------------------------------------------------
+export PYTHONPATH="$HERE/usr/share/ready2rip"
+if [ -d "$HERE/usr/lib/python3/site-packages" ]; then
+  export PYTHONPATH="$HERE/usr/lib/python3/site-packages:$PYTHONPATH"
+fi
+# Versioned site-packages (e.g. python3.14/site-packages)
+for d in "$HERE/usr/lib"/python3.*/site-packages; do
+  [ -d "$d" ] || continue
+  export PYTHONPATH="$d:$PYTHONPATH"
+done
+
+# ---------------------------------------------------------------------------
+# GSettings + XDG data
+# ---------------------------------------------------------------------------
+export GSETTINGS_SCHEMA_DIR="$HERE/usr/share/glib-2.0/schemas"
+export XDG_DATA_DIRS="$HERE/usr/share${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
+
+# ---------------------------------------------------------------------------
+# Shared libraries + GObject Introspection typelibs
+# ---------------------------------------------------------------------------
+if [ -d "$HERE/usr/lib" ]; then
+  export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+if [ -d "$HERE/usr/lib64" ]; then
+  export LD_LIBRARY_PATH="$HERE/usr/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+# Multiarch fallback
+for d in "$HERE/usr/lib"/x86_64-linux-gnu "$HERE/usr/lib"/aarch64-linux-gnu; do
+  [ -d "$d" ] || continue
+  export LD_LIBRARY_PATH="$d${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+done
+
+if [ -d "$HERE/usr/lib/girepository-1.0" ]; then
+  export GI_TYPELIB_PATH="$HERE/usr/lib/girepository-1.0${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
+fi
+if [ -d "$HERE/usr/lib64/girepository-1.0" ]; then
+  export GI_TYPELIB_PATH="$HERE/usr/lib64/girepository-1.0${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
+fi
+
+# GdkPixbuf / GTK loaders when bundled
+if [ -d "$HERE/usr/lib/gdk-pixbuf-2.0" ]; then
+  # linuxdeploy-plugin-gtk usually sets these; keep a safe default.
+  :
+fi
+
+# -B: do not write .pyc into a read-only AppImage mount
+exec "$PYTHON" -B -m ready2rip.main "$@"

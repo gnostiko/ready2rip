@@ -602,10 +602,14 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._progress_hide_id: int | None = None
         self._drive_status: DriveStatus | None = None
         self._last_tray_state: DriveTrayState | None = None
+        self._drive_info: DriveInfo | None = None
         # Disc identity last auto-ripped / loaded (avoid re-ripping same media).
         self._auto_rip_disc_key: str | None = None
         self._auto_rip_pending = False
         self._poll_id: int | None = None
+        # Drop stale background probe results when a newer probe starts.
+        self._probe_generation = 0
+        self._probe_in_flight = False
 
         self.store = store if store is not None else SettingsStore()
         self._device = self.store.get().device
@@ -617,9 +621,108 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._build_options_rows()
         self._build_metadata_rows()
         self._build_album_edit_rows()
-        self._rebuild_drive_rows(self.store.get().device or '/dev/sr0')
-        self._refresh_disc()
-        self._start_drive_monitor()
+        # Do not touch the optical drive during construction — cdparanoia / ioctl
+        # can block for tens of seconds and makes AppImage / cold start feel stuck.
+        # Defer probe + drive panel until the window is shown.
+        self.status_page.set_description(
+            'Starting… detecting disc and drive (this may take a moment).'
+        )
+        GLib.idle_add(self._deferred_startup)
+
+    def _deferred_startup(self) -> bool:
+        """Run after the first UI frame so the window appears immediately."""
+        device = self.store.get().device or self._device or '/dev/sr0'
+        self._device = device
+        self.status_page.set_title('Looking for a disc')
+        self.status_page.set_description(
+            f'Looking for an audio CD on {device}…'
+        )
+        # Drive identity (udev/sysfs) is cheap — fill Technical → Drive immediately.
+        try:
+            self._rebuild_drive_rows(device, allow_optical=False)
+        except Exception:  # noqa: BLE001
+            pass
+        self._start_async_probe(device, reason='startup')
+        return GLib.SOURCE_REMOVE
+
+    def _start_async_probe(
+        self,
+        device: str,
+        *,
+        reason: str = 'refresh',
+        from_monitor: bool = False,
+    ) -> None:
+        """Probe tray + TOC + drive info off the GTK thread, then update UI."""
+        self._probe_generation += 1
+        generation = self._probe_generation
+        self._probe_in_flight = True
+
+        def work() -> None:
+            import logging
+
+            log = logging.getLogger(__name__)
+            status: DriveStatus | None = None
+            info: DiscInfo | None = None
+            ids: DiscIdentifiers | None = None
+            drive: DriveInfo | None = None
+            err: str | None = None
+            try:
+                status = query_drive_status(device)
+                try:
+                    drive = probe_drive(device)
+                except Exception as drive_exc:  # noqa: BLE001
+                    log.debug('Drive identity probe failed: %s', drive_exc)
+                    drive = DriveInfo(device=device, notes=[f'Probe failed: {drive_exc}'])
+
+                if status.state not in (
+                    DriveTrayState.TRAY_OPEN,
+                    DriveTrayState.NO_DISC,
+                    DriveTrayState.MISSING,
+                ):
+                    info = probe_disc(device)
+                    if info is not None and info.tracks:
+                        # TOC-only IDs — never re-open the device here.
+                        ids = identifiers_from_disc(info)
+            except Exception as exc:  # noqa: BLE001
+                log.exception('Background disc probe failed (%s)', reason)
+                err = str(exc)
+
+            def finish() -> bool:
+                self._probe_in_flight = False
+                if generation != self._probe_generation:
+                    return GLib.SOURCE_REMOVE
+                try:
+                    if err is not None or status is None:
+                        self.status_page.set_title('Drive probe failed')
+                        self.status_page.set_description(
+                            f'{err or "Unknown error"}\n'
+                            'Check Optical device path in Rip options.'
+                        )
+                        if drive is not None:
+                            self._drive_info = drive
+                            self._rebuild_drive_rows(device, drive_info=drive)
+                    else:
+                        if drive is not None:
+                            self._drive_info = drive
+                        self._apply_probe_result(
+                            device,
+                            status,
+                            info,
+                            ids,
+                            from_monitor=from_monitor,
+                            drive_info=drive,
+                        )
+                    if reason == 'startup':
+                        self._start_drive_monitor()
+                except Exception:  # noqa: BLE001
+                    log.exception('Disc probe UI update failed (%s)', reason)
+                    if reason == 'startup':
+                        self._start_drive_monitor()
+                return GLib.SOURCE_REMOVE
+
+            GLib.idle_add(finish)
+
+        threading.Thread(target=work, daemon=True, name=f'ready2rip-probe-{reason}').start()
 
     def _setup_split_view(self) -> None:
         """GNOME-style collapsible sidebar; auto-collapses on narrow widths."""
@@ -699,11 +802,18 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 min-width: {size}px;
                 min-height: {size}px;
                 border-radius: 12px;
+                /* Subtle well so the empty cover reads in light and dark themes */
+                background-color: alpha(@window_fg_color, 0.06);
             }}
-            /* Dimmed, compact music glyph when no cover is loaded */
-            .ready2rip-cover-placeholder {{
-                opacity: 0.4;
-                color: @dim_label_color;
+            /*
+             * Placeholder music icon: use window foreground with alpha so the
+             * symbolic glyph stays visible on light Adwaita (dim_label + opacity
+             * was nearly invisible on card backgrounds).
+             */
+            image.ready2rip-cover-placeholder {{
+                color: alpha(@window_fg_color, 0.55);
+                opacity: 1.0;
+                -gtk-icon-style: symbolic;
             }}
             .ready2rip-rip-bar {{
                 background-color: @window_bg_color;
@@ -791,17 +901,32 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self.clear_art_button.set_sensitive(self._artwork is not None)
 
     def _show_placeholder_cover(self) -> None:
-        """Clear picture and show a compact, dimmed music icon."""
+        """Clear picture and show a compact music icon (visible in light/dark)."""
         size = self._COVER_SIZE
         self.cover_picture.set_paintable(None)
         self.cover_picture.set_size_request(size, size)
         self.cover_overlay.set_size_request(size, size)
         self.cover_frame.set_size_request(size, size)
 
-        icon = self._COVER_PLACEHOLDER_ICON_SIZE
-        self.cover_placeholder.set_from_icon_name('folder-music-symbolic')
-        self.cover_placeholder.set_pixel_size(icon)
+        icon_px = self._COVER_PLACEHOLDER_ICON_SIZE
+        self.cover_placeholder.set_pixel_size(icon_px)
+        # Prefer a widely available symbolic glyph; fall back if a theme omits one.
+        theme = Gtk.IconTheme.get_for_display(self.get_display())
+        for name in (
+            'folder-music-symbolic',
+            'audio-x-generic-symbolic',
+            'media-optical-symbolic',
+            'emblem-music-symbolic',
+        ):
+            if theme.has_icon(name):
+                self.cover_placeholder.set_from_icon_name(name)
+                break
+        else:
+            self.cover_placeholder.set_from_icon_name('folder-music-symbolic')
+        self.cover_placeholder.add_css_class('ready2rip-cover-placeholder')
         self.cover_placeholder.set_visible(True)
+        # Ensure the icon paints above an empty GtkPicture in all themes.
+        self.cover_placeholder.set_opacity(1.0)
 
     # —— Sidebar groups ——
 
@@ -1004,9 +1129,23 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._test_copy_row.connect('notify::active', self._on_test_copy_toggled)
         self._add_option_row(self._test_copy_row)
 
+        self._copy_image_row = Adw.SwitchRow(
+            title='Copy Image',
+            subtitle=(
+                'EAC-style: rip one continuous disc image instead of separate '
+                'track files (use Write .cue file for a matching sheet)'
+            ),
+            active=settings.copy_image,
+        )
+        self._copy_image_row.connect('notify::active', self._on_copy_image_toggled)
+        self._add_option_row(self._copy_image_row)
+
         self._htoa_row = Adw.SwitchRow(
-            title='Hidden track (HTOA)',
-            subtitle='Save non-silent pregap as track 00',
+            title='Pregap / HTOA',
+            subtitle=(
+                'EAC-style: extract non-silent audio before track 1 as 00; '
+                'ignore the standard 2s pause; track 1 starts at index 01'
+            ),
             active=settings.rip_htoa,
         )
         self._htoa_row.connect('notify::active', self._on_htoa_toggled)
@@ -1035,6 +1174,17 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         )
         self._log_row.connect('notify::active', self._on_log_toggled)
         self._add_option_row(self._log_row)
+
+        self._cue_row = Adw.SwitchRow(
+            title='Write .cue file',
+            subtitle=(
+                'EAC recommendation for secure rips: multi-file CUE (left-out gaps) '
+                'or a single-image CUE when Copy Image is on'
+            ),
+            active=settings.write_cue_file,
+        )
+        self._cue_row.connect('notify::active', self._on_cue_toggled)
+        self._add_option_row(self._cue_row)
 
         self._auto_rip_row = Adw.SwitchRow(
             title='Auto-rip',
@@ -1186,9 +1336,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             (self._offset_row, self._on_offset_changed),
             (self._test_copy_row, self._on_test_copy_toggled),
             (self._htoa_row, self._on_htoa_toggled),
+            (self._copy_image_row, self._on_copy_image_toggled),
             (self._ar_row, self._on_ar_toggled),
             (self._burst_row, self._on_burst_toggled),
             (self._log_row, self._on_log_toggled),
+            (self._cue_row, self._on_cue_toggled),
             (self._auto_rip_row, self._on_auto_rip_toggled),
             (self._auto_eject_row, self._on_auto_eject_toggled),
             (self._mb_row, self._on_mb_toggled),
@@ -1231,9 +1383,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._offset_row.set_subtitle(status)
             self._test_copy_row.set_active(settings.test_and_copy)
             self._htoa_row.set_active(settings.rip_htoa)
+            self._copy_image_row.set_active(settings.copy_image)
             self._ar_row.set_active(settings.verify_accuraterip)
             self._burst_row.set_active(settings.burst_fallback)
             self._log_row.set_active(settings.write_rip_log)
+            self._cue_row.set_active(settings.write_cue_file)
             self._auto_rip_row.set_active(settings.auto_rip)
             self._auto_eject_row.set_active(settings.auto_eject)
             self._auto_lookup_row.set_enable_expansion(
@@ -1359,6 +1513,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _on_htoa_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(rip_htoa=row.get_active())
 
+    def _on_copy_image_toggled(self, row: Adw.SwitchRow, *_args) -> None:
+        self.store.update(copy_image=row.get_active())
+        if row.get_active():
+            self._toast('Copy Image on — rip will write one continuous disc image')
+
     def _on_rg_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(apply_replaygain=row.get_active())
 
@@ -1370,6 +1529,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
     def _on_log_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(write_rip_log=row.get_active())
+
+    def _on_cue_toggled(self, row: Adw.SwitchRow, *_args) -> None:
+        self.store.update(write_cue_file=row.get_active())
+        if row.get_active():
+            self._toast('Write .cue on — EAC-style CUE after secure rips')
 
     def _on_auto_rip_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(auto_rip=row.get_active())
@@ -1555,6 +1719,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             disc_track_count=self._disc.track_count,
             burst_fallback=settings.burst_fallback,
             write_rip_log=settings.write_rip_log,
+            write_cue_file=settings.write_cue_file,
             test_and_copy=settings.test_and_copy,
             drive_caches_audio=(
                 settings.drive_caches_audio
@@ -1576,6 +1741,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 settings.defeat_audio_cache or settings.drive_caches_audio
             ),
             rip_htoa=settings.rip_htoa,
+            copy_image=settings.copy_image,
             artwork_max_size=settings.artwork_max_size,
         )
 
@@ -1584,8 +1750,14 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._set_ripping_ui(True)
         fmt = job.encode_format.upper()
         n = len(job.track_numbers)
-        self.rip_title_label.set_label(f'Ripping {n} track{"s" if n != 1 else ""}')
-        self.rip_status_label.set_label(f'Starting {fmt} extraction…')
+        if job.copy_image:
+            self.rip_title_label.set_label('Copy Image')
+            self.rip_status_label.set_label(f'Starting disc image ({fmt})…')
+        else:
+            self.rip_title_label.set_label(
+                f'Ripping {n} track{"s" if n != 1 else ""}'
+            )
+            self.rip_status_label.set_label(f'Starting {fmt} extraction…')
         self._set_progress_fraction(0.0)
         self._set_progress_style(None)
 
@@ -1664,7 +1836,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._set_progress_fraction(progress.fraction)
         if progress.message:
             self.rip_status_label.set_label(progress.message)
-        # Keep a calm heading while work is in progress.
+        # Calm heading; track detail lives in the status line underneath.
         if progress.state == RipState.REPLAYGAIN:
             self.rip_title_label.set_label('ReplayGain')
         elif progress.state == RipState.ENCODING:
@@ -1674,10 +1846,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         elif progress.state == RipState.PREPARING:
             self.rip_title_label.set_label('Preparing')
         elif progress.state == RipState.RIPPING:
-            if progress.track_number > 0:
-                self.rip_title_label.set_label(f'Track {progress.track_number}')
-            else:
-                self.rip_title_label.set_label('Ripping')
+            self.rip_title_label.set_label('Ripping')
+        elif progress.state == RipState.TAGGING:
+            self.rip_title_label.set_label('Tagging')
         if progress.state == RipState.FAILED:
             self.rip_title_label.set_label('Rip failed')
             self.rip_status_label.set_label(progress.message or 'Rip failed')
@@ -1841,7 +2012,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 or self._disc is None
                 or self.stack.get_visible_child_name() != 'disc'
             )
-            if need_load:
+            if need_load and not self._probe_in_flight:
                 self._refresh_disc(from_monitor=True)
 
     def _apply_drive_status_to_ui(self, status: DriveStatus) -> None:
@@ -1903,14 +2074,39 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         GLib.timeout_add(delay, _start)
 
     def _refresh_disc(self, *, from_monitor: bool = False) -> None:
+        """Kick off a background probe (never blocks the GTK main loop)."""
         settings = self.store.get()
         device = settings.device or self._device or '/dev/sr0'
         self._device = device
+        if not from_monitor and self.stack.get_visible_child_name() == 'empty':
+            self.status_page.set_title('Looking for a disc')
+            self.status_page.set_description(
+                f'Looking for an audio CD on {device}…'
+            )
+        self._start_async_probe(
+            device,
+            reason='refresh',
+            from_monitor=from_monitor,
+        )
 
-        status = query_drive_status(device)
+    def _apply_probe_result(
+        self,
+        device: str,
+        status: DriveStatus,
+        info: DiscInfo | None,
+        ids: DiscIdentifiers | None,
+        *,
+        from_monitor: bool = False,
+        drive_info: DriveInfo | None = None,
+    ) -> None:
+        """Update UI from an already-completed drive/disc probe (main thread)."""
+        settings = self.store.get()
+        self._device = device
         self._drive_status = status
         self._last_tray_state = status.state
-        self._rebuild_drive_rows(self.store.get().device or self._device or '/dev/sr0')
+        if drive_info is not None:
+            self._drive_info = drive_info
+        self._rebuild_drive_rows(device, drive_info=self._drive_info)
 
         if status.state is DriveTrayState.TRAY_OPEN:
             self._clear_disc_ui_for_empty(
@@ -1938,7 +2134,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             )
             return
 
-        info = probe_disc(device)
         self._disc = info
         self._album = None
         self._ids = None
@@ -1957,17 +2152,16 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 self.status_page.set_title('No audio CD detected')
                 self.status_page.set_description(
                     f'A disc is present on {device}, but no audio tracks were found. '
-                    'Insert an audio CD and press Refresh.'
+                    'Insert an audio CD.'
                 )
             self._album = None
             self._rebuild_track_list(None)
             self._fill_album_edit_fields(None)
             self._rebuild_disc_rows(None, None)
-            self._rebuild_drive_rows(device)
             self._update_album_header(None, None)
             return
 
-        self._ids = identifiers_from_disc(info)
+        self._ids = ids if ids is not None else identifiers_from_disc(info)
         self.stack.set_visible_child_name('disc')
         self.rip_button.set_sensitive(True)
         self.lookup_button.set_sensitive(True)
@@ -1984,7 +2178,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             restored = False
 
         self._rebuild_disc_rows(info, self._ids)
-        self._rebuild_drive_rows(device)
+        self._rebuild_drive_rows(device, drive_info=self._drive_info)
         self._fill_album_edit_fields(self._album)
         self._rebuild_track_list(info)
         self._update_album_header(info, self._album)
@@ -2091,28 +2285,53 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self.disc_group.add(row)
             self._disc_rows.append(row)
 
-    def _rebuild_drive_rows(self, device: str) -> None:
+    def _rebuild_drive_rows(
+        self,
+        device: str,
+        *,
+        drive_info: DriveInfo | None = None,
+        allow_optical: bool = True,
+    ) -> None:
+        """Rebuild Technical → Drive rows.
+
+        *allow_optical=False* skips fallbacks that invoke cdparanoia so the first
+        paint after open stays instant (udev/sysfs only).
+        """
         for row in self._drive_rows:
             self.drive_group.remove(row)
         self._drive_rows.clear()
 
         settings = self.store.get()
-        try:
-            info: DriveInfo = probe_drive(device)
-        except Exception as exc:  # noqa: BLE001
-            info = DriveInfo(device=device, notes=[f'Probe failed: {exc}'])
+        info = drive_info if drive_info is not None else self._drive_info
+        if info is None or info.device != device:
+            try:
+                info = probe_drive(device, allow_optical=allow_optical)
+            except Exception as exc:  # noqa: BLE001
+                info = DriveInfo(device=device, notes=[f'Probe failed: {exc}'])
+            self._drive_info = info
 
         self.drive_group.set_description(info.display_name or device)
 
-        st = self._drive_status or query_drive_status(device)
-        self._drive_status = st
-        tray_row = Adw.ActionRow(title='Tray / media', subtitle=st.label)
-        if st.message and st.message != st.state.value:
-            tray_row.set_tooltip_text(st.message)
+        # Prefer cached tray status; only ioctl when we already have none.
+        st = self._drive_status
+        if st is None and allow_optical:
+            st = query_drive_status(device)
+            self._drive_status = st
+        if st is not None:
+            tray_row = Adw.ActionRow(title='Tray / media', subtitle=st.label)
+            if st.message and st.message != st.state.value:
+                tray_row.set_tooltip_text(st.message)
+            else:
+                tray_row.set_tooltip_text(st.label)
+            self.drive_group.add(tray_row)
+            self._drive_rows.append(tray_row)
         else:
-            tray_row.set_tooltip_text(st.label)
-        self.drive_group.add(tray_row)
-        self._drive_rows.append(tray_row)
+            tray_row = Adw.ActionRow(
+                title='Tray / media',
+                subtitle='Checking…',
+            )
+            self.drive_group.add(tray_row)
+            self._drive_rows.append(tray_row)
 
         for title, subtitle in info.as_rows():
             row = Adw.ActionRow(title=title, subtitle=subtitle)
@@ -2786,16 +3005,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         except (AttributeError, TypeError):
             pass
         self.toast_overlay.add_toast(toast)
-
-    @property
-    def artwork_full(self) -> ArtworkImage | None:
-        """Full-resolution downloaded cover (for folder.jpg later)."""
-        return self._artwork
-
-    @property
-    def artwork_for_embed(self) -> ArtworkImage | None:
-        """Cover scaled to the user-selected embed size."""
-        return self._artwork_embed
 
 
 def _parse_disc_field(text: str) -> tuple[int, int]:

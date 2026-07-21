@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=ready2rip
+Comment=Rip audio CDs with AccurateRip and modern metadata
+Exec=ready2rip
+Icon=org.ready2rip.Ready2Rip
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;Music;
+Keywords=CD;Rip;Audio;Music;AccurateRip;MusicBrainz;
+StartupNotify=true
+X-AppImage-Version=0.2.0

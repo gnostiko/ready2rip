@@ -1,11 +1,17 @@
 # Build / install trees
 /build/
-/build-flatpak/
+/build-appimage/
 /install/
-/.flatpak-builder/
+/dist/
+/.tools/
+*.AppImage
 *.so
 *.o
 *.a
+
+# AppImage extract leftovers
+/squashfs-root/
+squashfs-root/
 
 # Python
 __pycache__/
@@ -33,6 +39,8 @@ Thumbs.db
 *.log
 .cache/
 *.gschema.compiled
+gschemas.compiled
+data/gschemas.compiled
 
 # Generated Meson config (source has config.py.in / dev config.py)
 # Keep src/ready2rip/config.py for local runs; it is the dev fallback.

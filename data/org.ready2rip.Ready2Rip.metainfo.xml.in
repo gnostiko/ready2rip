@@ -21,9 +21,13 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-07-19">
+    <release version="@APPLICATION_VERSION@" date="2026-07-21">
       <description>
-        <p>Initial development scaffold.</p>
+        <p>
+          Secure cdparanoia extraction with EAC-style test &amp; copy, AccurateRip,
+          CUE/log output, Copy Image mode, AppImage packaging with Gear Lever
+          update support, and UI polish.
+        </p>
       </description>
     </release>
   </releases>
