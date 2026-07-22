@@ -9,7 +9,7 @@ A personal vibe-coded project; I love dBpoweramp and EAC, but since I use linux 
 
 | Feature | Description |
 |---------|-------------|
-| Secure rip | Full **cdparanoia** paranoia, retries, optional test & copy |
+| Secure rip | Full **cdparanoia**, retries, optional test & copy |
 | AccurateRip | Online CRC database check after extraction |
 | Metadata | MusicBrainz + FreeDB-compatible (e.g. gnudb) |
 | Tags | mutagen — FLAC / MP3 / Opus / WAV |
