@@ -9,6 +9,7 @@ from pathlib import Path
 
 from ready2rip.metadata.providers import AlbumMetadata
 from ready2rip.paths import track_meta_for
+from ready2rip.tags.artists import normalize_artists, split_artists
 
 log = logging.getLogger(__name__)
 
@@ -35,13 +36,14 @@ class TagWriter:
         suffix = path.suffix.lower()
         track = track_meta_for(album, track_number)
         title = track.title if track and track.title else f'Track {track_number:02d}'
-        artist = (
+        # Multi-artist: "A; B; C" (dBpoweramp-style) → multi-value tags on write.
+        artist = normalize_artists(
             (track.artist if track and track.artist else None)
             or album.artist
             or 'Unknown Artist'
         )
         album_title = album.title or 'Unknown Album'
-        album_artist = album.artist or artist
+        album_artist = normalize_artists(album.artist or artist)
         date = album.date or ''
         total = total_tracks if total_tracks is not None else (
             len(album.tracks) if album.tracks else None
@@ -274,9 +276,12 @@ class TagWriter:
         track_meta=None,
     ) -> None:
         audio['TITLE'] = [title]
-        audio['ARTIST'] = [artist]
+        # Multi-value ARTIST / ALBUMARTIST (one field per name), like dBpoweramp.
+        audio['ARTIST'] = split_artists(artist) or [artist or 'Unknown Artist']
         audio['ALBUM'] = [album]
-        audio['ALBUMARTIST'] = [album_artist]
+        audio['ALBUMARTIST'] = (
+            split_artists(album_artist) or [album_artist or 'Unknown Artist']
+        )
         if date:
             audio['DATE'] = [date]
         if total_tracks:
@@ -351,9 +356,12 @@ class TagWriter:
         tags.delall('TPOS')
         tags.delall('TDRC')
         tags.add(TIT2(encoding=3, text=title))
-        tags.add(TPE1(encoding=3, text=artist))
+        # Multi-value TPE1 / TPE2 (ID3v2.4 multi-string / mutagen list).
+        tags.add(TPE1(encoding=3, text=split_artists(artist) or [artist]))
         tags.add(TALB(encoding=3, text=album))
-        tags.add(TPE2(encoding=3, text=album_artist))
+        tags.add(
+            TPE2(encoding=3, text=split_artists(album_artist) or [album_artist])
+        )
         if total_tracks:
             tags.add(TRCK(encoding=3, text=f'{track_number}/{total_tracks}'))
         else:
@@ -415,9 +423,11 @@ class TagWriter:
                 return
             tags = audio.tags
             tags.add(TIT2(encoding=3, text=title))
-            tags.add(TPE1(encoding=3, text=artist))
+            tags.add(TPE1(encoding=3, text=split_artists(artist) or [artist]))
             tags.add(TALB(encoding=3, text=album))
-            tags.add(TPE2(encoding=3, text=album_artist))
+            tags.add(
+                TPE2(encoding=3, text=split_artists(album_artist) or [album_artist])
+            )
             if total_tracks:
                 tags.add(TRCK(encoding=3, text=f'{track_number}/{total_tracks}'))
             else:

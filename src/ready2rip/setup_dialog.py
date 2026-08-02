@@ -65,8 +65,8 @@ class DriveSetupDialog(Adw.Dialog):
 
         desc = Gtk.Label(
             label=(
-                'Measures sample offset, audio cache, Accurate Stream, '
-                'and C2 pointers. Insert a commercial CD, then start.'
+                'Measures sample offset, audio cache, and Accurate Stream. '
+                'Insert a commercial CD, then start.'
             ),
             wrap=True,
             justify=Gtk.Justification.CENTER,
@@ -255,9 +255,7 @@ class DriveSetupDialog(Adw.Dialog):
         self._prog_bar.set_fraction(frac)
         self._prog_bar.set_text(f'{int(frac * 100)}%')
         lower = msg.casefold()
-        if 'c2' in lower:
-            self._prog_title.set_label('Testing C2…')
-        elif 'accurate stream' in lower:
+        if 'accurate stream' in lower:
             self._prog_title.set_label('Accurate Stream…')
         elif 'cache' in lower:
             self._prog_title.set_label('Drive cache…')
@@ -285,7 +283,6 @@ class DriveSetupDialog(Adw.Dialog):
             if (
                 result.caches_audio is not None
                 or result.accurate_stream is not None
-                or result.c2_pointers is not None
             ):
                 _save_result(
                     self._store,
@@ -350,10 +347,6 @@ class DriveSetupDialog(Adw.Dialog):
                     else None
                 ),
                 accurate_stream_message=s.drive_accurate_stream_message,
-                c2_pointers=(
-                    s.drive_c2_pointers if s.drive_c2_configured else None
-                ),
-                c2_message=s.drive_c2_message,
             )
             features = ''
         self._finished_ok = True
@@ -382,21 +375,12 @@ def _save_result(
         cache_message=result.cache_message,
         accurate_stream=result.accurate_stream,
         accurate_stream_message=result.accurate_stream_message,
-        c2_pointers=result.c2_pointers,
-        c2_message=result.c2_message,
     )
 
 
 def _format_feature_lines(result: CalibrationResult) -> str:
     """One short line per feature for a compact result summary."""
     lines: list[str] = []
-
-    if result.c2_pointers is True:
-        lines.append('C2 pointers: yes')
-    elif result.c2_pointers is False:
-        lines.append('C2 pointers: no')
-    elif result.c2_message:
-        lines.append('C2 pointers: unknown')
 
     if result.accurate_stream is True:
         lines.append('Accurate Stream: yes')

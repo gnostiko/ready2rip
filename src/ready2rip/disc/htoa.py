@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Hidden Track One Audio (HTOA) / track-1 pregap handling (EAC-style).
+"""Hidden Track One Audio (HTOA) / track-1 pregap handling.
 
-Exact Audio Copy behaviour we mirror:
+Behaviour we follow:
 
 * **Track 1 is never extended** with the pregap. When track 1 is ripped,
   extraction starts at TOC index 01 (the track's listed start sector). The
@@ -50,7 +50,7 @@ class HtoaInfo:
 
 
 def detect_htoa(disc: DiscInfo | None) -> HtoaInfo | None:
-    """Return an HTOA candidate using EAC-style track-1 pregap rules.
+    """Return an HTOA candidate using track-1 pregap rules.
 
     * ``pregap <= 150`` sectors → ignore (standard pause; not a hidden track).
     * ``pregap > 150`` → candidate for extraction as track 00; silence is
@@ -70,7 +70,7 @@ def detect_htoa(disc: DiscInfo | None) -> HtoaInfo | None:
     if pregap <= STANDARD_TRACK1_PREGAP_SECTORS:
         log.info(
             'Track 1 pregap is %s sectors (≤%ss standard) — ignored for HTOA '
-            '(EAC-style; track 1 is not extended with the pause)',
+            '(track 1 is not extended with the pause)',
             pregap,
             STANDARD_TRACK1_PREGAP_SECTORS // 75,
         )
@@ -124,7 +124,7 @@ def extract_htoa(
     """Extract the pregap range before track 1 into *wav_path*.
 
     Uses an absolute sector span so track 1's own rip (by track number) never
-    includes this region — same separation as EAC HTOA vs track 01.
+    includes this region — same separation as HTOA vs track 01.
     """
     from ready2rip.util import find_cdparanoia
 

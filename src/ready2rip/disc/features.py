@@ -1,11 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Drive feature tests: Accurate Stream and C2 error pointers (EAC-style)."""
+"""Drive feature tests: Accurate Stream (re-read consistency)."""
 
 from __future__ import annotations
 
 import logging
-import re
-import shutil
 import subprocess
 import tempfile
 import wave
@@ -41,9 +39,9 @@ def test_accurate_stream(
 ) -> FeatureTestResult:
     """Test whether the drive re-reads the same LBA with identical samples.
 
-    EAC “Accurate Stream”: after seeking away and returning, the drive
-    delivers the same PCM for a given address. Without it, re-reads can
-    shift by a few samples (jitter), which is why overlap/paranoia is needed.
+    Accurate Stream: after seeking away and returning, the drive delivers the
+    same PCM for a given address. Without it, re-reads can shift by a few
+    samples (jitter), which is why overlap/paranoia is needed.
 
     Method:
       1. Burst-extract a short absolute sector span.
@@ -131,89 +129,6 @@ def test_accurate_stream(
             f'({mismatches} mismatch(es), {matches} match(es) of {total})'
         ),
         detail=last_detail or f'span={span}',
-    )
-
-
-def test_c2_pointers(device: str = '/dev/sr0', *, timeout: int = 15) -> FeatureTestResult:
-    """Detect C2 error-pointer support via MMC feature reporting (cd-drive).
-
-    EAC “C2 pointers”: the drive can flag uncorrectable sample errors while
-    reading CDDA. Linux user-space rippers rarely *consume* C2 data during
-    extraction (cdparanoia does not), but knowing support is still useful for
-    logs and drive capability tables.
-
-    Primary source: ``cd-drive`` “CD Read Feature / C2 Error pointers…”.
-    """
-    # Prefer libcdio's cd-drive (already on Solus with the user).
-    cd_drive = shutil.which('cd-drive')
-    if cd_drive:
-        try:
-            completed = subprocess.run(
-                [cd_drive, '-q', device],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            log.warning('cd-drive C2 probe failed: %s', exc)
-            completed = None
-
-        if completed is not None:
-            text = (completed.stdout or '') + '\n' + (completed.stderr or '')
-            result = _parse_c2_from_cd_drive(text)
-            if result is not None:
-                return result
-
-    # Fallback: look at udev/sysfs capability flags (rarely present for C2).
-    return FeatureTestResult(
-        supported=None,
-        message=(
-            'C2 Error pointers: unknown '
-            '(install cd-drive / libcdio-utils for MMC feature reporting)'
-        ),
-    )
-
-
-def _parse_c2_from_cd_drive(text: str) -> FeatureTestResult | None:
-    """Parse cd-drive output for CD Read Feature C2 support."""
-    if not text.strip():
-        return None
-
-    # Strong positive: "C2 Error pointers are supported"
-    if re.search(r'C2\s+Error\s+pointers?\s+are\s+supported', text, re.I):
-        return FeatureTestResult(
-            supported=True,
-            message='C2 Error pointers: yes (MMC CD Read Feature)',
-            detail='Reported by cd-drive',
-        )
-
-    # Explicit negative variants
-    if re.search(
-        r'C2\s+Error\s+pointers?\s+are\s+not\s+supported',
-        text,
-        re.I,
-    ):
-        return FeatureTestResult(
-            supported=False,
-            message='C2 Error pointers: no (MMC CD Read Feature)',
-            detail='Reported by cd-drive',
-        )
-
-    # If CD Read Feature section exists but no C2 line → treat as unsupported
-    if re.search(r'CD\s+Read\s+Feature', text, re.I):
-        # Only conclude "no" when we clearly saw the feature block without C2.
-        # Some older cd-drive builds omit the line when unsupported.
-        if not re.search(r'C2\s+Error', text, re.I):
-            return FeatureTestResult(
-                supported=False,
-                message='C2 Error pointers: no (not listed in CD Read Feature)',
-                detail='CD Read Feature present without C2 line',
-            )
-
-    return FeatureTestResult(
-        supported=None,
-        message='C2 Error pointers: unknown (could not parse cd-drive output)',
     )
 
 

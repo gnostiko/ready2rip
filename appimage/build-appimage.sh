@@ -234,12 +234,71 @@ done
 copy_lib() {
   local src="$1"
   [ -f "$src" ] || return 1
+  # Prefer the real file so versioned sonames land in AppDir.
+  local real
+  real="$(readlink -f "$src" 2>/dev/null || echo "$src")"
+  [ -f "$real" ] || real="$src"
   local base
-  base="$(basename "$src")"
+  base="$(basename "$real")"
   if [ ! -e "${APPDIR}/usr/lib/${base}" ]; then
-    install -D -m755 "$src" "${APPDIR}/usr/lib/${base}" 2>/dev/null || return 1
+    install -D -m755 "$real" "${APPDIR}/usr/lib/${base}" 2>/dev/null || return 1
   fi
   return 0
+}
+
+# Resolve a soname via ldconfig, then common lib dirs (incl. Solus hwcaps).
+resolve_soname() {
+  local soname="$1"
+  local path=""
+  # || true: awk early-exit SIGPIPEs ldconfig under pipefail
+  path="$(ldconfig -p 2>/dev/null | awk -v n="$soname" '$1==n {print $NF; exit}' || true)"
+  if [ -n "$path" ] && [ -f "$path" ]; then
+    printf '%s\n' "$path"
+    return 0
+  fi
+  local cand
+  for cand in \
+    "/usr/lib/${soname}" \
+    "/usr/lib64/${soname}" \
+    "/usr/lib/x86_64-linux-gnu/${soname}" \
+    "/usr/lib/glibc-hwcaps/x86-64-v3/${soname}" \
+    "/usr/lib/glibc-hwcaps/x86-64-v2/${soname}"
+  do
+    if [ -e "$cand" ]; then
+      printf '%s\n' "$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Create DT_SONAME symlinks so the dynamic linker finds versioned .so.N files.
+ensure_soname_links() {
+  local libdir="${APPDIR}/usr/lib"
+  [ -d "$libdir" ] || return 0
+  local f soname base
+  # shellcheck disable=SC2044
+  for f in "$libdir"/lib*.so*; do
+    [ -f "$f" ] || continue
+    [ -L "$f" ] && continue
+    base="$(basename "$f")"
+    soname="$(readelf -d "$f" 2>/dev/null | awk -F'[][]' '/SONAME/ {print $2; exit}' || true)"
+    if [ -n "$soname" ] && [ "$soname" != "$base" ]; then
+      if [ ! -e "${libdir}/${soname}" ]; then
+        ln -sfn "$base" "${libdir}/${soname}"
+      fi
+    fi
+    # Also link libfoo.so.N.M.P → libfoo.so.N when filename is fully versioned
+    case "$base" in
+      *.so.[0-9]*.[0-9]*)
+        local short
+        short="$(echo "$base" | sed -E 's/(\.so\.[0-9]+)\..*/\1/')"
+        if [ -n "$short" ] && [ "$short" != "$base" ] && [ ! -e "${libdir}/${short}" ]; then
+          ln -sfn "$base" "${libdir}/${short}"
+        fi
+        ;;
+    esac
+  done
 }
 
 bundle_ldd_deps() {
@@ -254,9 +313,91 @@ bundle_ldd_deps() {
     case "$lib" in
       *ld-linux*) continue ;;
       *linux-vdso*) continue ;;
+      */libc.so.*) continue ;;
+      */libm.so.*) continue ;;
+      */libdl.so.*) continue ;;
+      */librt.so.*) continue ;;
+      */libpthread.so.*) continue ;;
     esac
     copy_lib "$lib" || true
   done
+}
+
+# Bundle host Python stdlib so the AppImage does not need host Python X.Y.
+bundle_python_stdlib() {
+  local pyver
+  pyver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  local src=""
+  for cand in "/usr/lib/python${pyver}" "/usr/lib64/python${pyver}"; do
+    if [ -d "$cand" ]; then
+      src="$cand"
+      break
+    fi
+  done
+  if [ -z "$src" ]; then
+    echo "error: Python stdlib not found at /usr/lib/python${pyver}" >&2
+    return 1
+  fi
+  local dest="${APPDIR}/usr/lib/python${pyver}"
+  echo "==> bundling Python ${pyver} stdlib from ${src}"
+  rm -rf "$dest"
+  mkdir -p "$dest"
+  # Copy with exclusions to keep size reasonable (no tests / idle / bytecode).
+  python3 - "$src" "$dest" <<'PY'
+import shutil
+import sys
+from pathlib import Path
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+
+EXCLUDE_DIR_NAMES = {
+    "__pycache__",
+    "test",
+    "tests",
+    "idle_test",
+    "idlelib",
+    "turtledemo",
+    "tkinter",
+    "ensurepip",
+    "pydoc_data",
+    # NEVER ship host site-packages (PyQt6, random pip deps, …).
+    # App deps (mutagen, gi) go in usr/lib/python3/site-packages instead.
+    "site-packages",
+    "dist-packages",
+}
+# config-*: contains static python.o — linuxdeploy/patchelf choke on it
+EXCLUDE_DIR_PREFIXES = ("config-",)
+EXCLUDE_SUFFIXES = (".pyc", ".pyo", ".o", ".a")
+
+def ignore(directory, names):
+    skipped = []
+    for name in names:
+        if name in EXCLUDE_DIR_NAMES:
+            skipped.append(name)
+            continue
+        if any(name.startswith(p) for p in EXCLUDE_DIR_PREFIXES):
+            skipped.append(name)
+            continue
+        if name.endswith(EXCLUDE_SUFFIXES):
+            skipped.append(name)
+            continue
+        if name.endswith("-gdb.py"):
+            skipped.append(name)
+            continue
+    return skipped
+
+shutil.copytree(src, dst, dirs_exist_ok=True, ignore=ignore, symlinks=True)
+# Empty site-packages so "import site" paths exist but stay clean.
+(dst / "site-packages").mkdir(parents=True, exist_ok=True)
+print(f"    python stdlib → {dst} (host site-packages excluded)")
+PY
+  # Ensure lib-dynload extension modules' deps are bundled
+  if [ -d "${dest}/lib-dynload" ]; then
+    find "${dest}/lib-dynload" -name '*.so' 2>/dev/null | while read -r so; do
+      bundle_ldd_deps "$so" || true
+    done
+  fi
 }
 
 copy_bin_with_libs() {
@@ -278,21 +419,25 @@ find "${APPDIR}/usr/lib/python3/site-packages/gi" -name '*.so' 2>/dev/null | whi
 done
 
 HOST_PYTHON="$(readlink -f "$(command -v python3)")"
+PY_VER="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 copy_bin_with_libs "$HOST_PYTHON" "python3" || true
-# Also keep versioned name if different
-if [ -x /usr/bin/python3.14 ]; then
-  copy_bin_with_libs /usr/bin/python3.14 python3.14 || true
+# Keep versioned interpreter name (gi modules are ABI-tagged).
+if [ -x "/usr/bin/python${PY_VER}" ]; then
+  copy_bin_with_libs "/usr/bin/python${PY_VER}" "python${PY_VER}" || true
 fi
 # Symlink python3 → versioned if needed
-if [ ! -e "${APPDIR}/usr/bin/python3" ] && [ -x "${APPDIR}/usr/bin/python3.14" ]; then
-  ln -sfn python3.14 "${APPDIR}/usr/bin/python3"
+if [ ! -e "${APPDIR}/usr/bin/python3" ] && [ -x "${APPDIR}/usr/bin/python${PY_VER}" ]; then
+  ln -sfn "python${PY_VER}" "${APPDIR}/usr/bin/python3"
 fi
 
 # libpython is critical
 for lib in /usr/lib/libpython3*.so* /usr/lib64/libpython3*.so*; do
   [ -f "$lib" ] || continue
-  install -D -m755 "$lib" "${APPDIR}/usr/lib/$(basename "$lib")"
+  copy_lib "$lib" || true
 done
+
+# Full stdlib — without this the AppImage only runs on hosts with the same Python.
+bundle_python_stdlib
 
 # Optical / encode tools
 if command -v cdparanoia >/dev/null 2>&1; then
@@ -321,12 +466,15 @@ done
 
 # GTK / Adwaita / related shared objects
 echo "==> bundling GTK 4 / libadwaita libraries"
+# Note: graphene SONAME is libgraphene-1.0.so.0 (not .so.1).
 for soname in libgtk-4.so.1 libadwaita-1.so.0 libgdk_pixbuf-2.0.so.0 \
   libpango-1.0.so.0 libpangocairo-1.0.so.0 libgobject-2.0.so.0 \
   libglib-2.0.so.0 libgio-2.0.so.0 libgmodule-2.0.so.0 \
-  libgraphene-1.0.so.1 libharfbuzz.so.0 libepoxy.so.0 \
-  libcairo.so.2 libfribidi.so.0 libcloudproviders.so.0; do
-  path="$(ldconfig -p 2>/dev/null | awk -v n="$soname" '$1==n {print $NF; exit}')"
+  libgraphene-1.0.so.0 libharfbuzz.so.0 libepoxy.so.0 \
+  libcairo.so.2 libfribidi.so.0 libcloudproviders.so.0 \
+  libgirepository-2.0.so.0 libgirepository-1.0.so.1 \
+  libffi.so.8 libpcre2-8.so.0; do
+  path="$(resolve_soname "$soname" || true)"
   if [ -n "$path" ] && [ -f "$path" ]; then
     echo "    lib $path"
     copy_lib "$path"
@@ -335,8 +483,40 @@ for soname in libgtk-4.so.1 libadwaita-1.so.0 libgdk_pixbuf-2.0.so.0 \
     echo "    warning: $soname not found on host"
   fi
 done
+
+# GdkPixbuf loaders (PNG/JPEG often built-in; ship any host plugins + cache)
+echo "==> bundling gdk-pixbuf loaders"
+for pbdir in /usr/lib/gdk-pixbuf-2.0 /usr/lib64/gdk-pixbuf-2.0 \
+  /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0; do
+  if [ -d "$pbdir" ]; then
+    mkdir -p "${APPDIR}/usr/lib"
+    cp -a "$pbdir" "${APPDIR}/usr/lib/" 2>/dev/null || true
+    find "${APPDIR}/usr/lib/gdk-pixbuf-2.0" -name '*.so' 2>/dev/null | while read -r so; do
+      bundle_ldd_deps "$so" || true
+    done
+    break
+  fi
+done
+if command -v gdk-pixbuf-query-loaders >/dev/null 2>&1; then
+  for loaders_dir in "${APPDIR}/usr/lib"/gdk-pixbuf-2.0/*/loaders; do
+    [ -d "$loaders_dir" ] || continue
+    cache="${loaders_dir}/../loaders.cache"
+    # Query with AppDir path so the cache matches the packaged tree.
+    GDK_PIXBUF_MODULEDIR="$loaders_dir" \
+      gdk-pixbuf-query-loaders >"$cache" 2>/dev/null || true
+    # Rewrite absolute host paths to $APPDIR-relative placeholders AppRun can use
+    # (cache stores absolute paths; AppRun sets GDK_PIXBUF_MODULE_FILE when present).
+    if [ -f "$cache" ]; then
+      sed -i "s|$APPDIR|./|g" "$cache" 2>/dev/null || true
+    fi
+  done
+fi
+
 # Never leave shared objects in usr/bin
 find "${APPDIR}/usr/bin" -name 'lib*.so*' -delete 2>/dev/null || true
+
+echo "==> ensuring library soname symlinks"
+ensure_soname_links
 
 # AccurateRip offset helper
 AR_SRC="${ROOT}/src/ready2rip/native/ar_offset_scan.c"
@@ -387,58 +567,135 @@ fi
 # linuxdeploy for remaining deps + gtk plugin (best effort)
 # ---------------------------------------------------------------------------
 echo "==> linuxdeploy"
-export LINUXDEPLOY_PLUGIN_GTK="${TOOLS}/linuxdeploy-plugin-gtk.sh"
+# Plugin must be on PATH as linuxdeploy-plugin-gtk (name without .sh is ok if linked).
+export PATH="${TOOLS}:${PATH}"
+if [ ! -e "${TOOLS}/linuxdeploy-plugin-gtk" ]; then
+  ln -sfn linuxdeploy-plugin-gtk.sh "${TOOLS}/linuxdeploy-plugin-gtk"
+fi
 # Newer glibc RELR sections make linuxdeploy's bundled strip fail noisily.
 export NO_STRIP=1
-set +e
-"${TOOLS}/linuxdeploy" --appdir="$APPDIR" \
-  --executable="${APPDIR}/usr/bin/python3" \
-  --executable="${APPDIR}/usr/bin/cdparanoia" \
-  --executable="${APPDIR}/usr/bin/flac" \
-  --desktop-file="${APPDIR}/usr/share/applications/${APP_ID}.desktop" \
-  --icon-file="${APPDIR}/usr/share/icons/hicolor/scalable/apps/${APP_ID}.svg" \
-  --plugin gtk
-LD_RC=$?
-if [ "$LD_RC" -ne 0 ]; then
-  echo "warning: linuxdeploy gtk plugin failed; retrying without plugin" >&2
-  "${TOOLS}/linuxdeploy" --appdir="$APPDIR" \
-    --executable="${APPDIR}/usr/bin/python3" \
-    --executable="${APPDIR}/usr/bin/cdparanoia" \
-    --desktop-file="${APPDIR}/usr/share/applications/${APP_ID}.desktop" \
+# ready2rip uses GTK via PyGObject — executables are not linked to libgtk, so
+# the plugin cannot auto-detect. Force GTK 4.
+export DEPLOY_GTK_VERSION=4
+
+# Drop static objects that confuse patchelf (wrong ELF type).
+find "${APPDIR}" \( -name '*.o' -o -name '*.a' \) -type f -delete 2>/dev/null || true
+
+# Safety: never let host Python site-packages (PyQt6, etc.) into linuxdeploy.
+# Those trees pull Qt and hundreds of unrelated libraries.
+for junk in \
+  "${APPDIR}/usr/lib"/python3.*/site-packages \
+  "${APPDIR}/usr/lib64"/python3.*/site-packages
+do
+  [ -e "$junk" ] || continue
+  # Keep the directory, wipe contents (stdlib path may expect it).
+  find "$junk" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+done
+
+# Verbosity: 0=debug 1=info (default, very chatty) 2=warning 3=error.
+# Full log kept for debugging; terminal only shows a short summary.
+LD_LOG="${ROOT}/build-appimage/linuxdeploy.log"
+mkdir -p "$(dirname "$LD_LOG")"
+
+# GTK plugin needs pkg-config metadata (gtk4.pc). Without -devel packages it
+# fails; we already bundle GTK/typelibs manually, so the plugin is optional.
+USE_GTK_PLUGIN=0
+if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists gtk4 2>/dev/null; then
+  USE_GTK_PLUGIN=1
+else
+  echo "    note: gtk4.pc not found — skipping linuxdeploy GTK plugin"
+  echo "          (optional: install libgtk-4-devel / gobject-introspection-devel)"
+  echo "          manual GTK/typelib bundles are already in the AppDir"
+fi
+
+run_linuxdeploy() {
+  # $1 = "with-gtk" or "plain"
+  local mode="$1"
+  local -a args=(
+    --verbosity=2
+    --appdir="$APPDIR"
+    --executable="${APPDIR}/usr/bin/python3"
+    --executable="${APPDIR}/usr/bin/cdparanoia"
+    --executable="${APPDIR}/usr/bin/flac"
+    --desktop-file="${APPDIR}/usr/share/applications/${APP_ID}.desktop"
     --icon-file="${APPDIR}/usr/share/icons/hicolor/scalable/apps/${APP_ID}.svg"
+  )
+  if [ "$mode" = "with-gtk" ]; then
+    args+=(--plugin gtk)
+  fi
+  "${TOOLS}/linuxdeploy" "${args[@]}"
+}
+
+set +e
+: >"$LD_LOG"
+if [ "$USE_GTK_PLUGIN" -eq 1 ]; then
+  run_linuxdeploy with-gtk >>"$LD_LOG" 2>&1
+  LD_RC=$?
+  if [ "$LD_RC" -ne 0 ]; then
+    echo "    warning: GTK plugin failed — retrying without it (see ${LD_LOG})" >&2
+    {
+      echo "----- retry without gtk plugin -----"
+      run_linuxdeploy plain
+    } >>"$LD_LOG" 2>&1
+    LD_RC=$?
+  fi
+else
+  run_linuxdeploy plain >>"$LD_LOG" 2>&1
   LD_RC=$?
 fi
 set -e
 if [ "$LD_RC" -ne 0 ]; then
-  echo "warning: linuxdeploy failed; continuing with manual bundles" >&2
+  echo "warning: linuxdeploy failed; continuing with manual bundles (see ${LD_LOG})" >&2
+  # Show last few errors so the failure is not completely silent.
+  grep -E 'ERROR:|error:' "$LD_LOG" 2>/dev/null | tail -5 >&2 || true
+else
+  echo "    linuxdeploy OK (details: ${LD_LOG})"
 fi
 
-# linuxdeploy may overwrite AppRun / desktop
+# linuxdeploy may overwrite AppRun / desktop and add more libs without SONAME links
 install -D -m755 "${ROOT}/appimage/AppRun.in" "${APPDIR}/AppRun"
 cp -f "${ROOT}/appimage/org.ready2rip.Ready2Rip.desktop" "${APPDIR}/${APP_ID}.desktop"
 sed -i 's/^Exec=.*/Exec=ready2rip/' "${APPDIR}/${APP_ID}.desktop"
 cp -f "${ROOT}/data/icons/hicolor/scalable/apps/${APP_ID}.svg" "${APPDIR}/${APP_ID}.svg"
+ensure_soname_links
 
 # ---------------------------------------------------------------------------
-# Smoke-test inside AppDir (no FUSE needed)
+# Smoke-test inside AppDir (isolated from host Python stdlib)
 # ---------------------------------------------------------------------------
-echo "==> smoke-test AppDir imports"
+echo "==> smoke-test AppDir imports (isolated)"
 set +e
 (
-  export APPDIR="$APPDIR"
-  export PATH="${APPDIR}/usr/bin:$PATH"
-  export PYTHONPATH="${APPDIR}/usr/share/ready2rip:${APPDIR}/usr/lib/python3/site-packages"
-  for d in "${APPDIR}/usr/lib"/python3.*/site-packages; do
-    [ -d "$d" ] && PYTHONPATH="$d:$PYTHONPATH"
-  done
-  export LD_LIBRARY_PATH="${APPDIR}/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-  export GI_TYPELIB_PATH="${APPDIR}/usr/lib/girepository-1.0${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
-  export GSETTINGS_SCHEMA_DIR="${APPDIR}/usr/share/glib-2.0/schemas"
+  # Minimal env — proves we do not depend on host python modules.
   PY="${APPDIR}/usr/bin/python3"
-  [ -x "$PY" ] || PY=python3
-  "$PY" -B - <<'PY'
+  [ -x "$PY" ] || {
+    echo "error: bundled python3 missing" >&2
+    exit 1
+  }
+  env -i \
+    HOME="${HOME:-/tmp}" \
+    PATH="${APPDIR}/usr/bin:/usr/bin:/bin" \
+    APPDIR="$APPDIR" \
+    PYTHONHOME="${APPDIR}/usr" \
+    PYTHONNOUSERSITE=1 \
+    PYTHONPATH="${APPDIR}/usr/share/ready2rip:${APPDIR}/usr/lib/python3/site-packages" \
+    LD_LIBRARY_PATH="${APPDIR}/usr/lib" \
+    GI_TYPELIB_PATH="${APPDIR}/usr/lib/girepository-1.0" \
+    GSETTINGS_SCHEMA_DIR="${APPDIR}/usr/share/glib-2.0/schemas" \
+    GDK_PIXBUF_MODULE_FILE="$(echo "${APPDIR}/usr/lib"/gdk-pixbuf-2.0/*/loaders.cache 2>/dev/null | awk '{print $1; exit}')" \
+    "$PY" -B - <<'PY'
 import sys
+from pathlib import Path
+
 print("python", sys.version.split()[0], file=sys.stderr)
+print("prefix", sys.prefix, file=sys.stderr)
+
+# Stdlib must come from the AppDir, not the host.
+stdlib = Path(sys.prefix) / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
+assert "build-appimage" in str(stdlib.resolve()) or "AppDir" in str(stdlib), (
+    f"stdlib not from AppDir: {stdlib} (prefix={sys.prefix})"
+)
+assert stdlib.is_dir(), f"bundled stdlib missing: {stdlib}"
+
 import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
@@ -446,9 +703,13 @@ from gi.repository import Gtk, Adw, GLib  # noqa: F401
 import mutagen  # noqa: F401
 import ready2rip.main  # noqa: F401
 from ready2rip.util import find_cdparanoia
+
 cp = find_cdparanoia()
 assert cp, "cdparanoia not found on PATH inside AppDir"
+# Prefer bundled binary
+assert "AppDir" in cp or "build-appimage" in cp or cp.startswith("/tmp"), cp
 print("ok: Gtk/Adw/mutagen/ready2rip/cdparanoia", cp, file=sys.stderr)
+print("ok: stdlib", stdlib, file=sys.stderr)
 PY
 )
 SMOKE=$?
@@ -456,6 +717,30 @@ set -e
 if [ "$SMOKE" -ne 0 ]; then
   echo "error: AppDir smoke-test failed — fix packaging before release" >&2
   exit 1
+fi
+
+# Report glibc floor so we know which distros can run this image.
+if command -v objdump >/dev/null 2>&1; then
+  echo "==> glibc symbol floor (build host libraries)"
+  MAX_GLIBC="2.0"
+  for f in \
+    "${APPDIR}/usr/bin/python3" \
+    "${APPDIR}/usr/lib"/libpython3*.so* \
+    "${APPDIR}/usr/lib/libgtk-4.so.1" \
+    "${APPDIR}/usr/lib/libglib-2.0.so.0" \
+    "${APPDIR}/usr/lib/libadwaita-1.so.0"
+  do
+    [ -e "$f" ] || continue
+    ver="$(objdump -T "$f" 2>/dev/null | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1 | sed 's/GLIBC_//')"
+    if [ -n "$ver" ]; then
+      echo "    $(basename "$f"): GLIBC_${ver}"
+      if printf '%s\n' "$MAX_GLIBC" "$ver" | sort -V | tail -1 | grep -qx "$ver"; then
+        MAX_GLIBC="$ver"
+      fi
+    fi
+  done
+  echo "    → this AppImage needs host glibc >= ${MAX_GLIBC}"
+  echo "    (build on older distro/container for wider reach; Solus/current often needs very new glibc)"
 fi
 
 # ---------------------------------------------------------------------------

@@ -8,4 +8,4 @@ Type=Application
 Categories=AudioVideo;Audio;Music;
 Keywords=CD;Rip;Audio;Music;AccurateRip;MusicBrainz;
 StartupNotify=true
-X-AppImage-Version=0.2.0
+X-AppImage-Version=0.3.0

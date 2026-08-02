@@ -21,10 +21,20 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-07-21">
+    <release version="@APPLICATION_VERSION@" date="2026-08-01">
       <description>
         <p>
-          Secure cdparanoia extraction with EAC-style test &amp; copy, AccurateRip,
+          0.3.0: MusicBrainz release-link lookup when auto-match is wrong;
+          smarter burst fallback (one CRC retry, then full-disc burst re-rip);
+          archival rip log with accurate CRC/mode/session history; Lookup menu;
+          pill Eject/Rip styling; bottom progress panel polish.
+        </p>
+      </description>
+    </release>
+    <release version="0.2.0" date="2026-07-21">
+      <description>
+        <p>
+          Secure cdparanoia extraction with test &amp; copy, AccurateRip,
           CUE/log output, Copy Image mode, AppImage packaging with Gear Lever
           update support, and UI polish.
         </p>

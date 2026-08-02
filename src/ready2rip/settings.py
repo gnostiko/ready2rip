@@ -95,7 +95,7 @@ class AppSettings:
     drive_offset_device: str = ''
     burst_fallback: bool = True
     write_rip_log: bool = True
-    # EAC recommendation for secure/accurate rips: write a multi-file .cue sheet.
+    # Multi-file .cue sheet for secure/accurate rips.
     write_cue_file: bool = True
     test_and_copy: bool = True
     defeat_audio_cache: bool = True
@@ -105,11 +105,8 @@ class AppSettings:
     drive_accurate_stream_configured: bool = False
     drive_accurate_stream: bool = False
     drive_accurate_stream_message: str = ''
-    drive_c2_configured: bool = False
-    drive_c2_pointers: bool = False
-    drive_c2_message: str = ''
     rip_htoa: bool = True
-    # EAC "Copy Image" mode (CUE is separate: write_cue_file)
+    # Continuous disc image instead of per-track files (CUE is separate).
     copy_image: bool = False
     auto_rip: bool = False
     auto_eject: bool = False
@@ -188,9 +185,6 @@ class SettingsStore:
                 drive_accurate_stream_message=_get_string(
                     s, 'drive-accurate-stream-message', ''
                 ),
-                drive_c2_configured=_get_bool(s, 'drive-c2-configured', False),
-                drive_c2_pointers=_get_bool(s, 'drive-c2-pointers', False),
-                drive_c2_message=_get_string(s, 'drive-c2-message', ''),
                 rip_htoa=_get_bool(s, 'rip-htoa', True),
                 copy_image=_get_bool(s, 'copy-image', False),
                 auto_rip=_get_bool(s, 'auto-rip', False),
@@ -259,9 +253,6 @@ class SettingsStore:
                 'drive-accurate-stream-message',
                 'string',
             ),
-            'drive_c2_configured': ('drive-c2-configured', 'bool'),
-            'drive_c2_pointers': ('drive-c2-pointers', 'bool'),
-            'drive_c2_message': ('drive-c2-message', 'string'),
             'rip_htoa': ('rip-htoa', 'bool'),
             'copy_image': ('copy-image', 'bool'),
             'auto_rip': ('auto-rip', 'bool'),

@@ -149,9 +149,10 @@
       <default>true</default>
       <summary>Burst mode fallback for scratched discs</summary>
       <description>
-        If secure cdparanoia extraction fails or produces incomplete audio
-        (common on badly scratched discs), automatically re-rip that track
-        with paranoia disabled (burst mode).
+        If secure cdparanoia extraction fails or produces incomplete audio,
+        re-rip that track with paranoia disabled (burst mode, -Z). If test
+        &amp; copy CRCs still mismatch after one secure retry, re-rip the
+        entire disc once in burst mode.
       </description>
     </key>
 
@@ -159,7 +160,7 @@
       <default>true</default>
       <summary>Write detailed rip log</summary>
       <description>
-        After extraction, write an EAC-style status log into the album folder
+        After extraction, write a detailed status log into the album folder
         (TOC, CRC, AccurateRip, burst mode, encoder settings).
       </description>
     </key>
@@ -168,7 +169,7 @@
       <default>true</default>
       <summary>Write CUE sheet</summary>
       <description>
-        After a secure rip, write an EAC-style .cue sheet into the album folder.
+        After a secure rip, write a .cue sheet into the album folder.
         Per-track rips get a multi-file CUE (“Multiple files with left-out gaps”);
         Copy Image mode gets a single-file image CUE. Recommended for accurate
         archival rips.
@@ -180,7 +181,7 @@
       <summary>Test and copy each track</summary>
       <description>
         Extract every track twice (test then copy), compare CRC32 values, and
-        only accept a match. Matches whipper / cyanrip / EAC secure workflow.
+        only accept a match. Matches whipper / cyanrip secure workflow.
       </description>
     </key>
 
@@ -226,7 +227,7 @@
       <summary>Drive supports Accurate Stream</summary>
       <description>
         True when re-reads of the same sector range match after seeking away
-        (EAC Accurate Stream test, measured during Drive setup).
+        (Accurate Stream test, measured during Drive setup).
       </description>
     </key>
 
@@ -235,32 +236,14 @@
       <summary>Accurate Stream test summary</summary>
     </key>
 
-    <key name="drive-c2-configured" type="b">
-      <default>false</default>
-      <summary>C2 error pointer probe completed</summary>
-    </key>
-
-    <key name="drive-c2-pointers" type="b">
-      <default>false</default>
-      <summary>Drive supports C2 error pointers</summary>
-      <description>
-        True when MMC CD Read Feature reports C2 Error pointers (via cd-drive).
-      </description>
-    </key>
-
-    <key name="drive-c2-message" type="s">
-      <default>''</default>
-      <summary>C2 pointer probe summary</summary>
-    </key>
-
     <key name="rip-htoa" type="b">
       <default>true</default>
-      <summary>Pregap / HTOA handling (EAC-style)</summary>
+      <summary>Pregap / HTOA handling</summary>
       <description>
-        Enable Hidden Track One Audio handling similar to Exact Audio Copy:
-        the standard 2-second pause before track 1 is ignored; only longer
-        pregaps are checked. Non-silent audio is saved as track 00. Track 1
-        itself is never extended with the pregap (always starts at index 01).
+        Enable Hidden Track One Audio handling: the standard 2-second pause
+        before track 1 is ignored; only longer pregaps are checked. Non-silent
+        audio is saved as track 00. Track 1 itself is never extended with the
+        pregap (always starts at index 01).
       </description>
     </key>
 
@@ -268,10 +251,10 @@
       <default>false</default>
       <summary>Copy Image</summary>
       <description>
-        When enabled, rip like Exact Audio Copy “Copy Image”: one continuous
-        image file for the disc instead of separate per-track files. Enable
-        Write .cue file for a matching image CUE sheet. FLAC or WAV is used for
-        the image (lossy formats fall back to FLAC).
+        When enabled, rip one continuous image file for the disc instead of
+        separate per-track files. Enable Write .cue file for a matching image
+        CUE sheet. FLAC or WAV is used for the image (lossy formats fall back
+        to FLAC).
       </description>
     </key>
 

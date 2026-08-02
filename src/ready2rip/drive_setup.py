@@ -25,7 +25,6 @@ from ready2rip.disc.cache import detect_drive_cache
 from ready2rip.disc.features import (
     FeatureTestResult,
     test_accurate_stream,
-    test_c2_pointers,
 )
 from ready2rip.disc.probe import probe_disc
 from ready2rip.util import find_cdparanoia
@@ -52,11 +51,9 @@ class CalibrationResult:
     # Cache analysis (run during drive setup, persisted with the offset).
     caches_audio: bool | None = None
     cache_message: str = ''
-    # Accurate Stream + C2 (EAC-style drive feature tests).
+    # Accurate Stream (re-read consistency).
     accurate_stream: bool | None = None
     accurate_stream_message: str = ''
-    c2_pointers: bool | None = None
-    c2_message: str = ''
 
 
 def needs_drive_setup(store) -> bool:
@@ -81,7 +78,7 @@ def calibrate_drive_offset(
     """Analyze drive features, then find AccurateRip sample offset.
 
     Strategy (fast path first):
-      1. Quick C2 / Accurate Stream / cache probes (time-boxed).
+      1. Quick Accurate Stream / cache probes (time-boxed).
       2. Burst-extract one mid-length track.
       3. Try the most popular AccurateRip offsets first.
       4. Only then try a wider native/Python scan if time remains.
@@ -109,26 +106,22 @@ def calibrate_drive_offset(
         )
 
     # Feature analysis — keep these short so offset search gets most of the budget.
-    progress('Testing C2 error pointers…', 0.04)
-    c2 = test_c2_pointers(device)
-    progress(c2.message, 0.06)
-
     if not timed_out():
-        progress('Testing Accurate Stream…', 0.07)
+        progress('Testing Accurate Stream…', 0.04)
         astream = test_accurate_stream(
             device,
             info,
             trials=1,
             timeout=min(_FEATURE_TIMEOUT_SEC, max(5, int(remaining() - 30))),
         )
-        progress(astream.message, 0.11)
+        progress(astream.message, 0.10)
     else:
         astream = FeatureTestResult(
             supported=None, message='Accurate Stream skipped (time budget)'
         )
 
     if not timed_out():
-        progress('Analyzing drive audio cache…', 0.12)
+        progress('Analyzing drive audio cache…', 0.11)
         cache = detect_drive_cache(
             device,
             info,
@@ -148,8 +141,6 @@ def calibrate_drive_offset(
             cache_message=cache.message,
             accurate_stream=astream.supported,
             accurate_stream_message=astream.message,
-            c2_pointers=c2.supported,
-            c2_message=c2.message,
             **kwargs,
         )
 
@@ -536,8 +527,6 @@ def save_calibration(
     cache_message: str = '',
     accurate_stream: bool | None = None,
     accurate_stream_message: str = '',
-    c2_pointers: bool | None = None,
-    c2_message: str = '',
 ) -> None:
     """Persist sample offset and optional feature analysis for *device*.
 
@@ -566,13 +555,6 @@ def save_calibration(
             'Accurate Stream: yes' if accurate_stream else 'Accurate Stream: no'
         )
 
-    if c2_pointers is not None:
-        updates['drive_c2_configured'] = True
-        updates['drive_c2_pointers'] = bool(c2_pointers)
-        updates['drive_c2_message'] = c2_message or (
-            'C2 Error pointers: yes' if c2_pointers else 'C2 Error pointers: no'
-        )
-
     store.update(**updates)
 
     try:
@@ -583,10 +565,9 @@ def save_calibration(
         pass
 
     log.info(
-        'Saved drive calibration for %s: offset=%s caches=%s astream=%s c2=%s',
+        'Saved drive calibration for %s: offset=%s caches=%s astream=%s',
         device,
         offset,
         caches_audio,
         accurate_stream,
-        c2_pointers,
     )

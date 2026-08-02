@@ -11,7 +11,9 @@ from ready2rip.metadata.providers import (
     MetadataProvider,
     MusicBrainzProvider,
     TrackMetadata,
+    fetch_album_from_musicbrainz_link,
     lookup_metadata,
+    parse_musicbrainz_release_id,
 )
 
 __all__ = [
@@ -20,5 +22,7 @@ __all__ = [
     'MetadataProvider',
     'MusicBrainzProvider',
     'TrackMetadata',
+    'fetch_album_from_musicbrainz_link',
     'lookup_metadata',
+    'parse_musicbrainz_release_id',
 ]

@@ -5,9 +5,13 @@ Workflow (whipper / cyanrip inspired):
   1. Create album folder; save full-size cover art; prepare embed-sized art
   2. Detect drive audio cache; enable cache defeat between test/copy
   3. Detect and rip non-silent Hidden Track One Audio (HTOA)
-  4. Per track: test extract → CRC, defeat cache, copy extract → CRC, match
-  5. AccurateRip verify, encode, tag, embed artwork
-  6. Track + album ReplayGain on the finished set
+  4. Per track: secure test&copy (≤1 CRC retry); extract-level burst on failure
+  5. If any track CRC still mismatches → re-rip entire selection once in burst
+  6. AccurateRip verify, encode, tag, embed artwork
+  7. Track + album ReplayGain on the finished set
+
+Track orchestration lives in ``_run_track_selection`` / ``_rip_tracks_phase``;
+low-level cdparanoia calls stay in ``_rip_track`` / ``_run_paranoia``.
 """
 
 from __future__ import annotations
@@ -54,7 +58,7 @@ from ready2rip.util import find_cdparanoia, validate_device_path
 
 log = logging.getLogger(__name__)
 
-# EAC-like secure defaults for cdparanoia / libcdio-paranoia.
+# Secure defaults for cdparanoia / libcdio-paranoia.
 # never-skip=N: keep re-reading imperfect data until N stuck retries.
 # -X: abort rather than silently accept a skip after never-skip is exhausted.
 SECURE_NEVER_SKIP = 200
@@ -125,29 +129,29 @@ class RipJob:
     disc_track_count: int = 0
     # If secure (paranoia) extraction fails, retry with cdparanoia -Z burst mode.
     burst_fallback: bool = True
-    # Expected minimum WAV size as a fraction of ideal CDDA size (EAC-like: near complete).
+    # Expected minimum WAV size as a fraction of ideal CDDA size (near complete).
     min_wav_size_ratio: float = 0.98
-    # Write an EAC-style detailed status log next to the ripped files.
+    # Write a detailed status log next to the ripped files.
     write_rip_log: bool = True
-    # Write EAC-style multi-file (or image) CUE sheet after a secure rip.
+    # Write multi-file (or image) CUE sheet after a secure rip.
     write_cue_file: bool = True
     # Double-rip each track and require matching CRCs (test & copy).
     test_and_copy: bool = True
-    # Max extra full test+copy cycles after a CRC mismatch.
-    test_copy_max_retries: int = 3
+    # Extra secure test+copy cycles after a CRC mismatch (default: one retry).
+    # After retries still fail, the whole disc is re-ripped once in burst mode
+    # when burst_fallback is enabled.
+    test_copy_max_retries: int = 1
     # Persisted from Drive setup (None = unknown / not measured).
     drive_caches_audio: bool | None = None
     drive_cache_message: str = ''
     drive_accurate_stream: bool | None = None
     drive_accurate_stream_message: str = ''
-    drive_c2_pointers: bool | None = None
-    drive_c2_message: str = ''
     # Seek/read elsewhere between test and copy when cache is present (or always).
     defeat_audio_cache: bool = True
-    # EAC-style: handle extended track-1 pregap as HTOA (track 00); never
+    # Handle extended track-1 pregap as HTOA (track 00); never
     # prepend that pregap onto track 1. Standard 2s pause is ignored.
     rip_htoa: bool = True
-    # EAC "Copy Image": one continuous image (instead of per-track files).
+    # Copy Image: one continuous image (instead of per-track files).
     # Pair with write_cue_file for a matching image CUE sheet.
     copy_image: bool = False
     # Longest edge for embed when preparing from folder art (0 = no downscale).
@@ -155,6 +159,50 @@ class RipJob:
 
 
 ProgressCallback = Callable[[RipProgress], None]
+
+# Nested report used during a multi-track job (index/sub → overall fraction).
+TrackReportFn = Callable[..., None]
+
+
+@dataclass
+class _TrackExtract:
+    """Result of extracting one track to WAV (secure test&copy or burst)."""
+
+    mode: str  # final encode path: secure | burst
+    test_crc: str
+    copy_crc: str
+    peak: float | None
+    elapsed: float  # total wall time (all passes / retries)
+    stats: ParanoiaStats
+    matched: bool  # dual-pass CRCs matched when dual_pass
+    copy_wav: Path
+    test_wav: Path
+    error: str | None = None
+    dual_pass: bool = False  # True only when real test&copy was done
+    test_mode: str = ''  # mode of the successful test pass
+    copy_mode: str = ''  # mode of the successful copy pass
+    attempt_log: list[str] = field(default_factory=list)
+    expected_wav_bytes: int = 0
+
+
+class _CrcMismatch(Exception):
+    """Secure test&copy CRCs disagreed after retries; trigger full-disc burst."""
+
+    def __init__(
+        self,
+        track_number: int,
+        message: str,
+        *,
+        test_crc: str = '',
+        copy_crc: str = '',
+        attempt_log: list[str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.track_number = track_number
+        self.message = message
+        self.test_crc = test_crc
+        self.copy_crc = copy_crc
+        self.attempt_log = list(attempt_log or [])
 
 
 class RipEngine:
@@ -202,7 +250,7 @@ class RipEngine:
         if fmt not in self.EXTENSIONS:
             return RipResult(success=False, error=f'Unknown format: {fmt}')
 
-        # CD images + CUE need a lossless/container format (EAC: WAV/FLAC).
+        # CD images + CUE need a lossless/container format (WAV/FLAC).
         if job.copy_image and fmt not in ('flac', 'wav'):
             log.info('Copy Image mode: using FLAC instead of %s', fmt)
             fmt = 'flac'
@@ -297,7 +345,7 @@ class RipEngine:
                 rip_log.notes.append(f'Cover art saved before rip: {cover_path}')
 
         # AccurateRip setup. Sample offset is applied at extract time via
-        # cdparanoia -O (EAC-style), so AR hashes the offset-corrected WAV as-is.
+        # cdparanoia -O applies read offset; AR hashes the offset-corrected WAV as-is.
         ar_verifier: AccurateRipVerifier | None = None
         if job.verify_accuraterip and job.disc_info is not None:
             ar_verifier = AccurateRipVerifier(sample_offset=0)
@@ -335,16 +383,6 @@ class RipEngine:
             if rip_log is not None:
                 rip_log.accurate_stream = job.drive_accurate_stream
                 rip_log.accurate_stream_message = amsg
-        if job.drive_c2_pointers is not None:
-            cmsg = job.drive_c2_message or (
-                'C2 Error pointers: yes'
-                if job.drive_c2_pointers
-                else 'C2 Error pointers: no'
-            )
-            notes.append(cmsg)
-            if rip_log is not None:
-                rip_log.c2_pointers = job.drive_c2_pointers
-                rip_log.c2_message = cmsg
         if job.drive_caches_audio is not None:
             msg = job.drive_cache_message or (
                 'Drive caches audio (from Drive setup)'
@@ -419,387 +457,47 @@ class RipEngine:
                     unit_index += 1.0
 
                 # --- Regular tracks ---
-                for i, track_no in enumerate(tracks):
-                    if self._cancelled:
-                        return _finish_result(
-                            success=False,
-                            cancelled=True,
-                            error='Cancelled',
-                            outputs=outputs,
-                            album_dir=album_dir,
-                            ar_results=ar_results,
-                            notes=notes,
-                            burst_tracks=burst_tracks,
-                            rip_log=rip_log,
-                            cover_path=cover_path,
-                            htoa_ripped=htoa_ripped,
-                            cache_result=cache_result,
-                            test_copy_mismatches=test_copy_mismatches,
-                        )
-
-                    idx = unit_index + i
-                    album_dir, out_path = build_output_paths(
-                        base_dir=base,
-                        album_folder_template=job.album_folder_template,
-                        filename_template=job.filename_template,
-                        album=job.album,
-                        track_number=track_no,
-                        extension=ext,
-                    )
-                    album_dir.mkdir(parents=True, exist_ok=True)
-
-                    toc_track = None
-                    if job.disc_info is not None:
-                        for t in job.disc_info.tracks:
-                            if t.number == track_no:
-                                toc_track = t
-                                break
-
-                    log_entry = None
-                    if rip_log is not None:
-                        log_entry = rip_log.begin_track(
-                            track_no,
-                            title=title_for_track(job.album, track_no),
-                            length_label=(
-                                toc_track.duration_label if toc_track else ''
-                            ),
-                            start_sector=toc_track.start_sector if toc_track else 0,
-                            length_sectors=(
-                                toc_track.length_sectors if toc_track else 0
-                            ),
-                        )
-
-                    expected = expected_sizes.get(track_no)
-                    test_wav = tmp_path / f'track{track_no:02d}_test.wav'
-                    copy_wav = tmp_path / f'track{track_no:02d}_copy.wav'
-
-                    test_crc = ''
-                    copy_crc = ''
-                    peak: float | None = None
-                    mode = 'secure'
-                    elapsed = 0.0
-                    matched = not job.test_and_copy
-                    last_err: str | None = None
-                    track_stats = ParanoiaStats()
-
-                    attempts = 1 + (job.test_copy_max_retries if job.test_and_copy else 0)
-                    for attempt in range(attempts):
-                        if self._cancelled:
-                            break
-                        try:
-                            attempt_stats = ParanoiaStats()
-                            # --- Test pass ---
-                            if job.test_and_copy:
-                                report(
-                                    track_no,
-                                    RipState.RIPPING,
-                                    index=idx,
-                                    sub=0.0,
-                                    message=(
-                                        f'Testing track {track_no}'
-                                        + (
-                                            f' (retry {attempt})'
-                                            if attempt
-                                            else ''
-                                        )
-                                        + '…'
-                                    ),
-                                    total_units=total_units,
-                                )
-                                t0 = time.monotonic()
-                                mode, st = self._rip_track(
-                                    job.device,
-                                    track_no,
-                                    test_wav,
-                                    expected_bytes=expected,
-                                    min_ratio=job.min_wav_size_ratio,
-                                    burst_fallback=job.burst_fallback,
-                                    sample_offset=job.sample_offset,
-                                    on_burst=lambda: report(
-                                        track_no,
-                                        RipState.RIPPING,
-                                        index=idx,
-                                        sub=0.08,
-                                        message=(
-                                            f'Secure test struggled on track '
-                                            f'{track_no} — burst mode…'
-                                        ),
-                                        total_units=total_units,
-                                    ),
-                                )
-                                attempt_stats.merge(st)
-                                test_crc, peak, _ = analyze_wav_for_log(
-                                    test_wav,
-                                    toc_track.length_sectors if toc_track else 0,
-                                )
-                                if defeat_cache:
-                                    report(
-                                        track_no,
-                                        RipState.RIPPING,
-                                        index=idx,
-                                        sub=0.22,
-                                        message='Defeating drive cache…',
-                                        total_units=total_units,
-                                    )
-                                    flush_drive_cache(job.device, job.disc_info)
-
-                            # --- Copy pass ---
-                            report(
-                                track_no,
-                                RipState.RIPPING,
-                                index=idx,
-                                sub=0.28 if job.test_and_copy else 0.0,
-                                message=(
-                                    f'Copying track {track_no}…'
-                                    if job.test_and_copy
-                                    else f'Extracting track {track_no}…'
-                                ),
-                                total_units=total_units,
-                            )
-                            t0 = time.monotonic()
-                            mode, st = self._rip_track(
-                                job.device,
-                                track_no,
-                                copy_wav,
-                                expected_bytes=expected,
-                                min_ratio=job.min_wav_size_ratio,
-                                burst_fallback=job.burst_fallback,
-                                sample_offset=job.sample_offset,
-                                on_burst=lambda: report(
-                                    track_no,
-                                    RipState.RIPPING,
-                                    index=idx,
-                                    sub=0.35,
-                                    message=(
-                                        f'Secure copy struggled on track '
-                                        f'{track_no} — burst mode…'
-                                    ),
-                                    total_units=total_units,
-                                ),
-                            )
-                            attempt_stats.merge(st)
-                            elapsed = time.monotonic() - t0
-                            copy_crc, peak2, _ = analyze_wav_for_log(
-                                copy_wav,
-                                toc_track.length_sectors if toc_track else 0,
-                            )
-                            if peak is None:
-                                peak = peak2
-                            elif peak2 is not None:
-                                peak = max(peak, peak2)
-
-                            if not job.test_and_copy:
-                                matched = True
-                                test_crc = copy_crc
-                                track_stats = attempt_stats
-                                break
-
-                            if test_crc and copy_crc and test_crc == copy_crc:
-                                matched = True
-                                track_stats = attempt_stats
-                                break
-
-                            matched = False
-                            last_err = (
-                                f'Test/Copy CRC mismatch on track {track_no}: '
-                                f'test={test_crc} copy={copy_crc}'
-                            )
-                            log.warning('%s', last_err)
-                            notes.append(last_err)
-                            track_stats = attempt_stats
-                            # Remove partials before retry
-                            for p in (test_wav, copy_wav):
-                                try:
-                                    p.unlink(missing_ok=True)
-                                except OSError:
-                                    pass
-                        except Exception as exc:  # noqa: BLE001
-                            last_err = str(exc)
-                            log.warning(
-                                'Track %s attempt %s failed: %s',
-                                track_no,
-                                attempt,
-                                exc,
-                            )
-                            if attempt + 1 >= attempts:
-                                raise
-
-                    if self._cancelled:
-                        return _finish_result(
-                            success=False,
-                            cancelled=True,
-                            error='Cancelled',
-                            outputs=outputs,
-                            album_dir=album_dir,
-                            ar_results=ar_results,
-                            notes=notes,
-                            burst_tracks=burst_tracks,
-                            rip_log=rip_log,
-                            cover_path=cover_path,
-                            htoa_ripped=htoa_ripped,
-                            cache_result=cache_result,
-                            test_copy_mismatches=test_copy_mismatches,
-                        )
-
-                    if job.test_and_copy and not matched:
-                        test_copy_mismatches.append(track_no)
-                        raise RuntimeError(
-                            last_err
-                            or f'Test & copy failed for track {track_no} '
-                            f'after {attempts} attempt(s)'
-                        )
-
-                    if mode == 'burst':
-                        burst_tracks.append(track_no)
-                        notes.append(
-                            f'Track {track_no}: ripped in burst mode '
-                            f'(secure mode failed; disc may be scratched)'
-                        )
-
-                    sectors = toc_track.length_sectors if toc_track else 0
-                    if log_entry is not None:
-                        log_entry.extract_mode = (
-                            f'{mode}+test&copy' if job.test_and_copy else mode
-                        )
-                        log_entry.extract_seconds = elapsed
-                        log_entry.extract_speed_x = extraction_speed_x(
-                            sectors, elapsed
-                        )
-                        log_entry.copy_crc = copy_crc
-                        log_entry.test_crc = test_crc
-                        log_entry.peak_percent = peak
-                        log_entry.quality_percent = track_stats.quality_percent(
-                            sectors
-                        )
-                        log_entry.error_correction_lines = track_stats.summary_lines(
-                            length_sectors=sectors
-                        )
-                        log_entry.had_errors = track_stats.had_errors or (
-                            mode == 'burst'
-                        )
-                        if track_stats.had_errors:
-                            log_entry.status = 'finished with errors'
-                        try:
-                            log_entry.wav_bytes = copy_wav.stat().st_size
-                        except OSError:
-                            pass
-                        if job.test_and_copy and matched:
-                            log_entry.notes.append(
-                                'Test and copy CRCs match'
-                            )
-                        if mode == 'burst':
-                            log_entry.notes.append(
-                                'Secure paranoia failed — burst (-Z) used'
-                            )
-
-                    # AccurateRip on the verified copy
-                    if ar_verifier is not None:
-                        report(
-                            track_no,
-                            RipState.VERIFYING,
-                            index=idx,
-                            sub=0.55,
-                            message=f'AccurateRip check track {track_no}…',
-                            total_units=total_units,
-                        )
-                        ar = ar_verifier.verify_wav(copy_wav, track_no)
-                        ar_results.append(ar)
-                        if log_entry is not None:
-                            log_entry.accuraterip = ar
-                        report(
-                            track_no,
-                            RipState.VERIFYING,
-                            index=idx,
-                            sub=0.58,
-                            message=ar.message,
-                            total_units=total_units,
-                        )
-
-                    report(
-                        track_no,
-                        RipState.ENCODING,
-                        index=idx,
-                        sub=0.62,
-                        message=f'Encoding track {track_no} to {fmt.upper()}…',
-                        total_units=total_units,
-                    )
-                    if fmt == 'wav':
-                        shutil.copy2(copy_wav, out_path)
-                    else:
-                        self._encode(fmt, copy_wav, out_path, job)
-
-                    if self._cancelled:
-                        return _finish_result(
-                            success=False,
-                            cancelled=True,
-                            error='Cancelled',
-                            outputs=outputs,
-                            album_dir=album_dir,
-                            ar_results=ar_results,
-                            notes=notes,
-                            burst_tracks=burst_tracks,
-                            rip_log=rip_log,
-                            cover_path=cover_path,
-                            htoa_ripped=htoa_ripped,
-                            cache_result=cache_result,
-                            test_copy_mismatches=test_copy_mismatches,
-                        )
-
-                    report(
-                        track_no,
-                        RipState.TAGGING,
-                        index=idx,
-                        sub=0.88,
-                        message=f'Tagging track {track_no}…',
-                        path=out_path,
-                        total_units=total_units,
-                    )
-                    if job.album is not None:
-                        total_for_tags = (
-                            len(job.album.tracks)
-                            if job.album.tracks
-                            else disc_track_count
-                        )
-                        self._tags.write_album_tags(
-                            out_path,
-                            job.album,
-                            track_no,
-                            total_tracks=total_for_tags,
-                        )
-                    if job.embed_artwork and embed_art is not None:
-                        self._tags.embed_artwork(
-                            out_path,
-                            embed_art.data,
-                            embed_art.mime,
-                        )
-
-                    for p in (test_wav, copy_wav):
-                        try:
-                            p.unlink(missing_ok=True)
-                        except OSError:
-                            pass
-
-                    outputs.append(out_path)
-                    track_output_pairs.append((track_no, out_path))
-                    if log_entry is not None:
-                        log_entry.output_path = out_path
-                        log_entry.filename = out_path.name
-                        log_entry.status = 'OK'
-                    report(
-                        track_no,
-                        RipState.DONE,
-                        index=idx,
-                        sub=1.0,
-                        message=(
-                            f'Finished track {track_no}'
-                            + (
-                                f' (test=copy CRC {copy_crc})'
-                                if job.test_and_copy and copy_crc
-                                else ''
-                            )
-                        ),
-                        path=out_path,
-                        total_units=total_units,
+                # Secure test&copy (≤1 retry). Any CRC mismatch → full-disc
+                # burst re-rip of the selection (when burst fallback is on).
+                album_dir, cancelled = self._run_track_selection(
+                    job=job,
+                    tracks=tracks,
+                    tmp_path=tmp_path,
+                    base=base,
+                    album_dir=album_dir,
+                    fmt=fmt,
+                    ext=ext,
+                    embed_art=embed_art,
+                    defeat_cache=defeat_cache,
+                    expected_sizes=expected_sizes,
+                    ar_verifier=ar_verifier,
+                    disc_track_count=disc_track_count,
+                    unit_index=unit_index,
+                    total_units=total_units,
+                    report=report,
+                    outputs=outputs,
+                    track_output_pairs=track_output_pairs,
+                    ar_results=ar_results,
+                    notes=notes,
+                    burst_tracks=burst_tracks,
+                    test_copy_mismatches=test_copy_mismatches,
+                    rip_log=rip_log,
+                )
+                if cancelled:
+                    return _finish_result(
+                        success=False,
+                        cancelled=True,
+                        error='Cancelled',
+                        outputs=outputs,
+                        album_dir=album_dir,
+                        ar_results=ar_results,
+                        notes=notes,
+                        burst_tracks=burst_tracks,
+                        rip_log=rip_log,
+                        cover_path=cover_path,
+                        htoa_ripped=htoa_ripped,
+                        cache_result=cache_result,
+                        test_copy_mismatches=test_copy_mismatches,
                     )
 
                 # ReplayGain: track + album on complete set
@@ -823,7 +521,7 @@ class RipEngine:
                     if rip_log is not None:
                         rip_log.replaygain_notes.extend(rg_notes)
 
-                # EAC recommendation: multi-file CUE for secure per-track rips.
+                # Multi-file CUE for secure per-track rips.
                 if (
                     job.write_cue_file
                     and track_output_pairs
@@ -896,7 +594,13 @@ class RipEngine:
                 f'{len(burst_tracks)} track(s)'
             )
         if job.test_and_copy:
-            done_msg = f'{done_msg} · test & copy OK'
+            if test_copy_mismatches:
+                done_msg = (
+                    f'{done_msg} · full-disc burst after CRC mismatch '
+                    f'(track {test_copy_mismatches[0]})'
+                )
+            else:
+                done_msg = f'{done_msg} · test & copy OK'
 
         result = _finish_result(
             success=True,
@@ -1103,16 +807,27 @@ class RipEngine:
             self._tags.embed_artwork(out_path, embed_art.data, embed_art.mime)
 
         if log_entry is not None:
-            log_entry.extract_mode = (
-                f'{mode}+test&copy' if job.test_and_copy else mode
-            )
-            log_entry.copy_crc = copy_crc
-            log_entry.test_crc = test_crc
+            if job.test_and_copy and test_crc and copy_crc:
+                log_entry.extract_mode = f'{mode} (test & copy)'
+                log_entry.test_crc = test_crc
+                log_entry.copy_crc = copy_crc
+                log_entry.crc_verified = test_crc == copy_crc
+            else:
+                log_entry.extract_mode = mode
+                log_entry.test_crc = ''
+                log_entry.copy_crc = copy_crc or test_crc
+                log_entry.crc_verified = None
             log_entry.peak_percent = peak
             log_entry.output_path = out_path
             log_entry.filename = out_path.name
             log_entry.status = 'OK'
             log_entry.notes.append('Hidden Track One Audio (non-silent pregap)')
+            if job.test_and_copy and test_crc and copy_crc and test_crc != copy_crc:
+                log_entry.notes.append(
+                    f'HTOA test/copy CRC mismatch kept copy '
+                    f'(test={test_crc.upper()} copy={copy_crc.upper()})'
+                )
+                log_entry.had_errors = True
 
         for p in (test_wav, copy_wav):
             try:
@@ -1133,7 +848,7 @@ class RipEngine:
         htoa_path: Path | None,
         ext: str,
     ) -> Path | None:
-        """Write EAC multi-file CUE for per-track outputs. Returns cue path or None."""
+        """Write multi-file CUE for per-track outputs. Returns cue path or None."""
         pairs = [(n, p) for n, p in track_files if n > 0]
         if not pairs:
             return None
@@ -1160,6 +875,794 @@ class RipEngine:
                 return 'opusenc or ffmpeg required for Opus'
         return None
 
+    @staticmethod
+    def _purge_track_outputs(
+        outputs: list[Path],
+        track_output_pairs: list[tuple[int, Path]],
+        *,
+        ar_results: list[AccurateRipResult],
+        burst_tracks: list[int],
+        rip_log: RipLog | None,
+    ) -> None:
+        """Remove per-track encodes before a full-disc burst re-rip.
+
+        Keeps non-track outputs (e.g. HTOA, cover art) and HTOA log entries.
+        Superseded secure-phase track rows are archived into ``rip_log.history``
+        so the written log still records what was discarded.
+        """
+        track_paths = {path for _, path in track_output_pairs}
+        for path in track_paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        outputs[:] = [p for p in outputs if p not in track_paths]
+        track_output_pairs.clear()
+        ar_results.clear()
+        burst_tracks.clear()
+        if rip_log is not None:
+            for entry in rip_log.tracks:
+                if entry.number == 0:
+                    continue
+                bits = [
+                    f'track {entry.number}',
+                    f'mode={entry.extract_mode or "?"}',
+                ]
+                if entry.test_crc:
+                    bits.append(f'testCRC={entry.test_crc.upper()}')
+                if entry.copy_crc:
+                    bits.append(f'copyCRC={entry.copy_crc.upper()}')
+                if entry.crc_verified is True:
+                    bits.append('CRC=matched')
+                elif entry.crc_verified is False:
+                    bits.append('CRC=mismatch')
+                if entry.output_path:
+                    bits.append(f'file={entry.output_path.name}')
+                if entry.status:
+                    bits.append(f'status={entry.status}')
+                rip_log.history.append(
+                    'Superseded secure-phase result (discarded before full-disc '
+                    f'burst): {"; ".join(bits)}'
+                )
+                for line in entry.attempt_log:
+                    rip_log.history.append(
+                        f'  track {entry.number} attempt: {line}'
+                    )
+            # Keep track 0 (HTOA) log lines if present.
+            rip_log.tracks = [t for t in rip_log.tracks if t.number == 0]
+
+    def _run_track_selection(
+        self,
+        *,
+        job: RipJob,
+        tracks: list[int],
+        tmp_path: Path,
+        base: Path,
+        album_dir: Path | None,
+        fmt: str,
+        ext: str,
+        embed_art: ArtworkImage | None,
+        defeat_cache: bool,
+        expected_sizes: dict[int, int],
+        ar_verifier: AccurateRipVerifier | None,
+        disc_track_count: int,
+        unit_index: float,
+        total_units: float,
+        report: TrackReportFn,
+        outputs: list[Path],
+        track_output_pairs: list[tuple[int, Path]],
+        ar_results: list[AccurateRipResult],
+        notes: list[str],
+        burst_tracks: list[int],
+        test_copy_mismatches: list[int],
+        rip_log: RipLog | None,
+    ) -> tuple[Path | None, bool]:
+        """Rip selected tracks: secure phase, then optional full-disc burst.
+
+        Returns ``(album_dir, cancelled)``.
+        """
+        try:
+            album_dir = self._rip_tracks_phase(
+                job=job,
+                tracks=tracks,
+                tmp_path=tmp_path,
+                base=base,
+                album_dir=album_dir,
+                fmt=fmt,
+                ext=ext,
+                embed_art=embed_art,
+                defeat_cache=defeat_cache,
+                expected_sizes=expected_sizes,
+                ar_verifier=ar_verifier,
+                disc_track_count=disc_track_count,
+                unit_index=unit_index,
+                total_units=total_units,
+                report=report,
+                outputs=outputs,
+                track_output_pairs=track_output_pairs,
+                ar_results=ar_results,
+                notes=notes,
+                burst_tracks=burst_tracks,
+                rip_log=rip_log,
+                force_burst=False,
+            )
+        except _CrcMismatch as crc_exc:
+            test_copy_mismatches.append(crc_exc.track_number)
+            if not job.burst_fallback:
+                raise RuntimeError(crc_exc.message) from crc_exc
+
+            # Archive the failing track's CRC detail before purging log rows.
+            if rip_log is not None:
+                detail = (
+                    f'Track {crc_exc.track_number} CRC mismatch after secure '
+                    f'retries: test={crc_exc.test_crc.upper() or "?"} '
+                    f'copy={crc_exc.copy_crc.upper() or "?"} — '
+                    f'triggering full-disc burst re-rip'
+                )
+                rip_log.history.append(detail)
+                for line in crc_exc.attempt_log:
+                    rip_log.history.append(
+                        f'  track {crc_exc.track_number}: {line}'
+                    )
+
+            self._purge_track_outputs(
+                outputs,
+                track_output_pairs,
+                ar_results=ar_results,
+                burst_tracks=burst_tracks,
+                rip_log=rip_log,
+            )
+            notes.append(
+                f'Test/copy CRC mismatch on track {crc_exc.track_number} — '
+                f're-ripping entire disc in burst mode (-Z)'
+            )
+            if rip_log is not None:
+                rip_log.notes.append(
+                    f'Full-disc burst re-rip after CRC mismatch '
+                    f'on track {crc_exc.track_number} '
+                    f'(test={crc_exc.test_crc.upper() or "n/a"} '
+                    f'copy={crc_exc.copy_crc.upper() or "n/a"})'
+                )
+            report(
+                crc_exc.track_number,
+                RipState.RIPPING,
+                index=unit_index,
+                sub=0.0,
+                message=(
+                    f'CRC mismatch on track {crc_exc.track_number} — '
+                    f're-ripping CD in burst…'
+                ),
+                total_units=total_units,
+            )
+            album_dir = self._rip_tracks_phase(
+                job=job,
+                tracks=tracks,
+                tmp_path=tmp_path,
+                base=base,
+                album_dir=album_dir,
+                fmt=fmt,
+                ext=ext,
+                embed_art=embed_art,
+                defeat_cache=defeat_cache,
+                expected_sizes=expected_sizes,
+                ar_verifier=ar_verifier,
+                disc_track_count=disc_track_count,
+                unit_index=unit_index,
+                total_units=total_units,
+                report=report,
+                outputs=outputs,
+                track_output_pairs=track_output_pairs,
+                ar_results=ar_results,
+                notes=notes,
+                burst_tracks=burst_tracks,
+                rip_log=rip_log,
+                force_burst=True,
+            )
+
+        return album_dir, self._cancelled
+
+    def _rip_tracks_phase(
+        self,
+        *,
+        job: RipJob,
+        tracks: list[int],
+        tmp_path: Path,
+        base: Path,
+        album_dir: Path | None,
+        fmt: str,
+        ext: str,
+        embed_art: ArtworkImage | None,
+        defeat_cache: bool,
+        expected_sizes: dict[int, int],
+        ar_verifier: AccurateRipVerifier | None,
+        disc_track_count: int,
+        unit_index: float,
+        total_units: float,
+        report: TrackReportFn,
+        outputs: list[Path],
+        track_output_pairs: list[tuple[int, Path]],
+        ar_results: list[AccurateRipResult],
+        notes: list[str],
+        burst_tracks: list[int],
+        rip_log: RipLog | None,
+        force_burst: bool,
+    ) -> Path | None:
+        """Process every selected track in secure or full-disc burst mode."""
+        for i, track_no in enumerate(tracks):
+            if self._cancelled:
+                return album_dir
+
+            idx = unit_index + i
+            album_dir, out_path = build_output_paths(
+                base_dir=base,
+                album_folder_template=job.album_folder_template,
+                filename_template=job.filename_template,
+                album=job.album,
+                track_number=track_no,
+                extension=ext,
+            )
+            album_dir.mkdir(parents=True, exist_ok=True)
+
+            toc_track = self._toc_track(job.disc_info, track_no)
+            sectors = toc_track.length_sectors if toc_track else 0
+
+            log_entry = None
+            if rip_log is not None:
+                log_entry = rip_log.begin_track(
+                    track_no,
+                    title=title_for_track(job.album, track_no),
+                    length_label=toc_track.duration_label if toc_track else '',
+                    start_sector=toc_track.start_sector if toc_track else 0,
+                    length_sectors=sectors,
+                )
+
+            test_wav = tmp_path / f'track{track_no:02d}_test.wav'
+            copy_wav = tmp_path / f'track{track_no:02d}_copy.wav'
+            expected = expected_sizes.get(track_no)
+
+            if force_burst:
+                extracted = self._extract_track_burst(
+                    job=job,
+                    track_no=track_no,
+                    copy_wav=copy_wav,
+                    expected=expected,
+                    sectors=sectors,
+                    idx=idx,
+                    total_units=total_units,
+                    report=report,
+                )
+            else:
+                extracted = self._extract_track_secure(
+                    job=job,
+                    track_no=track_no,
+                    test_wav=test_wav,
+                    copy_wav=copy_wav,
+                    expected=expected,
+                    sectors=sectors,
+                    defeat_cache=defeat_cache,
+                    idx=idx,
+                    total_units=total_units,
+                    report=report,
+                    notes=notes,
+                )
+                if self._cancelled:
+                    return album_dir
+                if job.test_and_copy and not extracted.matched:
+                    raise _CrcMismatch(
+                        track_no,
+                        extracted.error
+                        or f'Test & copy failed for track {track_no}',
+                        test_crc=extracted.test_crc,
+                        copy_crc=extracted.copy_crc,
+                        attempt_log=extracted.attempt_log,
+                    )
+
+            if extracted.mode == 'burst':
+                if track_no not in burst_tracks:
+                    burst_tracks.append(track_no)
+                if force_burst:
+                    notes.append(f'Track {track_no}: full-disc burst re-rip')
+                else:
+                    notes.append(
+                        f'Track {track_no}: ripped in burst mode '
+                        f'(secure extract failed; disc may be scratched)'
+                    )
+
+            self._apply_extract_to_log(
+                log_entry,
+                extracted=extracted,
+                sectors=sectors,
+                expected_bytes=expected,
+                test_and_copy=job.test_and_copy,
+                force_burst=force_burst,
+            )
+
+            if ar_verifier is not None:
+                report(
+                    track_no,
+                    RipState.VERIFYING,
+                    index=idx,
+                    sub=0.55,
+                    message=f'AccurateRip check track {track_no}…',
+                    total_units=total_units,
+                )
+                ar = ar_verifier.verify_wav(extracted.copy_wav, track_no)
+                ar_results.append(ar)
+                if log_entry is not None:
+                    log_entry.accuraterip = ar
+                report(
+                    track_no,
+                    RipState.VERIFYING,
+                    index=idx,
+                    sub=0.58,
+                    message=ar.message,
+                    total_units=total_units,
+                )
+
+            report(
+                track_no,
+                RipState.ENCODING,
+                index=idx,
+                sub=0.62,
+                message=f'Encoding track {track_no} to {fmt.upper()}…',
+                total_units=total_units,
+            )
+            if fmt == 'wav':
+                shutil.copy2(extracted.copy_wav, out_path)
+            else:
+                self._encode(fmt, extracted.copy_wav, out_path, job)
+
+            if self._cancelled:
+                return album_dir
+
+            report(
+                track_no,
+                RipState.TAGGING,
+                index=idx,
+                sub=0.88,
+                message=f'Tagging track {track_no}…',
+                path=out_path,
+                total_units=total_units,
+            )
+            if job.album is not None:
+                total_for_tags = (
+                    len(job.album.tracks)
+                    if job.album.tracks
+                    else disc_track_count
+                )
+                self._tags.write_album_tags(
+                    out_path,
+                    job.album,
+                    track_no,
+                    total_tracks=total_for_tags,
+                )
+            if job.embed_artwork and embed_art is not None:
+                self._tags.embed_artwork(
+                    out_path,
+                    embed_art.data,
+                    embed_art.mime,
+                )
+
+            for p in (extracted.test_wav, extracted.copy_wav):
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+            outputs.append(out_path)
+            track_output_pairs.append((track_no, out_path))
+            if log_entry is not None:
+                log_entry.output_path = out_path
+                log_entry.filename = out_path.name
+                if log_entry.status != 'finished with errors':
+                    log_entry.status = 'OK'
+
+            done_extra = ''
+            if force_burst:
+                done_extra = ' (burst)'
+            elif job.test_and_copy and extracted.copy_crc:
+                done_extra = f' (test=copy CRC {extracted.copy_crc})'
+            report(
+                track_no,
+                RipState.DONE,
+                index=idx,
+                sub=1.0,
+                message=f'Finished track {track_no}{done_extra}',
+                path=out_path,
+                total_units=total_units,
+            )
+
+        return album_dir
+
+    def _extract_track_secure(
+        self,
+        *,
+        job: RipJob,
+        track_no: int,
+        test_wav: Path,
+        copy_wav: Path,
+        expected: int | None,
+        sectors: int,
+        defeat_cache: bool,
+        idx: float,
+        total_units: float,
+        report: TrackReportFn,
+        notes: list[str],
+    ) -> _TrackExtract:
+        """Secure test&copy with at most one CRC retry."""
+        max_retries = max(0, min(1, int(job.test_copy_max_retries)))
+        attempts = 1 + max_retries if job.test_and_copy else 1
+
+        final_mode = 'secure'
+        test_mode = ''
+        copy_mode = ''
+        test_crc = ''
+        copy_crc = ''
+        peak: float | None = None
+        elapsed = 0.0
+        matched = not job.test_and_copy
+        last_err: str | None = None
+        track_stats = ParanoiaStats()
+        attempt_log: list[str] = []
+        dual_pass = bool(job.test_and_copy)
+
+        for attempt in range(attempts):
+            if self._cancelled:
+                break
+            try:
+                attempt_stats = ParanoiaStats()
+                attempt_test_mode = ''
+                attempt_copy_mode = ''
+                attempt_t0 = time.monotonic()
+
+                if job.test_and_copy:
+                    report(
+                        track_no,
+                        RipState.RIPPING,
+                        index=idx,
+                        sub=0.0,
+                        message=(
+                            f'Testing track {track_no}'
+                            + (f' (retry {attempt})' if attempt else '')
+                            + '…'
+                        ),
+                        total_units=total_units,
+                    )
+                    attempt_test_mode, st = self._rip_track(
+                        job.device,
+                        track_no,
+                        test_wav,
+                        expected_bytes=expected,
+                        min_ratio=job.min_wav_size_ratio,
+                        burst_fallback=job.burst_fallback,
+                        sample_offset=job.sample_offset,
+                        on_burst=lambda: report(
+                            track_no,
+                            RipState.RIPPING,
+                            index=idx,
+                            sub=0.08,
+                            message=(
+                                f'Secure test struggled on track '
+                                f'{track_no} — burst mode…'
+                            ),
+                            total_units=total_units,
+                        ),
+                    )
+                    attempt_stats.merge(st)
+                    test_crc, peak, _ = analyze_wav_for_log(test_wav, sectors)
+                    if defeat_cache:
+                        report(
+                            track_no,
+                            RipState.RIPPING,
+                            index=idx,
+                            sub=0.22,
+                            message='Defeating drive cache…',
+                            total_units=total_units,
+                        )
+                        flush_drive_cache(job.device, job.disc_info)
+
+                report(
+                    track_no,
+                    RipState.RIPPING,
+                    index=idx,
+                    sub=0.28 if job.test_and_copy else 0.0,
+                    message=(
+                        f'Copying track {track_no}…'
+                        if job.test_and_copy
+                        else f'Extracting track {track_no}…'
+                    ),
+                    total_units=total_units,
+                )
+                attempt_copy_mode, st = self._rip_track(
+                    job.device,
+                    track_no,
+                    copy_wav,
+                    expected_bytes=expected,
+                    min_ratio=job.min_wav_size_ratio,
+                    burst_fallback=job.burst_fallback,
+                    sample_offset=job.sample_offset,
+                    on_burst=lambda: report(
+                        track_no,
+                        RipState.RIPPING,
+                        index=idx,
+                        sub=0.35,
+                        message=(
+                            f'Secure copy struggled on track '
+                            f'{track_no} — burst mode…'
+                        ),
+                        total_units=total_units,
+                    ),
+                )
+                attempt_stats.merge(st)
+                pass_elapsed = time.monotonic() - attempt_t0
+                elapsed += pass_elapsed
+                copy_crc, peak2, _ = analyze_wav_for_log(copy_wav, sectors)
+                if peak is None:
+                    peak = peak2
+                elif peak2 is not None:
+                    peak = max(peak, peak2)
+
+                if not job.test_and_copy:
+                    matched = True
+                    dual_pass = False
+                    test_crc = ''
+                    test_mode = ''
+                    copy_mode = attempt_copy_mode
+                    final_mode = attempt_copy_mode
+                    track_stats = attempt_stats
+                    attempt_log.append(
+                        f'pass {attempt + 1}: single extract '
+                        f'mode={attempt_copy_mode} CRC={copy_crc.upper()} '
+                        f'({pass_elapsed:.1f}s)'
+                    )
+                    break
+
+                attempt_log.append(
+                    f'pass {attempt + 1}: test={attempt_test_mode}/'
+                    f'{test_crc.upper() or "?"} copy={attempt_copy_mode}/'
+                    f'{copy_crc.upper() or "?"} ({pass_elapsed:.1f}s)'
+                )
+
+                if test_crc and copy_crc and test_crc == copy_crc:
+                    matched = True
+                    test_mode = attempt_test_mode
+                    copy_mode = attempt_copy_mode
+                    # Final mode reflects the encoded (copy) pass.
+                    final_mode = attempt_copy_mode
+                    track_stats = attempt_stats
+                    attempt_log.append(
+                        f'pass {attempt + 1}: CRC match '
+                        f'{copy_crc.upper()}'
+                    )
+                    break
+
+                matched = False
+                last_err = (
+                    f'Test/Copy CRC mismatch on track {track_no}: '
+                    f'test={test_crc} copy={copy_crc}'
+                )
+                log.warning('%s', last_err)
+                notes.append(last_err)
+                track_stats = attempt_stats
+                test_mode = attempt_test_mode
+                copy_mode = attempt_copy_mode
+                final_mode = attempt_copy_mode
+                attempt_log.append(
+                    f'pass {attempt + 1}: CRC MISMATCH '
+                    f'test={test_crc.upper()} copy={copy_crc.upper()}'
+                )
+                for p in (test_wav, copy_wav):
+                    try:
+                        p.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            except Exception as exc:  # noqa: BLE001
+                last_err = str(exc)
+                log.warning(
+                    'Track %s attempt %s failed: %s',
+                    track_no,
+                    attempt,
+                    exc,
+                )
+                attempt_log.append(
+                    f'pass {attempt + 1}: FAILED — {exc}'
+                )
+                if attempt + 1 >= attempts:
+                    raise
+
+        return _TrackExtract(
+            mode=final_mode,
+            test_crc=test_crc if dual_pass else '',
+            copy_crc=copy_crc,
+            peak=peak,
+            elapsed=elapsed,
+            stats=track_stats,
+            matched=matched,
+            copy_wav=copy_wav,
+            test_wav=test_wav,
+            error=last_err,
+            dual_pass=dual_pass,
+            test_mode=test_mode,
+            copy_mode=copy_mode,
+            attempt_log=attempt_log,
+            expected_wav_bytes=int(expected or 0),
+        )
+
+    def _extract_track_burst(
+        self,
+        *,
+        job: RipJob,
+        track_no: int,
+        copy_wav: Path,
+        expected: int | None,
+        sectors: int,
+        idx: float,
+        total_units: float,
+        report: TrackReportFn,
+    ) -> _TrackExtract:
+        """Single burst (-Z) extract used for full-disc CRC recovery."""
+        report(
+            track_no,
+            RipState.RIPPING,
+            index=idx,
+            sub=0.0,
+            message=f'Burst ripping track {track_no}…',
+            total_units=total_units,
+        )
+        t0 = time.monotonic()
+        mode, st = self._rip_track(
+            job.device,
+            track_no,
+            copy_wav,
+            expected_bytes=expected,
+            min_ratio=job.min_wav_size_ratio,
+            burst_fallback=False,
+            force_mode='burst',
+            sample_offset=job.sample_offset,
+        )
+        elapsed = time.monotonic() - t0
+        copy_crc, peak, _ = analyze_wav_for_log(copy_wav, sectors)
+        return _TrackExtract(
+            mode=mode,
+            test_crc='',  # no dual-pass — do not fake a matching test CRC
+            copy_crc=copy_crc,
+            peak=peak,
+            elapsed=elapsed,
+            stats=st,
+            matched=False,
+            copy_wav=copy_wav,
+            test_wav=copy_wav,
+            dual_pass=False,
+            test_mode='',
+            copy_mode='burst',
+            attempt_log=[
+                f'full-disc burst extract CRC={copy_crc.upper()} '
+                f'({elapsed:.1f}s)'
+            ],
+            expected_wav_bytes=int(expected or 0),
+        )
+
+    @staticmethod
+    def _toc_track(disc: DiscInfo | None, track_no: int):
+        if disc is None:
+            return None
+        for t in disc.tracks:
+            if t.number == track_no:
+                return t
+        return None
+
+    @staticmethod
+    def _format_extract_mode(
+        extracted: _TrackExtract,
+        *,
+        force_burst: bool,
+        test_and_copy: bool,
+    ) -> str:
+        """Human-readable extraction mode for the archival log."""
+        if force_burst:
+            return 'burst (full-disc after CRC mismatch)'
+        if not test_and_copy or not extracted.dual_pass:
+            if extracted.mode == 'burst':
+                return 'burst (extract fallback, no test & copy)'
+            return 'secure (single pass)'
+        test_m = extracted.test_mode or 'secure'
+        copy_m = extracted.copy_mode or extracted.mode or 'secure'
+        if test_m == 'secure' and copy_m == 'secure':
+            return 'secure (test & copy)'
+        if test_m == 'burst' and copy_m == 'burst':
+            return 'burst (test & copy; extract fallback both passes)'
+        return (
+            f'mixed (test={test_m}, copy={copy_m}; test & copy CRC verified)'
+            if extracted.matched
+            else f'mixed (test={test_m}, copy={copy_m})'
+        )
+
+    @staticmethod
+    def _apply_extract_to_log(
+        log_entry,
+        *,
+        extracted: _TrackExtract,
+        sectors: int,
+        expected_bytes: int | None,
+        test_and_copy: bool,
+        force_burst: bool,
+    ) -> None:
+        if log_entry is None:
+            return
+        log_entry.extract_mode = RipEngine._format_extract_mode(
+            extracted,
+            force_burst=force_burst,
+            test_and_copy=test_and_copy,
+        )
+        log_entry.extract_seconds = extracted.elapsed
+        log_entry.extract_speed_x = extraction_speed_x(
+            sectors, extracted.elapsed
+        )
+        # Only record a test CRC when a real dual-pass was performed.
+        if extracted.dual_pass:
+            log_entry.test_crc = extracted.test_crc
+            log_entry.copy_crc = extracted.copy_crc
+            log_entry.crc_verified = bool(extracted.matched)
+        else:
+            log_entry.test_crc = ''
+            log_entry.copy_crc = extracted.copy_crc
+            log_entry.crc_verified = None
+        log_entry.peak_percent = extracted.peak
+        log_entry.quality_percent = extracted.stats.quality_percent(sectors)
+        log_entry.error_correction_lines = extracted.stats.summary_lines(
+            length_sectors=sectors
+        )
+        log_entry.had_errors = bool(
+            extracted.stats.had_errors
+            or force_burst
+            or extracted.mode == 'burst'
+            or (extracted.dual_pass and not extracted.matched)
+        )
+        if force_burst:
+            log_entry.status = 'OK (burst re-rip)'
+        elif extracted.stats.had_errors or (
+            extracted.mode == 'burst' and not force_burst
+        ):
+            log_entry.status = 'finished with errors'
+        elif extracted.dual_pass and extracted.matched:
+            log_entry.status = 'OK'
+        else:
+            log_entry.status = 'OK'
+        log_entry.expected_wav_bytes = int(
+            expected_bytes or extracted.expected_wav_bytes or 0
+        )
+        try:
+            log_entry.wav_bytes = extracted.copy_wav.stat().st_size
+        except OSError:
+            pass
+        log_entry.attempt_log = list(extracted.attempt_log)
+        if extracted.dual_pass and extracted.matched:
+            log_entry.notes.append(
+                f'Test and copy CRCs match ({extracted.copy_crc.upper()})'
+            )
+        if force_burst:
+            log_entry.notes.append(
+                'Final audio from full-disc burst re-rip after secure CRC '
+                'mismatch; dual-pass CRC verification was not re-run'
+            )
+        elif extracted.mode == 'burst' and extracted.dual_pass:
+            log_entry.notes.append(
+                'One or both test/copy passes used extract-level burst (-Z)'
+            )
+        elif extracted.mode == 'burst':
+            log_entry.notes.append(
+                'Secure paranoia failed — burst (-Z) used for final audio'
+            )
+        if (
+            log_entry.expected_wav_bytes > 0
+            and log_entry.wav_bytes > 0
+            and abs(log_entry.wav_bytes - log_entry.expected_wav_bytes) > 44
+        ):
+            log_entry.notes.append(
+                f'WAV size differs from TOC estimate by '
+                f'{log_entry.wav_bytes - log_entry.expected_wav_bytes:+d} bytes'
+            )
+
     def _rip_track(
         self,
         device: str,
@@ -1169,19 +1672,22 @@ class RipEngine:
         expected_bytes: int | None = None,
         min_ratio: float = 0.98,
         burst_fallback: bool = True,
+        force_mode: str | None = None,
         sample_offset: int = 0,
         on_burst: Callable[[], None] | None = None,
     ) -> tuple[str, ParanoiaStats]:
-        """Extract one track. Returns ``(mode, paranoia_stats)``."""
+        """Extract one track. Returns ``(mode, paranoia_stats)``.
+
+        *force_mode*:
+          - ``None`` — secure first, optional ``-Z`` on extract failure
+          - ``'burst'`` — burst only (used after test/copy CRC mismatch)
+          - ``'secure'`` — secure only (no burst)
+        """
         secure_timeout = _extract_timeout(expected_bytes, mode='secure')
         burst_timeout = _extract_timeout(expected_bytes, mode='burst')
-        secure_err: str | None = None
-        secure_stats = ParanoiaStats()
 
-        # Prefer a complete secure WAV even when cdparanoia exits non-zero
-        # (e.g. -X after exhausted retries — file may still be full length).
-        try:
-            secure_stats = self._run_cdparanoia(
+        def run_secure() -> ParanoiaStats:
+            return self._run_cdparanoia(
                 device,
                 track_number,
                 wav_path,
@@ -1190,42 +1696,167 @@ class RipEngine:
                 allow_nonzero=True,
                 sample_offset=sample_offset,
             )
+
+        def run_burst() -> ParanoiaStats:
+            return self._run_cdparanoia(
+                device,
+                track_number,
+                wav_path,
+                mode='burst',
+                timeout=burst_timeout,
+                allow_nonzero=True,
+                sample_offset=sample_offset,
+            )
+
+        if force_mode == 'burst':
+            if on_burst is not None:
+                on_burst()
+            try:
+                if wav_path.exists():
+                    wav_path.unlink()
+            except OSError:
+                pass
+            burst_stats = run_burst()
+            self._assert_wav_ok(
+                wav_path,
+                track_number,
+                expected_bytes=expected_bytes,
+                min_ratio=max(0.5, min_ratio * 0.85),
+                label='burst',
+            )
+            return 'burst', burst_stats
+
+        return self._extract_with_burst_fallback(
+            wav_path,
+            track_number=track_number,
+            expected_bytes=expected_bytes,
+            min_ratio=min_ratio,
+            burst_fallback=burst_fallback and force_mode != 'secure',
+            run_secure=run_secure,
+            run_burst=run_burst,
+            on_burst=on_burst,
+            what=f'track {track_number}',
+        )
+
+    def _rip_span(
+        self,
+        device: str,
+        start_sector: int,
+        end_sector: int,
+        wav_path: Path,
+        *,
+        expected_bytes: int | None = None,
+        min_ratio: float = 0.98,
+        burst_fallback: bool = True,
+        sample_offset: int = 0,
+        on_burst: Callable[[], None] | None = None,
+        timeout_secure: int | None = None,
+        timeout_burst: int | None = None,
+    ) -> tuple[str, ParanoiaStats]:
+        """Extract a sector span (Copy Image / continuous audio)."""
+        if timeout_secure is None:
+            timeout_secure = _extract_timeout(expected_bytes, mode='secure')
+        if timeout_burst is None:
+            timeout_burst = _extract_timeout(expected_bytes, mode='burst')
+
+        def run_secure() -> ParanoiaStats:
+            return self._run_cdparanoia_span(
+                device,
+                start_sector,
+                end_sector,
+                wav_path,
+                mode='secure',
+                timeout=timeout_secure,
+                allow_nonzero=True,
+                sample_offset=sample_offset,
+            )
+
+        def run_burst() -> ParanoiaStats:
+            return self._run_cdparanoia_span(
+                device,
+                start_sector,
+                end_sector,
+                wav_path,
+                mode='burst',
+                timeout=timeout_burst,
+                allow_nonzero=True,
+                sample_offset=sample_offset,
+            )
+
+        return self._extract_with_burst_fallback(
+            wav_path,
+            track_number=0,
+            expected_bytes=expected_bytes,
+            min_ratio=min_ratio,
+            burst_fallback=burst_fallback,
+            run_secure=run_secure,
+            run_burst=run_burst,
+            on_burst=on_burst,
+            what=f'span [{start_sector}, {end_sector})',
+        )
+
+    def _extract_with_burst_fallback(
+        self,
+        wav_path: Path,
+        *,
+        track_number: int,
+        expected_bytes: int | None,
+        min_ratio: float,
+        burst_fallback: bool,
+        run_secure: Callable[[], ParanoiaStats],
+        run_burst: Callable[[], ParanoiaStats],
+        on_burst: Callable[[], None] | None,
+        what: str,
+    ) -> tuple[str, ParanoiaStats]:
+        """Secure extract first; on incomplete/failure, optional ``-Z`` burst."""
+        secure_err: str | None = None
+        secure_stats = ParanoiaStats()
+
+        # Prefer a complete secure WAV even when cdparanoia exits non-zero
+        # (e.g. -X after exhausted retries — file may still be full length).
+        try:
+            secure_stats = run_secure()
             self._assert_wav_ok(
                 wav_path,
                 track_number,
                 expected_bytes=expected_bytes,
                 min_ratio=min_ratio,
             )
+            # -X abort / hard skip with incomplete recovery: treat as failure
+            # even when the file is large enough to pass the size check.
+            if self._secure_pass_needs_burst(secure_stats, wav_path, expected_bytes):
+                raise RuntimeError(
+                    'Secure pass aborted or incomplete after skips '
+                    f'(exit {secure_stats.exit_code})'
+                )
             return 'secure', secure_stats
         except Exception as exc:  # noqa: BLE001
             if self._cancelled:
                 raise
             secure_err = str(exc)
-            log.warning(
-                'Secure rip failed for track %s: %s',
-                track_number,
-                secure_err,
-            )
-            # Keep a full-size secure file if we already have one.
-            try:
-                self._assert_wav_ok(
-                    wav_path,
-                    track_number,
-                    expected_bytes=expected_bytes,
-                    min_ratio=min_ratio,
-                )
-                log.info(
-                    'Track %s: accepting secure WAV despite cdparanoia error',
-                    track_number,
-                )
-                return 'secure', secure_stats
-            except Exception:  # noqa: BLE001
-                pass
+            log.warning('Secure rip failed for %s: %s', what, secure_err)
+            # Keep a full-size secure file if we already have one *and*
+            # paranoia did not report an abort-with-skips situation.
+            if not self._secure_pass_needs_burst(
+                secure_stats, wav_path, expected_bytes
+            ):
+                try:
+                    self._assert_wav_ok(
+                        wav_path,
+                        track_number,
+                        expected_bytes=expected_bytes,
+                        min_ratio=min_ratio,
+                    )
+                    log.info(
+                        '%s: accepting secure WAV despite cdparanoia error',
+                        what,
+                    )
+                    return 'secure', secure_stats
+                except Exception:  # noqa: BLE001
+                    pass
 
         if not burst_fallback:
-            raise RuntimeError(
-                f'Secure rip failed for track {track_number}: {secure_err}'
-            )
+            raise RuntimeError(f'Secure rip failed for {what}: {secure_err}')
 
         if on_burst is not None:
             on_burst()
@@ -1237,15 +1868,7 @@ class RipEngine:
             pass
 
         try:
-            burst_stats = self._run_cdparanoia(
-                device,
-                track_number,
-                wav_path,
-                mode='burst',
-                timeout=burst_timeout,
-                allow_nonzero=True,
-                sample_offset=sample_offset,
-            )
+            burst_stats = run_burst()
             self._assert_wav_ok(
                 wav_path,
                 track_number,
@@ -1255,14 +1878,42 @@ class RipEngine:
             )
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(
-                f'Secure and burst rip both failed for track {track_number}. '
+                f'Secure and burst rip both failed for {what}. '
                 f'Secure: {secure_err}; burst: {exc}'
             ) from exc
 
-        log.info('Track %s recovered via burst mode', track_number)
-        # Prefer burst stats; annotate that secure failed.
-        combined = secure_stats.merge(burst_stats) if secure_stats.reads else burst_stats
+        log.info('%s recovered via burst mode (-Z)', what)
+        combined = (
+            secure_stats.merge(burst_stats) if secure_stats.reads else burst_stats
+        )
         return 'burst', combined
+
+    @staticmethod
+    def _secure_pass_needs_burst(
+        stats: ParanoiaStats,
+        wav_path: Path,
+        expected_bytes: int | None,
+    ) -> bool:
+        """True when a size-OK secure pass still should try burst.
+
+        cdparanoia with ``-X`` can leave a large but truncated WAV after skips;
+        prefer burst recovery when the process aborted with hard errors.
+        """
+        if stats.exit_code in (None, 0):
+            return False
+        hard = stats.skips > 0 or stats.readerrs > 0 or stats.scratch > 0
+        # Aborted mid-track (never emitted finished) with hard errors.
+        if hard and not stats.finished:
+            return True
+        if expected_bytes and expected_bytes > 1000 and wav_path.is_file():
+            try:
+                size = wav_path.stat().st_size
+            except OSError:
+                return True
+            # Near-full files after an abort that still pass min_ratio (e.g. 98%).
+            if size < int(expected_bytes * 0.995):
+                return True
+        return False
 
     def _run_copy_image(
         self,
@@ -1271,7 +1922,7 @@ class RipEngine:
         fmt: str,
         on_progress: ProgressCallback | None,
     ) -> RipResult:
-        """EAC-style Copy Image.
+        """Copy Image mode.
 
         Rips a continuous sector span to one file and encodes (FLAC/WAV).
         When *job.write_cue_file* is set, also writes a matching ``.cue``.
@@ -1320,7 +1971,7 @@ class RipEngine:
         embed_art, folder_art, cover_path, art_notes = _prepare_artwork(job, album_dir)
         notes.extend(art_notes)
 
-        # Image span: EAC-style — start at track 1 INDEX 01 unless HTOA is
+        # Image span: start at track 1 INDEX 01 unless HTOA is
         # enabled *and* an extended pregap exists (then include from sector 0).
         t1 = disc.tracks[0]
         t_last = disc.tracks[-1]
@@ -1357,7 +2008,7 @@ class RipEngine:
             rip_log = RipLog()
             rip_log.configure_from_job(job)
             rip_log.notes.append(
-                'Mode: Copy Image (EAC-style)'
+                'Mode: Copy Image'
                 + (' + CUE sheet' if job.write_cue_file else '')
             )
 
@@ -1375,23 +2026,31 @@ class RipEngine:
                     0.05,
                     f'Extracting disc image ({total_sectors / 75.0 / 60.0:.1f} min)…',
                 )
-                img_stats = self._run_cdparanoia_span(
+                # Secure first; burst (-Z) if secure fails (same as per-track).
+                span_timeout_secure = max(600, total_sectors // 5)
+                span_timeout_burst = max(300, total_sectors // 15)
+                mode, img_stats = self._rip_span(
                     job.device,
                     file_start,
                     end_sector,
                     test_wav,
-                    mode='secure',
-                    timeout=max(600, total_sectors // 5),
-                    allow_nonzero=True,
-                    sample_offset=job.sample_offset,
-                )
-                self._assert_wav_ok(
-                    test_wav,
-                    0,
                     expected_bytes=expected_bytes,
                     min_ratio=job.min_wav_size_ratio,
-                    label='image secure',
+                    burst_fallback=job.burst_fallback,
+                    sample_offset=job.sample_offset,
+                    timeout_secure=span_timeout_secure,
+                    timeout_burst=span_timeout_burst,
+                    on_burst=lambda: report(
+                        RipState.RIPPING,
+                        0.12,
+                        'Secure image extract struggled — burst mode…',
+                    ),
                 )
+                if mode == 'burst':
+                    notes.append(
+                        'Disc image extracted in burst mode '
+                        '(secure mode failed; disc may be scratched)'
+                    )
 
                 use_wav = test_wav
                 if job.test_and_copy and not self._cancelled:
@@ -1399,24 +2058,29 @@ class RipEngine:
                         report(RipState.RIPPING, 0.35, 'Defeating drive cache…')
                         flush_drive_cache(job.device, disc)
                     report(RipState.RIPPING, 0.40, 'Copy pass for disc image…')
-                    copy_stats = self._run_cdparanoia_span(
+                    copy_mode, copy_stats = self._rip_span(
                         job.device,
                         file_start,
                         end_sector,
                         copy_wav,
-                        mode='secure',
-                        timeout=max(600, total_sectors // 5),
-                        allow_nonzero=True,
-                        sample_offset=job.sample_offset,
-                    )
-                    img_stats.merge(copy_stats)
-                    self._assert_wav_ok(
-                        copy_wav,
-                        0,
                         expected_bytes=expected_bytes,
                         min_ratio=job.min_wav_size_ratio,
-                        label='image copy',
+                        burst_fallback=job.burst_fallback,
+                        sample_offset=job.sample_offset,
+                        timeout_secure=span_timeout_secure,
+                        timeout_burst=span_timeout_burst,
+                        on_burst=lambda: report(
+                            RipState.RIPPING,
+                            0.45,
+                            'Secure image copy struggled — burst mode…',
+                        ),
                     )
+                    img_stats.merge(copy_stats)
+                    if copy_mode == 'burst':
+                        mode = 'burst'
+                        notes.append(
+                            'Disc image copy pass used burst mode'
+                        )
                     test_crc, _, _ = analyze_wav_for_log(test_wav, total_sectors)
                     copy_crc, _, _ = analyze_wav_for_log(copy_wav, total_sectors)
                     if test_crc and copy_crc and test_crc != copy_crc:
@@ -1428,9 +2092,15 @@ class RipEngine:
 
                 for line in img_stats.summary_lines(length_sectors=total_sectors):
                     notes.append(line)
+                if mode == 'burst':
+                    notes.append('Burst fallback (-Z) used for disc image')
                 if rip_log is not None:
                     for line in img_stats.summary_lines(length_sectors=total_sectors):
                         rip_log.notes.append(f'Image: {line}')
+                    if mode == 'burst':
+                        rip_log.notes.append(
+                            'Image: secure paranoia failed — burst (-Z) used'
+                        )
 
                 if self._cancelled:
                     return RipResult(
@@ -1537,16 +2207,17 @@ class RipEngine:
         mode: str,
         sample_offset: int = 0,
     ) -> list[str]:
-        """Build shared cdparanoia argv for EAC-like secure or burst extract."""
+        """Build shared cdparanoia argv for secure or burst extract."""
         cmd = [binary, '-w', '-d', device]
         if sample_offset:
-            # Apply drive sample offset at read time (EAC “Read offset correction”).
+            # Apply drive sample offset at read time (read offset correction).
             cmd.extend(['-O', str(int(sample_offset))])
         if mode == 'burst':
-            # Fast path: no paranoia, quiet.
-            cmd.extend(['-Z', '-q'])
+            # Disable all paranoia / overlap repair (cdparanoia -Z).
+            # Keep -e so wrappers can still observe progress on long spans.
+            cmd.extend(['-Z', '-e'])
         else:
-            # Full paranoia + EAC-like persistence:
+            # Full paranoia + never-skip persistence:
             #  --never-skip=N  re-read imperfect data (do not soft-skip early)
             #  -X              abort if a skip is still forced (no silent holes)
             #  -e              progress/error-correction callbacks on stderr

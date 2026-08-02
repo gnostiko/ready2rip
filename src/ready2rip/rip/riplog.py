@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""EAC-style detailed rip status log."""
+"""Detailed rip status log."""
 
 from __future__ import annotations
 
@@ -26,25 +26,34 @@ class TrackLogEntry:
     length_label: str = ''
     start_sector: int = 0
     length_sectors: int = 0
-    extract_mode: str = 'secure'  # secure | burst | *+test&copy
+    # Human mode: e.g. "secure (test & copy)", "burst (full-disc after CRC mismatch)"
+    extract_mode: str = 'secure'
     extract_seconds: float | None = None
     extract_speed_x: float | None = None
     peak_percent: float | None = None
-    # EAC-style quality 0–100 from paranoia fixups / skips.
+    # Quality 0–100 from paranoia fixups / skips; None when not measured (burst).
     quality_percent: float | None = None
-    copy_crc: str = ''
+    # PCM CRC32 of the test pass (empty when no dual-pass test).
     test_crc: str = ''
+    # PCM CRC32 of the audio that was encoded (copy or single-pass).
+    copy_crc: str = ''
+    # True/False only when a real dual-pass test&copy was performed.
+    crc_verified: bool | None = None
+    # Expected CDDA size (WAV header + PCM) vs actual file size.
+    expected_wav_bytes: int = 0
     wav_bytes: int = 0
     accuraterip: AccurateRipResult | None = None
     status: str = 'OK'
     notes: list[str] = field(default_factory=list)
+    # Chronological attempt history (retries, CRC mismatches, mode switches).
+    attempt_log: list[str] = field(default_factory=list)
     # Pre-rendered error-correction lines (quality, counters, suspicious MSF).
     error_correction_lines: list[str] = field(default_factory=list)
     had_errors: bool = False
 
 
 class RipLog:
-    """Builds a human-readable extraction log similar to Exact Audio Copy."""
+    """Builds a human-readable extraction log for secure rips."""
 
     def __init__(self) -> None:
         self.started_at = datetime.now()
@@ -70,14 +79,17 @@ class RipLog:
         self.drive_caches: bool | None = None
         self.accurate_stream: bool | None = None
         self.accurate_stream_message: str = ''
-        self.c2_pointers: bool | None = None
-        self.c2_message: str = ''
         self.tracks: list[TrackLogEntry] = []
         self.notes: list[str] = []
+        # Session-level archival history (e.g. superseded secure rips before
+        # a full-disc burst re-rip). Always printed in the log.
+        self.history: list[str] = []
         self.error: str | None = None
         self.cancelled: bool = False
         self.replaygain_notes: list[str] = []
         self.log_path: Path | None = None
+        # Max secure test&copy retries configured for this job.
+        self.test_copy_max_retries: int = 1
 
     def configure_from_job(self, job) -> None:
         self.device = job.device
@@ -100,10 +112,11 @@ class RipLog:
         self.accurate_stream_message = (
             getattr(job, 'drive_accurate_stream_message', '') or ''
         )
-        self.c2_pointers = getattr(job, 'drive_c2_pointers', None)
-        self.c2_message = getattr(job, 'drive_c2_message', '') or ''
         self.album = job.album
         self.disc = job.disc_info
+        self.test_copy_max_retries = int(
+            getattr(job, 'test_copy_max_retries', 1) or 0
+        )
 
     def begin_track(
         self,
@@ -157,21 +170,43 @@ class RipLog:
         lines.append(f'Host system : {platform.system()} {platform.release()} ({platform.machine()})')
         lines.append('')
 
+        # Reflect what was actually used for the final audio, not only intent.
+        final_modes = [(t.extract_mode or '').lower() for t in self.tracks if t.number > 0]
+        any_burst = any('burst' in m for m in final_modes)
+        all_burst = bool(final_modes) and all('burst' in m for m in final_modes)
+        if all_burst:
+            read_mode = (
+                'Burst (paranoia disabled / -Z) — full-disc or per-track fallback'
+            )
+            read_cmd = 'cdparanoia -w -Z -e (-O offset when calibrated)'
+        elif any_burst:
+            read_mode = (
+                'Secure with burst fallback (some tracks re-read with -Z)'
+            )
+            read_cmd = (
+                'cdparanoia -w --never-skip=200 -X  (burst: -Z) '
+                '(-O offset when calibrated)'
+            )
+        else:
+            read_mode = (
+                'Secure (cdparanoia full paranoia, never-skip + abort-on-skip)'
+            )
+            read_cmd = (
+                'cdparanoia -w --never-skip=200 -X (-O offset when calibrated)'
+            )
+        lines.append(f'Read mode               : {read_mode}')
+        lines.append(f'Read command            : {read_cmd}')
+        if self.test_and_copy:
+            lines.append(
+                f'Test & copy             : Yes '
+                f'(max {max(0, self.test_copy_max_retries)} CRC retry)'
+            )
+        else:
+            lines.append('Test & copy             : No')
         lines.append(
-            'Read mode               : Secure (cdparanoia full paranoia, '
-            'never-skip + abort-on-skip)'
-        )
-        lines.append(
-            'Read command            : cdparanoia -w --never-skip=200 -X '
-            '(-O offset when calibrated)'
-        )
-        lines.append(
-            'Test & copy             : Yes'
-            if self.test_and_copy
-            else 'Test & copy             : No'
-        )
-        lines.append(
-            'Burst fallback          : Yes' if self.burst_fallback else 'Burst fallback          : No'
+            'Burst fallback          : Yes'
+            if self.burst_fallback
+            else 'Burst fallback          : No'
         )
         if self.accurate_stream is True:
             astream = 'Yes'
@@ -195,18 +230,8 @@ class RipLog:
         lines.append(f'Defeat audio cache      : {defeat}')
         if self.cache_message:
             lines.append(f'Cache analysis          : {self.cache_message}')
-        # cdparanoia does not consume C2 data; we still report hardware support.
-        if self.c2_pointers is True:
-            c2 = 'Yes (drive supports; not used by cdparanoia path)'
-        elif self.c2_pointers is False:
-            c2 = 'No'
-        else:
-            c2 = 'Unknown (run Drive setup)'
-        lines.append(f'Make use of C2 pointers : {c2}')
-        if self.c2_message:
-            lines.append(f'C2 pointer test         : {self.c2_message}')
         lines.append(
-            'Rip HTOA / pregap       : Yes (EAC-style)'
+            'Rip HTOA / pregap       : Yes'
             if self.rip_htoa
             else 'Rip HTOA / pregap       : No'
         )
@@ -231,7 +256,12 @@ class RipLog:
         )
         lines.append(
             'Error recovery                              : '
-            'Full paranoia re-read + jitter fixup; never-skip=200; abort on skip (-X)'
+            'Full paranoia re-read + jitter fixup; never-skip=200; abort on skip (-X); '
+            'CRC mismatch → 1 secure retry then full-disc burst when enabled'
+        )
+        lines.append(
+            'CRC algorithm                               : '
+            'CRC-32 of all PCM samples (null samples included; WAV header excluded)'
         )
         lines.append('')
 
@@ -253,7 +283,7 @@ class RipLog:
             lines.append(f'AccurateRip database            : {self.ar_status}')
         lines.append(
             'Write CUE sheet                 : Yes '
-            '(EAC multi-file / left-out gaps, or image CUE)'
+            '(multi-file / left-out gaps, or image CUE)'
             if self.write_cue_file
             else 'Write CUE sheet                 : No'
         )
@@ -301,28 +331,43 @@ class RipLog:
                         lines.append(f'     {ec}')
                         break
             lines.append(f'     Extraction mode {entry.extract_mode}')
-            if entry.test_crc:
-                lines.append(f'     Test CRC {entry.test_crc.upper()}')
-            if entry.copy_crc:
-                lines.append(f'     Copy CRC {entry.copy_crc.upper()}')
-            if entry.test_crc and entry.copy_crc:
-                if entry.test_crc == entry.copy_crc:
+            if entry.expected_wav_bytes > 0 and entry.wav_bytes > 0:
+                delta = entry.wav_bytes - entry.expected_wav_bytes
+                lines.append(
+                    f'     WAV size {entry.wav_bytes} bytes '
+                    f'(expected ~{entry.expected_wav_bytes}, Δ {delta:+d})'
+                )
+            elif entry.wav_bytes > 0:
+                lines.append(f'     WAV size {entry.wav_bytes} bytes')
+            # Dual-pass CRC only when a real test pass was performed.
+            if entry.crc_verified is not None:
+                if entry.test_crc:
+                    lines.append(f'     Test CRC {entry.test_crc.upper()}')
+                if entry.copy_crc:
+                    lines.append(f'     Copy CRC {entry.copy_crc.upper()}')
+                if entry.crc_verified:
                     lines.append('     Test and Copy CRCs matched')
                 else:
                     lines.append('     WARNING: Test and Copy CRCs differ')
+            elif entry.copy_crc:
+                # Single-pass (burst or no test&copy): one authoritative CRC.
+                lines.append(f'     Audio CRC {entry.copy_crc.upper()}')
+                lines.append('     (single-pass extract — no dual CRC verify)')
             if entry.accuraterip is not None:
                 lines.append(f'     {_format_ar_line(entry.accuraterip)}')
             else:
                 lines.append('     AccurateRip not checked')
-            # EAC-style error correction block (skip duplicate quality line).
+            # Error correction block (skip duplicate quality line).
             for ec in entry.error_correction_lines:
                 if ec.lower().startswith('track quality'):
                     continue
                 lines.append(f'     {ec}')
+            for line in entry.attempt_log:
+                lines.append(f'     Attempt: {line}')
             for note in entry.notes:
                 lines.append(f'     Note: {note}')
             if entry.had_errors and entry.status.upper() in ('OK', 'FINISHED'):
-                lines.append(f'     Copy finished with errors')
+                lines.append('     Copy finished with errors')
             else:
                 lines.append(f'     Copy {entry.status}')
             lines.append('')
@@ -356,7 +401,31 @@ class RipLog:
                 f'Burst mode used for track(s): {", ".join(str(n) for n in burst)}'
             )
             lines.append(
-                '(Secure extraction failed or incomplete; re-ripped with paranoia disabled)'
+                '(Final audio for those tracks was extracted with paranoia '
+                'disabled [-Z]; see per-track mode and attempt log)'
+            )
+            lines.append('')
+
+        crc_ok = [
+            t.number
+            for t in self.tracks
+            if t.crc_verified is True
+        ]
+        crc_bad = [
+            t.number
+            for t in self.tracks
+            if t.crc_verified is False
+        ]
+        if crc_ok:
+            lines.append(
+                f'Test & copy CRC matched on track(s): '
+                f'{", ".join(str(n) for n in crc_ok)}'
+            )
+            lines.append('')
+        if crc_bad:
+            lines.append(
+                f'Test & copy CRC MISMATCH on track(s): '
+                f'{", ".join(str(n) for n in crc_bad)}'
             )
             lines.append('')
 
@@ -365,6 +434,12 @@ class RipLog:
             lines.append(
                 f'There were errors on track(s): {", ".join(str(n) for n in errored)}'
             )
+            lines.append('')
+
+        if self.history:
+            lines.append('Session history (archival):')
+            for n in self.history:
+                lines.append(f'  {n}')
             lines.append('')
 
         if self.replaygain_notes:
@@ -383,17 +458,17 @@ class RipLog:
             lines.append('Extraction cancelled by user')
         elif self.error:
             lines.append(f'Errors occurred: {self.error}')
-        elif any(t.had_errors for t in self.tracks):
+        elif any(t.had_errors for t in self.tracks) or crc_bad or burst:
             lines.append(
-                'Some tracks had read errors or required heavy correction '
-                '(see per-track details above)'
+                'Extraction completed with corrections, burst fallback, '
+                'and/or CRC issues (see per-track details and session history)'
             )
         else:
             lines.append('No errors occurred')
         lines.append('')
         lines.append('End of status report')
         lines.append('')
-        # Simple checksum of log body (EAC has "==== Log checksum ... ====")
+        # Simple checksum of log body
         body = '\n'.join(lines)
         checksum = zlib.crc32(body.encode('utf-8')) & 0xFFFFFFFF
         lines.append(f'==== Log checksum {checksum:08X} ====')

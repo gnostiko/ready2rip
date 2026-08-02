@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""EAC-style CUE sheet generation for continuous disc images."""
+"""CUE sheet generation for continuous disc images and multi-file rips."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def build_cue_tracks(
 
     When *htoa_index00* is True and track 1 starts after *file_start_sector*,
     TRACK 01 gets INDEX 00 at the file start (00:00:00) and INDEX 01 at the
-    track-1 boundary — classic EAC HTOA layout in a single image.
+    track-1 boundary — HTOA layout in a single image.
     """
     album_artist = (album.artist if album else '') or 'Unknown Artist'
     tracks: list[CueTrack] = []
@@ -85,14 +85,14 @@ def write_cue_sheet(
     file_start_sector: int,
     htoa_index00: bool = False,
 ) -> None:
-    """Write an EAC-compatible CUE sheet for a continuous *image_filename*.
+    """Write a CUE sheet for a continuous *image_filename*.
 
     *file_type* is the CUE FILE type token: ``WAVE``, ``FLAC``, etc.
     Offsets in the sheet are relative to the start of the audio file.
     """
     lines = _cue_header(
         album,
-        comment='ready2rip — Copy Image (EAC-style)',
+        comment='ready2rip — Copy Image',
     )
     lines.append(f'FILE {_cue_quote(image_filename)} {file_type}')
 
@@ -123,18 +123,18 @@ def write_multi_file_cue_sheet(
     album: AlbumMetadata | None,
     htoa_file: Path | str | None = None,
 ) -> None:
-    """Write an EAC multi-file CUE (“Multiple files with left-out gaps”).
+    """Write a multi-file CUE (“Multiple files with left-out gaps”).
 
     Each audio track is its own ``FILE`` with ``INDEX 01 00:00:00``. Pregaps
     between tracks are not stored in the files (same as per-track cdparanoia
     extraction from INDEX 01). Optional *htoa_file* is linked as track 01
-    ``INDEX 00`` (EAC HTOA layout).
+    ``INDEX 00`` (HTOA layout).
     """
     lines = _cue_header(
         album,
         comment=(
             'ready2rip — Multiple files with left-out gaps '
-            '(EAC-style secure rip)'
+            '(secure rip)'
         ),
     )
 
@@ -156,7 +156,7 @@ def write_multi_file_cue_sheet(
         fname = path.name
 
         if first and htoa_file is not None:
-            # EAC: HTOA file carries TRACK 01 INDEX 00; next file is INDEX 01.
+            # HTOA file carries TRACK 01 INDEX 00; next file is INDEX 01.
             htoa_name = Path(htoa_file).name
             lines.append(f'FILE {_cue_quote(htoa_name)} {file_type}')
             lines.append(f'  TRACK {number:02d} AUDIO')

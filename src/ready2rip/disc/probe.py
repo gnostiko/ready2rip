@@ -69,14 +69,17 @@ def probe_disc(device: str = '/dev/sr0') -> DiscInfo | None:
         return None
 
     try:
-        # Keep TOC probe short so UI / AppImage startup is not blocked for long
-        # when the tray is empty or the drive is slow to spin up.
+        # Keep TOC probe bounded. Always run off the GTK thread — cdparanoia can
+        # block for several seconds while the drive spins up.
         completed = subprocess.run(
             [cdparanoia, '-Q', '-d', device],
             check=False,
             capture_output=True,
             text=True,
-            timeout=12,
+            timeout=20,
+            # Start a new session so a timed-out probe does not leave orphans
+            # holding the device open.
+            start_new_session=True,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

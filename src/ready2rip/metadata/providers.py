@@ -17,10 +17,18 @@ from ready2rip.util import is_safe_http_url, read_limited
 
 log = logging.getLogger(__name__)
 
-USER_AGENT = 'ready2rip/0.2.0 ( https://github.com/gnostiko/ready2rip )'
+USER_AGENT = 'ready2rip/0.3.0 ( https://github.com/gnostiko/ready2rip )'
 MB_BASE = 'https://musicbrainz.org/ws/2'
 # gnudb HTTP API (FreeDB-compatible)
 GNUDB_BASE = 'https://gnudb.gnudb.org/gnudb'
+
+# MusicBrainz release UUID (with optional URL / release: prefix).
+_MB_RELEASE_ID_RE = re.compile(
+    r'(?:https?://(?:www\.)?musicbrainz\.org/release/)?'
+    r'(?:release:)?'
+    r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})',
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -136,7 +144,13 @@ class MusicBrainzProvider(MetadataProvider):
                 albums.append(album)
         return albums
 
-    def get_release(self, release_id: str) -> AlbumMetadata | None:
+    def get_release(
+        self,
+        release_id: str,
+        *,
+        discid: str = '',
+        preferred_track_count: int = 0,
+    ) -> AlbumMetadata | None:
         params = {
             'fmt': 'json',
             'inc': 'artists+recordings+release-groups+labels+artist-credits+media',
@@ -145,7 +159,11 @@ class MusicBrainzProvider(MetadataProvider):
         data = self._get_json(url)
         if not data:
             return None
-        return self._release_to_album(data, discid='')
+        return self._release_to_album(
+            data,
+            discid=discid,
+            preferred_track_count=preferred_track_count,
+        )
 
     def _get_json(self, url: str) -> dict[str, Any] | None:
         if not is_safe_http_url(url):
@@ -185,7 +203,13 @@ class MusicBrainzProvider(MetadataProvider):
             log.warning('MusicBrainz request failed: %s', exc)
             return None
 
-    def _release_to_album(self, release: dict[str, Any], discid: str) -> AlbumMetadata | None:
+    def _release_to_album(
+        self,
+        release: dict[str, Any],
+        discid: str,
+        *,
+        preferred_track_count: int = 0,
+    ) -> AlbumMetadata | None:
         if not release:
             return None
 
@@ -213,7 +237,7 @@ class MusicBrainzProvider(MetadataProvider):
         tracks: list[TrackMetadata] = []
         media = release.get('media') or []
         medium_position = 1
-        # Prefer the medium that lists this discid, else first medium.
+        # Prefer medium with this discid, else matching track count, else first.
         chosen = None
         for medium in media:
             discs = medium.get('discs') or []
@@ -221,6 +245,13 @@ class MusicBrainzProvider(MetadataProvider):
                 chosen = medium
                 medium_position = int(medium.get('position') or 1)
                 break
+        if chosen is None and preferred_track_count > 0 and media:
+            for medium in media:
+                n = len(medium.get('tracks') or [])
+                if n == preferred_track_count:
+                    chosen = medium
+                    medium_position = int(medium.get('position') or 1)
+                    break
         if chosen is None and media:
             chosen = media[0]
             medium_position = int(chosen.get('position') or 1)
@@ -357,11 +388,22 @@ class FreeDBProvider(MetadataProvider):
 
 
 def _artist_credit(credit: Any) -> str:
+    """Build a multi-artist string from MusicBrainz artist-credit.
+
+    Names are joined with ``; `` (dBpoweramp-style multi-value), not MB
+    joinphrases like `` feat. `` — those are lost in favour of true multi-artist
+    tags when ripping.
+    """
+    from ready2rip.tags.artists import join_artists, normalize_artists
+
     if not credit:
         return ''
     if isinstance(credit, str):
-        return credit
-    parts: list[str] = []
+        # Already a string — normalize if it used joinphrases/semicolons.
+        if ';' in credit:
+            return normalize_artists(credit)
+        return credit.strip()
+    names: list[str] = []
     for item in credit:
         if not isinstance(item, dict):
             continue
@@ -369,11 +411,8 @@ def _artist_credit(credit: Any) -> str:
         if not name and isinstance(item.get('artist'), dict):
             name = item['artist'].get('name')
         if name:
-            parts.append(name)
-        joinphrase = item.get('joinphrase')
-        if joinphrase:
-            parts.append(joinphrase)
-    return ''.join(parts).strip()
+            names.append(str(name).strip())
+    return join_artists(names)
 
 
 def _parse_cddb_entry(text: str, source: str = 'freedb') -> AlbumMetadata | None:
@@ -422,6 +461,60 @@ def _parse_cddb_entry(text: str, source: str = 'freedb') -> AlbumMetadata | None
         source=source,
         disambiguation=dgenre,
     )
+
+
+def parse_musicbrainz_release_id(text: str) -> str | None:
+    """Extract a MusicBrainz *release* UUID from a URL or bare id.
+
+    Accepts forms such as::
+
+        https://musicbrainz.org/release/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+        musicbrainz.org/release/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/…
+        xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+    Returns ``None`` for empty input, release-group links without a release
+    UUID, or unrecognised text.
+    """
+    if not text or not str(text).strip():
+        return None
+    raw = str(text).strip()
+    # Refuse release-group-only links (different entity).
+    if re.search(r'musicbrainz\.org/release-group/', raw, re.I):
+        if not re.search(r'musicbrainz\.org/release/[0-9a-f-]{36}', raw, re.I):
+            return None
+    match = _MB_RELEASE_ID_RE.search(raw)
+    if not match:
+        return None
+    return match.group(1).lower()
+
+
+def fetch_album_from_musicbrainz_link(
+    text: str,
+    *,
+    discid: str = '',
+    preferred_track_count: int = 0,
+) -> AlbumMetadata | None:
+    """Load one album from a MusicBrainz release URL or UUID.
+
+    Raises:
+        ValueError: when the text is not a valid release link/id.
+    """
+    release_id = parse_musicbrainz_release_id(text)
+    if not release_id:
+        raise ValueError(
+            'Not a MusicBrainz release link. '
+            'Use musicbrainz.org/release/… (not release-group).'
+        )
+    album = MusicBrainzProvider().get_release(
+        release_id,
+        discid=discid,
+        preferred_track_count=preferred_track_count,
+    )
+    if album is None:
+        raise ValueError('Could not load that MusicBrainz release')
+    if discid and not album.discid:
+        album.discid = discid
+    return album
 
 
 def lookup_metadata(

@@ -26,7 +26,7 @@ _PROGRESS_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Stages that mean real correction / trouble (EAC-style “errors”).
+# Stages that mean real correction / trouble (reportable errors).
 _ERROR_STAGES = frozenset(
     {
         'skip',
@@ -122,18 +122,32 @@ class ParanoiaStats:
 
     @property
     def had_errors(self) -> bool:
-        """True when EAC would say “There were errors” (skips / hard errors)."""
+        """True when there were skips or hard errors during extraction."""
         return self.hard_errors > 0 or self.repair > 0
 
     @property
     def had_corrections(self) -> bool:
         return self.had_errors or self.fixup_total > 0 or self.drift > 0
 
-    def quality_percent(self, length_sectors: int = 0) -> float:
-        """Approximate EAC “Track quality” (100% = clean secure read).
+    def quality_percent(self, length_sectors: int = 0) -> float | None:
+        """Approximate track quality score (100% = clean secure read).
+
+        Returns ``None`` when no paranoia progress was observed (e.g. pure
+        burst extract without meaningful ``-e`` stats) so logs do not claim
+        a false 100% quality.
 
         Weights hard skips/read errors heavily; jitter fixups lightly.
         """
+        # No measured activity → unknown (do not invent 100%).
+        if (
+            self.reads == 0
+            and self.wrote == 0
+            and self.verifies == 0
+            and self.hard_errors == 0
+            and self.fixup_total == 0
+            and not self.finished
+        ):
+            return None
         if self.hard_errors == 0 and self.fixup_total == 0 and self.drift == 0:
             return 100.0
         denom = max(1, int(length_sectors) or (self.wrote // max(1, FRAMES_PER_SECTOR)) or 1)
@@ -157,7 +171,7 @@ class ParanoiaStats:
         return max(0.0, min(100.0, q))
 
     def suspicious_msf_labels(self, *, limit: int = 12) -> list[str]:
-        """Unique MSF positions for suspicious frames (EAC-style)."""
+        """Unique MSF positions for suspicious frames."""
         seen: set[str] = set()
         out: list[str] = []
         for frame in sorted(self.suspicious_frames):
@@ -177,7 +191,10 @@ class ParanoiaStats:
         """Human lines for the per-track log (error correction section)."""
         lines: list[str] = []
         q = self.quality_percent(length_sectors)
-        lines.append(f'Track quality {q:.1f} %')
+        if q is None:
+            lines.append('Track quality n/a (no paranoia stats)')
+        else:
+            lines.append(f'Track quality {q:.1f} %')
 
         # Correction / trouble counters only (not routine read/verify/write).
         parts: list[str] = []
@@ -209,7 +226,7 @@ class ParanoiaStats:
             lines.append('Error correction     : ' + ', '.join(parts))
         else:
             lines.append('Error correction     : none required')
-        # Optional activity footprint for forensics (EAC does not show this).
+        # Optional activity footprint for forensics.
         if self.reads or self.verifies:
             lines.append(
                 f'Read activity         : {self.reads} reads, '
