@@ -15,6 +15,7 @@ from ready2rip.drive_setup import needs_drive_setup  # noqa: E402
 from ready2rip.icons import register_application_icons  # noqa: E402
 from ready2rip.settings import SettingsStore  # noqa: E402
 from ready2rip.setup_dialog import DriveSetupDialog  # noqa: E402
+from ready2rip.theme import apply_color_scheme  # noqa: E402
 from ready2rip.window import Ready2RipWindow  # noqa: E402
 
 
@@ -53,6 +54,8 @@ class Application(Adw.Application):
         # App name for shell / about; prgname matches FreeDesktop app id.
         GLib.set_application_name(config.APPLICATION_NAME)
         GLib.set_prgname(config.APPLICATION_ID)
+        # Apply saved light/dark/system preference before the first window paints.
+        apply_color_scheme(self.store.get().color_scheme)
         # Icons are nice-to-have; don't block startup if theme search is slow.
         GLib.idle_add(self._deferred_register_icons)
 
@@ -73,7 +76,8 @@ class Application(Adw.Application):
             copyright='© 2026 gnostiko',
             license_type=Gtk.License.GPL_3_0,
             comments=(
-                'Rip audio CDs with cdparanoia, AccurateRip, MusicBrainz, '
+                'Secure CD ripper for Linux. Ready2Rip uses full cdparanoia '
+                'extraction, AccurateRip verification, MusicBrainz metadata, '
                 'ReplayGain, and album art.'
             ),
             website='https://github.com/gnostiko/ready2rip',

@@ -110,3 +110,30 @@ def read_limited(response, max_bytes: int = MAX_DOWNLOAD_BYTES) -> bytes:
             raise ValueError(f'Response exceeded {max_bytes} bytes')
         chunks.append(block)
     return b''.join(chunks)
+
+
+def parse_disc_field(text: str) -> tuple[int, int]:
+    """Parse disc field as N/M (e.g. 1/1) or a single N. Defaults to 1/1."""
+    raw = (text or '').strip()
+    if not raw:
+        return 1, 1
+    if '/' in raw:
+        left, _, right = raw.partition('/')
+        try:
+            disc = max(1, int(left.strip() or '1'))
+        except ValueError:
+            disc = 1
+        try:
+            total = max(1, int(right.strip() or '1'))
+        except ValueError:
+            total = max(1, disc)
+        if disc > total:
+            total = disc
+        return disc, total
+    try:
+        disc = max(1, int(raw))
+    except ValueError:
+        return 1, 1
+    return disc, disc
+
+

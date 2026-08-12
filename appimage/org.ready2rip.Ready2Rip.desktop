@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=ready2rip
-Comment=Rip audio CDs with AccurateRip and modern metadata
+Comment=Secure CD ripper for Linux — AccurateRip, MusicBrainz, and modern tagging
 Exec=ready2rip
 Icon=org.ready2rip.Ready2Rip
 Terminal=false
@@ -8,4 +8,4 @@ Type=Application
 Categories=AudioVideo;Audio;Music;
 Keywords=CD;Rip;Audio;Music;AccurateRip;MusicBrainz;
 StartupNotify=true
-X-AppImage-Version=0.3.0
+X-AppImage-Version=0.4.0

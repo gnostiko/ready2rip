@@ -4,14 +4,19 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <name>ready2rip</name>
-  <summary>Rip audio CDs with AccurateRip and modern metadata</summary>
+  <summary>Secure CD ripper for Linux</summary>
   <icon type="stock">@APPLICATION_ID@</icon>
   <description>
     <p>
-      ready2rip is a modern GNOME application for ripping audio CDs. It aims to
-      use cdparanoia for secure extraction, verify rips with AccurateRip,
-      look up metadata via MusicBrainz (and FreeDB-compatible services),
-      apply ReplayGain, and fetch album art with optional embedded sizes.
+      Ready2Rip is a secure CD ripper for Linux. Built as a modern GNOME app, it
+      focuses on careful archival extraction with full cdparanoia (test &amp;
+      copy, retries, and drive calibration), then verifies results with
+      AccurateRip.
+    </p>
+    <p>
+      It also looks up metadata via MusicBrainz (and FreeDB-compatible services),
+      writes ReplayGain, and fetches album art with optional embed sizes—so you
+      get trustworthy rips and complete tags in one place.
     </p>
   </description>
   <launchable type="desktop-id">@APPLICATION_ID@.desktop</launchable>
@@ -21,10 +26,21 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-08-01">
+    <release version="@APPLICATION_VERSION@" date="2026-08-11">
       <description>
         <p>
-          0.3.0: MusicBrainz release-link lookup when auto-match is wrong;
+          0.4.0: Secure-CD-ripper-for-Linux positioning; System/Light/Dark
+          appearance with pure-black dark and warm-grey light chrome; Art + Album
+          side-by-side layout with cover origin/size captions; nested embed under
+          Download artwork; Calibrate drive in Ripping; UI refactor
+          (window.ui, theme module).
+        </p>
+      </description>
+    </release>
+    <release version="0.3.0" date="2026-08-01">
+      <description>
+        <p>
+          MusicBrainz release-link lookup when auto-match is wrong;
           smarter burst fallback (one CRC retry, then full-disc burst re-rip);
           archival rip log with accurate CRC/mode/session history; Lookup menu;
           pill Eject/Rip styling; bottom progress panel polish.

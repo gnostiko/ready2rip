@@ -16,6 +16,20 @@
       <summary>Optical drive device path</summary>
     </key>
 
+    <key name="color-scheme" type="s">
+      <choices>
+        <choice value="default"/>
+        <choice value="light"/>
+        <choice value="dark"/>
+      </choices>
+      <default>'default'</default>
+      <summary>Application color scheme</summary>
+      <description>
+        Appearance: follow the system (default), force light, or force dark.
+        Uses libadwaita StyleManager color scheme.
+      </description>
+    </key>
+
     <key name="encode-format" type="s">
       <choices>
         <choice value="flac"/>

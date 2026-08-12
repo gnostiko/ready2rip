@@ -1,5 +1,9 @@
 # ready2rip
 
+**ready2rip is a secure CD ripper for Linux.**
+
+A CD ripper focused on careful archival extraction with full cdparanoia,
+AccurateRip verification, modern metadata, and various tag options, utilizing GNOME design.
 
 <img width="2180" height="1482" alt="Screenshot From 2026-07-21 08-28-31" src="https://github.com/user-attachments/assets/ca236dff-7f8f-4b4b-89ca-8be169fcfa54" />
 
@@ -8,7 +12,7 @@
 
 | Feature | Description |
 |---------|-------------|
-| Secure rip | Full **cdparanoia**, retries, optional test & copy |
+| Secure rip | Full cdparanoia, retries, optional test & copy |
 | AccurateRip | Online CRC database check after extraction |
 | Metadata | MusicBrainz + FreeDB-compatible (e.g. gnudb) |
 | Tags | mutagen — FLAC / MP3 / Opus / WAV |
@@ -31,7 +35,7 @@
 
 ### What a secure rip does (under the hood)
 
-ready2rip aims for **secure archival ripping** on Linux via **cdparanoia** / libcdio-paranoia:
+ready2rip aims for secure archival ripping on Linux via cdparanoia / libcdio-paranoia:
 
 | Step | Behaviour |
 |------|-----------|
@@ -54,9 +58,9 @@ ready2rip aims for **secure archival ripping** on Linux via **cdparanoia** / lib
 | Option | Default / notes |
 |--------|------------------|
 | **Optical device** | Usually `/dev/sr0` |
-| **Output folder** | Empty → XDG Music (`~/Music`) |
-| **Album folder template** | `{album_artist}/{album}/{disc_folder}` — also `{year}`, `{disc}`, `{totaldiscs}` |
-| **Track filename template** | `{track:02d} - {title}` — also `{artist}`, `{album}`, `{disc}`, `{totaldiscs}` |
+| **Output folder** | (`~/Music`) |
+| **Album folder template** | `{album_artist}/{album}/{disc_folder}` - also `{year}`, `{disc}`, `{totaldiscs}` |
+| **Track filename template** | `{track:02d} - {title}` - also `{artist}`, `{album}`, `{disc}`, `{totaldiscs}` |
 
 ### Encoder
 
@@ -141,10 +145,10 @@ Optional: **libdiscid** (ctypes) for DiscID helpers; pure-Python TOC IDs are use
 | Required on build host | Why |
 |------------------------|-----|
 | `python3`, PyGObject, GTK 4, libadwaita | Bundled into the image (incl. Python stdlib) |
-| `cdparanoia` / `cd-paranoia` | Bundled — build fails if missing |
+| `cdparanoia` / `cd-paranoia` | Bundled - build fails if missing |
 | `meson`, `ninja`, `gcc`, `curl`, `pip` | Packaging |
 | `flac`, `lame`, `ffmpeg` | Bundled if present |
-| `zsync` / **zsyncmake** | Recommended — produces `.zsync` for Gear Lever delta updates |
+| `zsync` / **zsyncmake** | Recommended - produces `.zsync` for Gear Lever delta updates |
 
 ```bash
 ./appimage/build-appimage.sh
@@ -184,8 +188,8 @@ Check your system glibc with `ldd --version`. If the AppImage fails with `GLIBC_
 2. Make it executable and start it:
 
 ```bash
-chmod +x ready2rip-0.3.0-x86_64.AppImage
-./ready2rip-0.3.0-x86_64.AppImage
+chmod +x ready2rip-0.4.0-x86_64.AppImage
+./ready2rip-0.4.0-x86_64.AppImage
 ```
 
 ### Recommended: manage with Gear Lever
@@ -198,19 +202,6 @@ flatpak install flathub it.mijorus.gearlever
 
 Open the AppImage with Gear Lever (or add it from Gear Lever’s UI). ready2rip embeds AppImage update information at build time so Gear Lever can detect **GitHub Releases** automatically when both the `.AppImage` and `.AppImage.zsync` assets are published.
 
-**Manual Gear Lever update settings** (if needed):
-
-| Field | Value |
-|-------|--------|
-| Provider | Github |
-| Username/Repo | `gnostiko/ready2rip` |
-| Release file name | `ready2rip-*-x86_64.AppImage` |
-
-Embedded update string (for reference):
-
-```text
-gh-releases-zsync|gnostiko|ready2rip|latest|ready2rip-*-x86_64.AppImage.zsync
-```
 
 ---
 

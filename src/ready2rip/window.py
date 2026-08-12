@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 import gi
 
@@ -44,481 +45,39 @@ from ready2rip.settings import (  # noqa: E402
     SettingsStore,
     default_output_directory,
 )
+from ready2rip.theme import (  # noqa: E402
+    COLOR_SCHEME_ICONS,
+    COLOR_SCHEME_LABELS,
+    COLOR_SCHEMES,
+    ChromeStyleController,
+    apply_color_scheme,
+    next_color_scheme,
+    normalize_color_scheme,
+)
+from ready2rip.window_styles import install_window_styles  # noqa: E402
 
 
-@Gtk.Template(string="""
-<?xml version="1.0" encoding="UTF-8"?>
-<interface>
-  <requires lib="gtk" version="4.0"/>
-  <requires lib="Adw" version="1.0"/>
-  <template class="Ready2RipWindow" parent="AdwApplicationWindow">
-    <property name="title">ready2rip</property>
-    <property name="icon-name">org.ready2rip.Ready2Rip</property>
-    <property name="default-width">1000</property>
-    <property name="default-height">700</property>
-    <child>
-      <object class="AdwToolbarView" id="toolbar_view">
-        <!-- Hide bottom bar until the rip panel opens (avoids a hairline separator). -->
-        <property name="reveal-bottom-bars">false</property>
-        <child type="top">
-          <object class="AdwHeaderBar" id="header_bar">
-            <property name="title-widget">
-              <object class="AdwWindowTitle">
-                <property name="title">ready2rip</property>
-              </object>
-            </property>
-            <child type="start">
-              <object class="GtkToggleButton" id="sidebar_button">
-                <property name="icon-name">sidebar-show-symbolic</property>
-                <property name="tooltip-text" translatable="yes">Toggle sidebar</property>
-                <property name="active">true</property>
-                <signal name="toggled" handler="_on_sidebar_toggled"/>
-              </object>
-            </child>
-            <child type="start">
-              <object class="GtkButton" id="about_button">
-                <property name="icon-name">help-about-symbolic</property>
-                <property name="tooltip-text" translatable="yes">About ready2rip</property>
-                <property name="action-name">app.about</property>
-              </object>
-            </child>
-            <!-- type=end packs right-to-left: first child is outermost (right). -->
-            <child type="end">
-              <object class="GtkButton" id="eject_button">
-                <property name="label" translatable="yes">Eject</property>
-                <property name="tooltip-text" translatable="yes">Eject the disc</property>
-                <style>
-                  <class name="destructive-action"/>
-                  <class name="pill"/>
-                </style>
-                <signal name="clicked" handler="_on_eject_clicked"/>
-              </object>
-            </child>
-            <child type="end">
-              <object class="GtkButton" id="rip_button">
-                <property name="label" translatable="yes">Rip</property>
-                <property name="sensitive">false</property>
-                <property name="tooltip-text" translatable="yes">Rip the inserted CD</property>
-                <style>
-                  <class name="suggested-action"/>
-                  <class name="pill"/>
-                </style>
-                <signal name="clicked" handler="_on_rip_clicked"/>
-              </object>
-            </child>
-            <child type="end">
-              <object class="GtkMenuButton" id="lookup_button">
-                <property name="label" translatable="yes">Lookup</property>
-                <property name="sensitive">false</property>
-                <property name="always-show-arrow">true</property>
-                <property name="tooltip-text" translatable="yes">Look up metadata by disc or MusicBrainz link</property>
-                <style>
-                  <class name="flat"/>
-                </style>
-              </object>
-            </child>
-          </object>
-        </child>
-        <child>
-          <object class="AdwToastOverlay" id="toast_overlay">
-            <child>
-              <!-- Collapsible GNOME sidebar: rip options + disc info -->
-              <object class="AdwBreakpointBin" id="breakpoint_bin">
-                <property name="width-request">360</property>
-                <property name="height-request">200</property>
-                <child>
-                  <object class="AdwOverlaySplitView" id="split_view">
-                    <property name="vexpand">true</property>
-                    <property name="hexpand">true</property>
-                    <property name="sidebar-position">start</property>
-                    <property name="show-sidebar">true</property>
-                    <property name="collapsed">false</property>
-                    <property name="min-sidebar-width">280</property>
-                    <property name="max-sidebar-width">340</property>
-                    <property name="enable-hide-gesture">true</property>
-                    <property name="enable-show-gesture">true</property>
-                    <child type="sidebar">
-                      <object class="GtkScrolledWindow" id="sidebar_scroll">
-                        <property name="hscrollbar-policy">never</property>
-                        <property name="vexpand">true</property>
-                        <property name="hexpand">true</property>
-                        <style>
-                          <class name="background"/>
-                        </style>
-                        <child>
-                          <object class="GtkBox" id="sidebar_box">
-                            <property name="orientation">vertical</property>
-                            <property name="spacing">24</property>
-                            <property name="margin-top">12</property>
-                            <property name="margin-bottom">24</property>
-                            <property name="margin-start">12</property>
-                            <property name="margin-end">12</property>
-                            <!-- Group titles alone — no extra section headers (HIG). -->
-                            <child>
-                              <object class="AdwPreferencesGroup" id="calibration_group">
-                                <property name="title" translatable="yes">Setup</property>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="AdwPreferencesGroup" id="options_group">
-                                <property name="title" translatable="yes">Ripping</property>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="AdwPreferencesGroup" id="metadata_group">
-                                <property name="title" translatable="yes">Metadata</property>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="AdwPreferencesGroup" id="disc_group">
-                                <property name="title" translatable="yes">Disc</property>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="AdwPreferencesGroup" id="drive_group">
-                                <property name="title" translatable="yes">Drive</property>
-                              </object>
-                            </child>
-                          </object>
-                        </child>
-                      </object>
-                    </child>
-                    <child>
-                      <object class="GtkStack" id="stack">
-                        <property name="vexpand">true</property>
-                        <property name="hexpand">true</property>
-                        <property name="transition-type">crossfade</property>
-                        <child>
-                          <object class="GtkStackPage">
-                            <property name="name">empty</property>
-                            <property name="child">
-                              <object class="AdwStatusPage" id="status_page">
-                                <property name="icon-name">media-optical-symbolic</property>
-                                <property name="title" translatable="yes">No disc</property>
-                                <property name="description" translatable="yes">
-                                  Insert an audio CD.
-                                </property>
-                              </object>
-                            </property>
-                          </object>
-                        </child>
-                        <child>
-                          <object class="GtkStackPage">
-                            <property name="name">disc</property>
-                            <property name="child">
-                              <object class="GtkScrolledWindow">
-                                <property name="vexpand">true</property>
-                                <property name="hexpand">true</property>
-                                <property name="hscrollbar-policy">never</property>
-                                <property name="propagate-natural-height">false</property>
-                                <child>
-                                  <object class="AdwClamp">
-                                    <property name="maximum-size">700</property>
-                                    <property name="tightening-threshold">400</property>
-                                    <property name="unit">sp</property>
-                                    <child>
-                                      <object class="GtkBox" id="content_box">
-                                        <property name="orientation">vertical</property>
-                                        <property name="spacing">20</property>
-                                        <property name="margin-top">20</property>
-                                        <property name="margin-bottom">28</property>
-                                        <property name="margin-start">12</property>
-                                        <property name="margin-end">12</property>
-                                        <property name="halign">fill</property>
-                                        <property name="hexpand">true</property>
+_WINDOW_UI = str(Path(__file__).with_name('window.ui'))
 
-                                        <!-- Full-width column: cover centered, fields span like Tracks -->
-                                        <child>
-                                          <object class="GtkBox" id="album_box">
-                                            <property name="orientation">vertical</property>
-                                            <property name="spacing">16</property>
-                                            <property name="halign">fill</property>
-                                            <property name="hexpand">true</property>
-                                            <child>
-                                              <object class="GtkBox" id="cover_frame">
-                                                <property name="orientation">vertical</property>
-                                                <property name="halign">center</property>
-                                                <property name="valign">center</property>
-                                                <property name="hexpand">false</property>
-                                                <property name="vexpand">false</property>
-                                                <property name="width-request">240</property>
-                                                <property name="height-request">240</property>
-                                                <property name="overflow">hidden</property>
-                                                <style>
-                                                  <class name="card"/>
-                                                  <class name="ready2rip-cover-frame"/>
-                                                </style>
-                                                <child>
-                                                  <object class="GtkOverlay" id="cover_overlay">
-                                                    <property name="hexpand">true</property>
-                                                    <property name="vexpand">true</property>
-                                                    <property name="halign">fill</property>
-                                                    <property name="valign">fill</property>
-                                                    <property name="overflow">hidden</property>
-                                                    <child>
-                                                      <object class="GtkPicture" id="cover_picture">
-                                                        <property name="hexpand">true</property>
-                                                        <property name="vexpand">true</property>
-                                                        <property name="halign">fill</property>
-                                                        <property name="valign">fill</property>
-                                                        <property name="can-shrink">true</property>
-                                                        <property name="content-fit">cover</property>
-                                                        <property name="tooltip-text" translatable="yes">Album artwork</property>
-                                                        <style>
-                                                          <class name="ready2rip-cover-picture"/>
-                                                        </style>
-                                                      </object>
-                                                    </child>
-                                                    <child type="overlay">
-                                                      <object class="GtkImage" id="cover_placeholder">
-                                                        <property name="icon-name">folder-music-symbolic</property>
-                                                        <property name="pixel-size">72</property>
-                                                        <property name="halign">center</property>
-                                                        <property name="valign">center</property>
-                                                        <property name="can-target">false</property>
-                                                        <property name="tooltip-text" translatable="yes">Album artwork</property>
-                                                        <style>
-                                                          <class name="ready2rip-cover-placeholder"/>
-                                                        </style>
-                                                      </object>
-                                                    </child>
-                                                    <child type="overlay">
-                                                      <object class="GtkBox" id="cover_actions">
-                                                        <property name="orientation">horizontal</property>
-                                                        <property name="spacing">8</property>
-                                                        <property name="halign">center</property>
-                                                        <property name="valign">center</property>
-                                                        <property name="opacity">0</property>
-                                                        <child>
-                                                          <object class="GtkButton" id="search_art_button">
-                                                            <property name="icon-name">system-search-symbolic</property>
-                                                            <property name="valign">center</property>
-                                                            <property name="can-focus">true</property>
-                                                            <property name="tooltip-text" translatable="yes">Search for artwork</property>
-                                                            <style>
-                                                              <class name="circular"/>
-                                                              <class name="osd"/>
-                                                              <class name="ready2rip-cover-button"/>
-                                                            </style>
-                                                            <signal name="clicked" handler="_on_search_art_clicked"/>
-                                                          </object>
-                                                        </child>
-                                                        <child>
-                                                          <object class="GtkButton" id="choose_art_button">
-                                                            <property name="icon-name">folder-symbolic</property>
-                                                            <property name="valign">center</property>
-                                                            <property name="can-focus">true</property>
-                                                            <property name="tooltip-text" translatable="yes">Choose image from file</property>
-                                                            <style>
-                                                              <class name="circular"/>
-                                                              <class name="osd"/>
-                                                              <class name="ready2rip-cover-button"/>
-                                                            </style>
-                                                            <signal name="clicked" handler="_on_choose_art_clicked"/>
-                                                          </object>
-                                                        </child>
-                                                        <child>
-                                                          <object class="GtkButton" id="clear_art_button">
-                                                            <property name="icon-name">user-trash-symbolic</property>
-                                                            <property name="valign">center</property>
-                                                            <property name="can-focus">true</property>
-                                                            <property name="tooltip-text" translatable="yes">Remove artwork</property>
-                                                            <style>
-                                                              <class name="circular"/>
-                                                              <class name="osd"/>
-                                                              <class name="destructive-action"/>
-                                                              <class name="ready2rip-cover-button"/>
-                                                              <class name="ready2rip-cover-trash"/>
-                                                            </style>
-                                                            <signal name="clicked" handler="_on_clear_art_clicked"/>
-                                                          </object>
-                                                        </child>
-                                                      </object>
-                                                    </child>
-                                                  </object>
-                                                </child>
-                                              </object>
-                                            </child>
-                                            <!-- Same Adwaita boxed-list chrome as Tracks -->
-                                            <child>
-                                              <object class="GtkBox" id="album_fields_box">
-                                                <property name="orientation">vertical</property>
-                                                <property name="spacing">8</property>
-                                                <property name="halign">fill</property>
-                                                <property name="hexpand">true</property>
-                                                <child>
-                                                  <object class="AdwPreferencesGroup" id="album_edit_group">
-                                                    <property name="title" translatable="yes">Album</property>
-                                                  </object>
-                                                </child>
-                                                <child>
-                                                  <object class="GtkBox">
-                                                    <property name="orientation">vertical</property>
-                                                    <property name="spacing">2</property>
-                                                    <property name="halign">fill</property>
-                                                    <property name="hexpand">true</property>
-                                                    <property name="margin-start">12</property>
-                                                    <property name="margin-end">12</property>
-                                                    <child>
-                                                      <object class="GtkLabel" id="album_meta_label">
-                                                        <property name="label"></property>
-                                                        <property name="xalign">0</property>
-                                                        <property name="wrap">true</property>
-                                                        <property name="ellipsize">end</property>
-                                                        <property name="selectable">false</property>
-                                                        <style>
-                                                          <class name="caption"/>
-                                                          <class name="dim-label"/>
-                                                        </style>
-                                                      </object>
-                                                    </child>
-                                                    <child>
-                                                      <object class="GtkLabel" id="metadata_source_label">
-                                                        <property name="label"></property>
-                                                        <property name="xalign">0</property>
-                                                        <property name="wrap">true</property>
-                                                        <property name="ellipsize">end</property>
-                                                        <property name="selectable">false</property>
-                                                        <style>
-                                                          <class name="caption"/>
-                                                          <class name="dim-label"/>
-                                                        </style>
-                                                      </object>
-                                                    </child>
-                                                    <child>
-                                                      <object class="GtkProgressBar" id="lookup_progress">
-                                                        <property name="visible">false</property>
-                                                        <property name="pulse-step">0.2</property>
-                                                        <property name="margin-top">6</property>
-                                                        <property name="halign">fill</property>
-                                                        <property name="hexpand">true</property>
-                                                      </object>
-                                                    </child>
-                                                  </object>
-                                                </child>
-                                              </object>
-                                            </child>
-                                          </object>
-                                        </child>
 
-                                        <child>
-                                          <object class="AdwPreferencesGroup" id="track_edit_group">
-                                            <property name="title" translatable="yes">Tracks</property>
-                                          </object>
-                                        </child>
-
-                                      </object>
-                                    </child>
-                                  </object>
-                                </child>
-                              </object>
-                            </property>
-                          </object>
-                        </child>
-                      </object>
-                    </child>
-                  </object>
-                </child>
-              </object>
-            </child>
-          </object>
-        </child>
-        <!-- Bottom slide-up progress panel (GNOME-style) -->
-        <child type="bottom">
-          <object class="GtkRevealer" id="rip_revealer">
-            <property name="reveal-child">false</property>
-            <property name="transition-type">slide-up</property>
-            <property name="transition-duration">220</property>
-            <child>
-              <object class="GtkBox" id="rip_banner">
-                <property name="orientation">vertical</property>
-                <property name="spacing">8</property>
-                <property name="margin-start">18</property>
-                <property name="margin-end">18</property>
-                <property name="margin-top">12</property>
-                <property name="margin-bottom">14</property>
-                <style>
-                  <class name="ready2rip-rip-bar"/>
-                </style>
-                <child>
-                  <object class="GtkBox">
-                    <property name="orientation">horizontal</property>
-                    <property name="spacing">12</property>
-                    <child>
-                      <object class="GtkLabel" id="rip_title_label">
-                        <property name="label" translatable="yes">Ripping</property>
-                        <property name="xalign">0</property>
-                        <property name="halign">start</property>
-                        <property name="hexpand">true</property>
-                        <property name="selectable">false</property>
-                        <style>
-                          <class name="heading"/>
-                        </style>
-                      </object>
-                    </child>
-                    <child>
-                      <object class="GtkLabel" id="rip_percent_label">
-                        <property name="label">0%</property>
-                        <property name="xalign">1</property>
-                        <property name="halign">end</property>
-                        <property name="valign">center</property>
-                        <property name="selectable">false</property>
-                        <style>
-                          <class name="caption"/>
-                          <class name="numeric"/>
-                          <class name="dim-label"/>
-                        </style>
-                      </object>
-                    </child>
-                  </object>
-                </child>
-                <child>
-                  <object class="GtkLabel" id="rip_status_label">
-                    <property name="label">Preparing…</property>
-                    <property name="xalign">0</property>
-                    <property name="wrap">true</property>
-                    <property name="wrap-mode">word-char</property>
-                    <property name="ellipsize">end</property>
-                    <property name="selectable">false</property>
-                    <style>
-                      <class name="caption"/>
-                      <class name="dim-label"/>
-                    </style>
-                  </object>
-                </child>
-                <child>
-                  <object class="GtkProgressBar" id="rip_progress">
-                    <property name="show-text">false</property>
-                    <property name="fraction">0</property>
-                    <property name="hexpand">true</property>
-                    <style>
-                      <class name="ready2rip-progress"/>
-                    </style>
-                  </object>
-                </child>
-              </object>
-            </child>
-          </object>
-        </child>
-      </object>
-    </child>
-  </template>
-</interface>
-""")
+@Gtk.Template(filename=_WINDOW_UI)
 class Ready2RipWindow(Adw.ApplicationWindow):
     __gtype_name__ = 'Ready2RipWindow'
 
     toast_overlay = Gtk.Template.Child()
     toolbar_view = Gtk.Template.Child()
+    header_bar = Gtk.Template.Child()
+    theme_button = Gtk.Template.Child()
     breakpoint_bin = Gtk.Template.Child()
     split_view = Gtk.Template.Child()
+    sidebar_scroll = Gtk.Template.Child()
+    sidebar_box = Gtk.Template.Child()
     sidebar_button = Gtk.Template.Child()
     status_page = Gtk.Template.Child()
     stack = Gtk.Template.Child()
     track_edit_group = Gtk.Template.Child()
     album_fields_box = Gtk.Template.Child()
     album_edit_group = Gtk.Template.Child()
-    calibration_group = Gtk.Template.Child()
     disc_group = Gtk.Template.Child()
     drive_group = Gtk.Template.Child()
     options_group = Gtk.Template.Child()
@@ -526,8 +85,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     rip_button = Gtk.Template.Child()
     lookup_button = Gtk.Template.Child()
     eject_button = Gtk.Template.Child()
-    album_meta_label = Gtk.Template.Child()
-    metadata_source_label = Gtk.Template.Child()
+    metadata_origin_label = Gtk.Template.Child()
+    art_size_label = Gtk.Template.Child()
+    art_origin_label = Gtk.Template.Child()
     cover_frame = Gtk.Template.Child()
     cover_overlay = Gtk.Template.Child()
     cover_picture = Gtk.Template.Child()
@@ -606,9 +166,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._device = self.store.get().device
 
         self._setup_lookup_menu()
+        self._setup_theme_button()
         self._setup_split_view()
         self._setup_cover_widget()
         self._setup_progress_styles()
+        self._setup_chrome_style()
         self._build_calibration_row()
         self._build_options_rows()
         self._build_metadata_rows()
@@ -796,105 +358,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self.cover_frame.add_controller(motion)
 
     def _setup_progress_styles(self) -> None:
-        """CSS for large cover frame and bottom progress bar (incl. success green)."""
-        size = self._COVER_SIZE
-        css = Gtk.CssProvider()
-        css.load_from_string(
-            f"""
-            /* Cover: quiet square card, centered above full-width fields */
-            .ready2rip-cover-frame {{
-                min-width: {size}px;
-                min-height: {size}px;
-                border-radius: 12px;
-                background-color: alpha(@window_fg_color, 0.06);
-            }}
-            image.ready2rip-cover-placeholder {{
-                color: alpha(@window_fg_color, 0.4);
-                -gtk-icon-style: symbolic;
-            }}
-            /* No hard top border: Adw.ToolbarView draws the bottom-bar edge.
-               A custom border-top showed as a stray line during slide-up. */
-            .ready2rip-rip-bar {{
-                background-color: @window_bg_color;
-            }}
-            progressbar.ready2rip-progress {{
-                min-height: 4px;
-            }}
-            progressbar.ready2rip-progress > trough {{
-                min-height: 4px;
-                border-radius: 9999px;
-            }}
-            progressbar.ready2rip-progress > trough > progress {{
-                min-height: 4px;
-                border-radius: 9999px;
-            }}
-            progressbar.ready2rip-progress.success > trough > progress {{
-                background-color: @success_color;
-            }}
-            progressbar.ready2rip-progress.error > trough > progress {{
-                background-color: @error_color;
-            }}
-            button.ready2rip-setup-icon {{
-                opacity: 0.55;
-            }}
-            button.ready2rip-setup-icon:hover {{
-                opacity: 1.0;
-            }}
-            button.ready2rip-cover-button {{
-                min-width: 36px;
-                min-height: 36px;
-                padding: 0;
-            }}
-            button.ready2rip-cover-button.ready2rip-cover-trash,
-            button.ready2rip-cover-button.ready2rip-cover-trash:hover,
-            button.ready2rip-cover-button.ready2rip-cover-trash:active {{
-                background-color: @destructive_bg_color;
-                color: @destructive_fg_color;
-                border: none;
-                box-shadow: none;
-            }}
-            button.ready2rip-cover-button.ready2rip-cover-trash:disabled {{
-                opacity: 0.4;
-            }}
-            /* Track list: aligned columns, quiet chrome */
-            .ready2rip-track-row {{
-                padding: 10px 12px;
-                min-height: 44px;
-            }}
-            .ready2rip-track-header {{
-                opacity: 0.9;
-            }}
-            .ready2rip-track-header .ready2rip-track-row {{
-                padding-top: 6px;
-                padding-bottom: 4px;
-                min-height: 28px;
-            }}
-            .ready2rip-track-lead {{
-                min-width: 3.6em;
-            }}
-            .ready2rip-track-num {{
-                min-width: 2em;
-                font-feature-settings: "tnum";
-                opacity: 0.7;
-            }}
-            .ready2rip-track-dur {{
-                min-width: 3em;
-                font-feature-settings: "tnum";
-                opacity: 0.65;
-            }}
-            .ready2rip-track-status {{
-                min-width: 0;
-            }}
-            entry.ready2rip-track-entry {{
-                min-height: 34px;
-            }}
-            """
-        )
-        Gtk.StyleContext.add_provider_for_display(
-            self.get_display(),
-            css,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
-        )
+        """Install cover / track / progress CSS."""
+        install_window_styles(self.get_display(), cover_size=self._COVER_SIZE)
+
+    def _setup_chrome_style(self) -> None:
+        """Flat custom chrome: pure black dark, warm grey light."""
+        self._chrome = ChromeStyleController(self)
 
     def _set_cover_actions_visible(self, visible: bool) -> None:
         # Opacity only — leave can_target enabled so moving onto the buttons
@@ -956,9 +425,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     # —— Sidebar groups ——
 
     def _build_calibration_row(self) -> None:
-        """Top-of-sidebar Calibration group with Drive setup action."""
+        """Calibrate drive row at the top of the Ripping group."""
         self._setup_row = Adw.ActionRow(
-            title='Drive setup',
+            title='Calibrate drive',
             activatable=True,
         )
         # Status checkmark when calibrated (GNOME: symbolic + success).
@@ -968,13 +437,14 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._setup_ok_icon.set_visible(False)
         self._setup_row.add_suffix(self._setup_ok_icon)
 
-        # Action: text "Run setup", or compact grey optical icon when complete.
-        self._setup_btn = Gtk.Button(label='Run setup')
+        # Action: text button, or compact grey optical icon when complete.
+        self._setup_btn = Gtk.Button(label='Calibrate')
         self._setup_btn.set_valign(Gtk.Align.CENTER)
         self._setup_btn.connect('clicked', self._on_run_drive_setup)
         self._setup_row.add_suffix(self._setup_btn)
         self._setup_row.set_activatable_widget(self._setup_btn)
-        self.calibration_group.add(self._setup_row)
+        # First child of Ripping (built before other option rows).
+        self.options_group.add(self._setup_row)
         self._update_calibration_row()
 
     def _update_calibration_row(self) -> None:
@@ -999,11 +469,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             btn.add_css_class('ready2rip-setup-icon')
             btn.set_tooltip_text('Recalibrate drive')
         else:
-            row.set_title('Drive setup')
+            row.set_title('Calibrate drive')
             row.set_subtitle('Offset, cache, Accurate Stream')
             self._setup_ok_icon.set_visible(False)
             btn.set_icon_name('')
-            btn.set_label('Set up')
+            btn.set_label('Calibrate')
             btn.add_css_class('suggested-action')
             btn.set_tooltip_text('Calibrate this drive')
 
@@ -1263,7 +733,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._add_metadata_row(self._auto_lookup_row)
         self._sync_lookup_source_sensitivity(settings.auto_lookup_metadata)
 
-        # Download artwork: expander with per-source toggles nested inside.
+        # Download artwork: sources, then embed options nested underneath.
         self._fetch_art_row = Adw.ExpanderRow(
             title='Download artwork',
             subtitle='Fetch covers and keep the highest quality match',
@@ -1299,21 +769,16 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._art_itunes_row.connect('notify::active', self._on_art_itunes_toggled)
         self._fetch_art_row.add_row(self._art_itunes_row)
 
-        self._add_metadata_row(self._fetch_art_row)
-        self._sync_artwork_source_sensitivity(settings.fetch_artwork)
-
-        self._embed_art_row = Adw.ExpanderRow(
+        # Embed lives under Download artwork (same expander group).
+        self._embed_art_row = Adw.SwitchRow(
             title='Embed artwork',
             subtitle='Write cover image into ripped files',
+            active=settings.embed_artwork,
         )
-        self._embed_art_row.set_show_enable_switch(True)
-        self._embed_art_row.set_enable_expansion(settings.embed_artwork)
-        self._embed_art_row.set_expanded(settings.embed_artwork)
-        self._embed_art_row.connect(
-            'notify::enable-expansion', self._on_embed_art_toggled
-        )
+        self._embed_art_row.connect('notify::active', self._on_embed_art_toggled)
+        self._fetch_art_row.add_row(self._embed_art_row)
 
-        self._art_size_row = Adw.ComboRow(title='Size')
+        self._art_size_row = Adw.ComboRow(title='Embed size')
         self._art_size_values = [px for px, _label in ARTWORK_SIZES]
         self._art_size_row.set_model(
             Gtk.StringList.new([label for _px, label in ARTWORK_SIZES])
@@ -1329,8 +794,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 self._art_size_row.set_selected(2)
         self._art_size_row.connect('notify::selected', self._on_art_size_changed)
         self._art_size_row.set_sensitive(settings.embed_artwork)
-        self._embed_art_row.add_row(self._art_size_row)
-        self._add_metadata_row(self._embed_art_row)
+        self._fetch_art_row.add_row(self._art_size_row)
+
+        self._add_metadata_row(self._fetch_art_row)
+        self._sync_artwork_source_sensitivity(settings.fetch_artwork)
 
         # ReplayGain last among metadata options
         self._rg_row = Adw.SwitchRow(
@@ -1420,7 +887,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._freedb_row.set_active(settings.use_freedb)
             self._sync_lookup_source_sensitivity(settings.auto_lookup_metadata)
             self._rg_row.set_active(settings.apply_replaygain)
-            self._embed_art_row.set_enable_expansion(settings.embed_artwork)
+            self._embed_art_row.set_active(settings.embed_artwork)
             self._art_size_row.set_sensitive(settings.embed_artwork)
             self._fetch_art_row.set_enable_expansion(settings.fetch_artwork)
             self._art_caa_row.set_active(settings.artwork_source_caa)
@@ -1573,12 +1040,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _on_auto_eject_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(auto_eject=row.get_active())
 
-    def _on_embed_art_toggled(self, row: Adw.ExpanderRow, *_args) -> None:
-        enabled = row.get_enable_expansion()
+    def _on_embed_art_toggled(self, row: Adw.SwitchRow, *_args) -> None:
+        enabled = row.get_active()
         self.store.update(embed_artwork=enabled)
         self._art_size_row.set_sensitive(enabled)
-        if enabled and not row.get_expanded():
-            row.set_expanded(True)
 
     def _on_fetch_art_toggled(self, row: Adw.ExpanderRow, *_args) -> None:
         enabled = row.get_enable_expansion()
@@ -1665,6 +1130,45 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         section.append('MusicBrainz link…', 'win.lookup-mb-url')
         menu.append_section(None, section)
         self.lookup_button.set_menu_model(menu)
+
+    # Appearance: system → light → dark (GNOME header icon button).
+    def _setup_theme_button(self) -> None:
+        """Header appearance toggle; relies on Adwaita for style changes."""
+        settings = Gtk.Settings.get_default()
+        if settings is not None:
+            settings.set_property('gtk-enable-animations', True)
+        scheme = normalize_color_scheme(self.store.get().color_scheme)
+        apply_color_scheme(scheme)
+        self._sync_theme_button(scheme)
+
+    def _sync_theme_button(self, scheme: str) -> None:
+        """Icon + tooltip for the current mode (next mode on click)."""
+        scheme = normalize_color_scheme(scheme)
+        icon = COLOR_SCHEME_ICONS[scheme]
+        theme = Gtk.IconTheme.get_for_display(self.get_display())
+        if not theme.has_icon(icon):
+            for fallback in (
+                'display-brightness-symbolic',
+                'preferences-desktop-display-symbolic',
+            ):
+                if theme.has_icon(fallback):
+                    icon = fallback
+                    break
+        self.theme_button.set_icon_name(icon)
+        label = COLOR_SCHEME_LABELS[scheme]
+        idx = COLOR_SCHEMES.index(scheme)
+        nxt = COLOR_SCHEME_LABELS[COLOR_SCHEMES[(idx + 1) % len(COLOR_SCHEMES)]]
+        self.theme_button.set_tooltip_text(
+            f'Appearance: {label} (click for {nxt})'
+        )
+
+    @Gtk.Template.Callback()
+    def _on_theme_clicked(self, *_args) -> None:
+        """Cycle system → light → dark."""
+        scheme = next_color_scheme(self.store.get().color_scheme)
+        self.store.update(color_scheme=scheme)
+        apply_color_scheme(scheme)
+        self._sync_theme_button(scheme)
 
     def _on_lookup_disc(self, *_args) -> None:
         """MusicBrainz + FreeDB lookup from the inserted disc’s identifiers."""
@@ -2339,11 +1843,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._artwork = cached_art
             self._prepare_embed_artwork()
             self._show_artwork(cached_art)
-            base = self.metadata_source_label.get_label().split(' · art')[0]
-            self.metadata_source_label.set_label(
-                f'{base} · art: {cached_art.width}×{cached_art.height} '
-                f'{cached_art.source} (cached)'
-            )
 
         if restored:
             self._toast(
@@ -2362,36 +1861,85 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if settings.auto_rip:
             self._maybe_schedule_auto_rip(disc_key)
 
-    def _update_album_header(self, info: DiscInfo | None, album: AlbumMetadata | None) -> None:
-        """Refresh quiet meta/source lines under the editable album fields."""
-        if album and (album.title or album.artist or album.medium_count > 1):
-            bits = [b for b in (album.date, album.label, album.country) if b]
-            disc_n = max(1, int(album.medium_position or 1))
-            disc_t = max(1, int(album.medium_count or 1))
-            if disc_t > 1 or disc_n > 1:
-                bits.insert(0, f'Disc {disc_n}/{disc_t}')
-            if info is not None:
-                total = sum(t.duration_seconds for t in info.tracks)
-                minutes = int(total) // 60
-                seconds = int(total) % 60
-                bits.insert(0, f'{info.track_count} tracks · {minutes}:{seconds:02d}')
-            self.album_meta_label.set_label(' · '.join(bits))
-            source = album.source or 'manual'
-            self.metadata_source_label.set_label(source)
-            return
+    @staticmethod
+    def _format_art_origin(source: str | None) -> str:
+        """Human label for where the cover image came from."""
+        raw = (source or '').strip()
+        if not raw:
+            return 'Album art from unknown source'
+        # Resize variants: "itunes/embed-600" → itunes
+        base = raw.split('/', 1)[0].strip().lower()
+        names = {
+            'itunes': 'iTunes',
+            'apple': 'iTunes',
+            'deezer': 'Deezer',
+            'coverartarchive': 'Cover Art Archive',
+            'caa': 'Cover Art Archive',
+            'local': 'user',
+            'file': 'user',
+            'user': 'user',
+            'direct': 'URL',
+            'url': 'URL',
+            'cache': 'cache',
+            'cached': 'cache',
+            'musicbrainz': 'Cover Art Archive',
+        }
+        pretty = names.get(base)
+        if pretty is None:
+            pretty = base.replace('_', ' ').replace('-', ' ').strip() or 'unknown source'
+        return f'Album art from {pretty}'
 
-        if info is not None:
-            total = sum(t.duration_seconds for t in info.tracks)
-            minutes = int(total) // 60
-            seconds = int(total) % 60
-            self.album_meta_label.set_label(
-                f'{info.track_count} tracks · {minutes}:{seconds:02d}'
-            )
-        else:
-            self.album_meta_label.set_label('')
-        self.metadata_source_label.set_label('No metadata')
+    def _update_art_info(self, status: str | None = None) -> None:
+        """Two lines under art: size/embed, then origin (or a status message)."""
+        if status is not None:
+            self.art_size_label.set_label(status)
+            self.art_origin_label.set_label('')
+            self.art_origin_label.set_visible(False)
+            return
+        image = self._artwork
+        if image is None:
+            self.art_size_label.set_label('No artwork')
+            self.art_origin_label.set_label('')
+            self.art_origin_label.set_visible(False)
+            return
+        size_bits = [f'{image.width}×{image.height}']
+        emb = self._artwork_embed
+        if emb is not None:
+            size_bits.append(f'embed {emb.width}×{emb.height}')
+        self.art_size_label.set_label(' · '.join(size_bits))
+        self.art_origin_label.set_label(self._format_art_origin(image.source))
+        self.art_origin_label.set_visible(True)
+
+    @staticmethod
+    def _format_metadata_origin(source: str | None) -> str:
+        """Human label for the metadata origin banner."""
+        raw = (source or '').strip().lower()
+        if not raw or raw == 'manual':
+            return 'No metadata'
+        # Manual edits after a lookup: musicbrainz+manual, freedb+manual, …
+        base = raw.split('+', 1)[0].strip()
+        names = {
+            'musicbrainz': 'MusicBrainz',
+            'freedb': 'FreeDB',
+            'gnudb': 'gnudb',
+            'cd-text': 'CD-TEXT',
+            'cdtext': 'CD-TEXT',
+            'cache': 'cache',
+        }
+        pretty = names.get(base)
+        if pretty is None:
+            pretty = base.replace('_', ' ').replace('-', ' ').strip().title() or 'unknown'
+        if '+manual' in raw or raw.endswith('+manual'):
+            return f'Metadata from {pretty} (edited)'
+        return f'Metadata from {pretty}'
+
+    def _update_album_header(self, info: DiscInfo | None, album: AlbumMetadata | None) -> None:
+        """Refresh metadata origin banner and cover placeholder when needed."""
+        source = album.source if album is not None else None
+        self.metadata_origin_label.set_label(self._format_metadata_origin(source))
         if self._artwork is None:
             self._show_placeholder_cover()
+            self._update_art_info()
 
     def _rebuild_disc_rows(
         self,
@@ -2647,7 +2195,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if self._album_label_row is not None:
             album.label = self._album_label_row.get_text().strip()
         if self._album_disc_row is not None:
-            disc_num, disc_total = _parse_disc_field(
+            disc_num, disc_total = parse_disc_field(
                 self._album_disc_row.get_text()
             )
             album.medium_position = disc_num
@@ -3133,7 +2681,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._set_lookup_controls_sensitive(False)
         self.lookup_progress.set_visible(True)
         self.lookup_progress.pulse()
-        self.metadata_source_label.set_label('Looking up…')
+        # lookup progress bar handles status
 
         mb_id = self._ids.musicbrainz_discid
         freedb_id = self._ids.freedb_id
@@ -3178,7 +2726,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._set_lookup_controls_sensitive(False)
         self.lookup_progress.set_visible(True)
         self.lookup_progress.pulse()
-        self.metadata_source_label.set_label('Loading MusicBrainz release…')
+        # lookup progress bar handles status
 
         discid = ''
         if self._ids is not None and self._ids.musicbrainz_discid:
@@ -3232,13 +2780,13 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         )
 
         if error:
-            self.metadata_source_label.set_label(f'Lookup failed · {error}')
+            # toast already covers lookup failure
             if interactive:
                 self._toast(f'Lookup failed: {error}')
             return
 
         if not results:
-            self.metadata_source_label.set_label('No matches')
+            # toast already covers no matches
             if interactive:
                 self._toast('No metadata matches for this disc')
             return
@@ -3274,7 +2822,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
         if error or album is None:
             msg = error or 'Could not load that MusicBrainz release'
-            self.metadata_source_label.set_label(f'MB link failed · {msg}')
+            # toast already covers MB failure
             self._toast(msg)
             return
 
@@ -3301,9 +2849,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 self._apply_album(chosen)
                 self._toast(f'Using {chosen.source}: {chosen.title}')
             elif self._album is None:
-                self.metadata_source_label.set_label(
-                    f'{len(candidates)} matches · none selected'
-                )
+                self._toast(f'{len(candidates)} matches · none selected')
 
         dialog.connect('closed', on_closed)
         dialog.present(self)
@@ -3324,7 +2870,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             if num in self._track_checks:
                 self._track_checks[num].set_active(was)
         self._save_metadata_cache()
-        if self.store.get().fetch_artwork:
+        if (
+            self.store.get().fetch_artwork
+            and self._artwork_source_options().any_enabled
+        ):
             self._start_artwork_fetch(self._album)
 
     # —— Artwork ——
@@ -3355,8 +2904,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._clear_artwork()
         if self._album is not None:
             self._album.cover_url = ''
-        base = self.metadata_source_label.get_label().split(' · art')[0]
-        self.metadata_source_label.set_label(base)
         self._schedule_cache_save()
         self._toast('Artwork removed')
 
@@ -3403,25 +2950,19 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._show_artwork(image)
             album = self._ensure_album_tracks()
             album.cover_url = path
-            base = self.metadata_source_label.get_label().split(' · art')[0]
-            emb = self._artwork_embed
-            embed_note = (
-                f', embed {emb.width}×{emb.height}' if emb is not None else ''
-            )
-            self.metadata_source_label.set_label(
-                f'{base} · art: {image.width}×{image.height} local{embed_note}'
-            )
             self._toast(f'Local cover art {image.label}')
             self._schedule_cache_save()
 
         dialog.open(self, None, on_done)
 
     def _clear_artwork(self) -> None:
+        """Clear cover art from the UI."""
         self._art_generation += 1
         self._artwork = None
         self._artwork_embed = None
         self._show_placeholder_cover()
         self._sync_cover_action_sensitivity()
+        self._update_art_info()
 
     def _start_artwork_fetch(self, album: AlbumMetadata) -> None:
         settings = self.store.get()
@@ -3432,10 +2973,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             return
         self._art_generation += 1
         generation = self._art_generation
-        self.metadata_source_label.set_label(
-            self.metadata_source_label.get_label().split(' · art')[0]
-            + ' · art: downloading…'
-        )
+        self._update_art_info('Downloading…')
 
         def worker() -> None:
             try:
@@ -3462,37 +3000,29 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if generation != self._art_generation:
             return
 
-        base_meta = self.metadata_source_label.get_label().split(' · art')[0]
-
         if error:
-            self.metadata_source_label.set_label(f'{base_meta} · art: error')
+            self._update_art_info('Download failed')
             self._toast(f'Artwork failed: {error}')
             return
 
         if image is None:
-            self.metadata_source_label.set_label(f'{base_meta} · art: none found')
+            self._update_art_info('No artwork found')
             return
 
         self._artwork = image
         self._prepare_embed_artwork()
         self._show_artwork(image)
-
-        emb = self._artwork_embed
-        embed_note = ''
-        if emb is not None:
-            embed_note = f', embed {emb.width}×{emb.height}'
-        self.metadata_source_label.set_label(
-            f'{base_meta} · art: {image.width}×{image.height} {image.source}{embed_note}'
-        )
         self._toast(f'Cover art {image.label}')
         self._schedule_cache_save()
 
     def _prepare_embed_artwork(self) -> None:
         if self._artwork is None:
             self._artwork_embed = None
+            self._update_art_info()
             return
         max_edge = self.store.get().artwork_max_size
         self._artwork_embed = ArtworkFetcher().resize(self._artwork, max_edge)
+        self._update_art_info()
 
     def _show_artwork(self, image: ArtworkImage) -> None:
         """Show *image* full-bleed in the 240×240 cover frame."""
@@ -3507,6 +3037,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         ):
             self._show_placeholder_cover()
             self._sync_cover_action_sensitivity()
+            self._update_art_info()
             return
 
         # Hide the dimmed music glyph once real art is loaded.
@@ -3515,6 +3046,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self.cover_overlay.set_size_request(size, size)
         self.cover_frame.set_size_request(size, size)
         self._sync_cover_action_sensitivity()
+        self._update_art_info()
 
     def _toast(self, title: str, timeout: int = 3) -> None:
         """Show a transient bottom toast (Adwaita / GNOME HIG).
@@ -3531,31 +3063,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         except (AttributeError, TypeError):
             pass
         self.toast_overlay.add_toast(toast)
-
-
-def _parse_disc_field(text: str) -> tuple[int, int]:
-    """Parse disc field as N/M (e.g. 1/1) or a single N. Defaults to 1/1."""
-    raw = (text or '').strip()
-    if not raw:
-        return 1, 1
-    if '/' in raw:
-        left, _, right = raw.partition('/')
-        try:
-            disc = max(1, int(left.strip() or '1'))
-        except ValueError:
-            disc = 1
-        try:
-            total = max(1, int(right.strip() or '1'))
-        except ValueError:
-            total = max(1, disc)
-        if disc > total:
-            total = disc
-        return disc, total
-    try:
-        disc = max(1, int(raw))
-    except ValueError:
-        return 1, 1
-    return disc, disc
 
 
 def _mark_album_edited(album: AlbumMetadata) -> None:
