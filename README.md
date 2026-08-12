@@ -5,7 +5,9 @@
 A CD ripper focused on careful archival extraction with full cdparanoia,
 AccurateRip verification, modern metadata, and various tag options, utilizing GNOME design.
 
-<img width="2180" height="1482" alt="Screenshot From 2026-07-21 08-28-31" src="https://github.com/user-attachments/assets/ca236dff-7f8f-4b4b-89ca-8be169fcfa54" />
+<img width="2100" height="1500" alt="Screenshot From 2026-08-11 19-34-48" src="https://github.com/user-attachments/assets/7f924b51-35e3-41d5-9fa0-415cb1b5c902" />
+<img width="2100" height="1500" alt="Screenshot From 2026-08-11 19-33-01" src="https://github.com/user-attachments/assets/e98ef01c-eebc-4c1b-99ae-830bcf459eae" />
+<img width="2100" height="1500" alt="Screenshot From 2026-08-11 19-28-47" src="https://github.com/user-attachments/assets/ea8eab3c-c61a-4028-9ec6-448432dcdd55" />
 
 
 ## What it does
