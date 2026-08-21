@@ -135,7 +135,7 @@ You mainly need:
 | Meson, Ninja, gcc | Build / AppImage packaging |
 
 ```bash
-pip3 install --user mutagen
+pip3 install --user 'mutagen>=1.48.1'
 ```
 
 Optional: **libdiscid** (ctypes) for DiscID helpers; pure-Python TOC IDs are used if it is missing.
