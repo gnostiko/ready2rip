@@ -1,6 +1,6 @@
 [project]
 name = "ready2rip"
-version = "0.4.0"
+version = "0.4.1"
 description = "Secure CD ripper for Linux"
 requires-python = ">=3.11"
 dependencies = [

@@ -17,7 +17,7 @@ from ready2rip.util import is_safe_http_url, normalize_release_date, read_limite
 
 log = logging.getLogger(__name__)
 
-USER_AGENT = 'ready2rip/0.4.0 ( https://github.com/gnostiko/ready2rip )'
+USER_AGENT = 'ready2rip/0.4.1 ( https://github.com/gnostiko/ready2rip )'
 MB_BASE = 'https://musicbrainz.org/ws/2'
 # gnudb HTTP API (FreeDB-compatible)
 GNUDB_BASE = 'https://gnudb.gnudb.org/gnudb'

@@ -26,11 +26,19 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-08-11">
+    <release version="@APPLICATION_VERSION@" date="2026-08-21">
       <description>
         <p>
-          0.4.0: Secure-CD-ripper-for-Linux positioning; System/Light/Dark
-          appearance with pure-black dark and warm-grey light chrome; Art + Album
+          0.4.1: Theme consistency fixes; updated app icons (PNG + SVG);
+          dark-mode polish; README screenshot refresh.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.0" date="2026-08-11">
+      <description>
+        <p>
+          Secure-CD-ripper-for-Linux positioning; System/Light/Dark appearance
+          with pure-black dark and warm-grey light chrome; Art + Album
           side-by-side layout with cover origin/size captions; nested embed under
           Download artwork; Calibrate drive in Ripping; UI refactor
           (window.ui, theme module).

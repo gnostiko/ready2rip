@@ -9,4 +9,4 @@ Categories=AudioVideo;Audio;Music;
 Keywords=CD;Rip;Audio;Music;AccurateRip;MusicBrainz;
 StartupNotify=true
 StartupWMClass=org.ready2rip.Ready2Rip
-X-AppImage-Version=0.4.0
+X-AppImage-Version=0.4.1
