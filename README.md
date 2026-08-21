@@ -124,7 +124,7 @@ You mainly need:
 - **x86_64** Linux desktop with a **glibc new enough for the build host** (see [Portability](#appimage-portability) below)
 - **Optical drive** access (user in `cdrom` / appropriate group)
 - **FUSE / libfuse2** recommended so the AppImage mounts quickly (avoid `APPIMAGE_EXTRACT_AND_RUN=1` for daily use)
-- Host **Mesa / Vulkan / libGL** (graphics drivers stay on the system — normal for AppImages)
+- Host **Mesa / Vulkan / libGL** (graphics drivers stay on the system - normal for AppImages)
 
 ### Develop / run from source
 
@@ -249,7 +249,6 @@ ready2rip/
 - [dBpoweramp](https://www.dbpoweramp.com/)
 - [cyanrip](https://github.com/cyanreg/cyanrip)
 
-Thanks to those projects and their communities for defining what careful, accurate CD ripping looks like on every platform.
 
 ## License
 
