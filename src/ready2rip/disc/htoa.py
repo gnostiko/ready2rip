@@ -44,7 +44,7 @@ class HtoaInfo:
 
     @property
     def duration_label(self) -> str:
-        total = int(round(self.duration_seconds))
+        total = round(self.duration_seconds)
         minutes, seconds = divmod(total, 60)
         return f'{minutes}:{seconds:02d}'
 
@@ -107,7 +107,7 @@ def is_digitally_silent(wav_path: Path, *, threshold: int = 0) -> bool:
                     if abs(sample) > threshold:
                         return False
             return True
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.warning('HTOA silence check failed for %s: %s', wav_path, exc)
         return False
 

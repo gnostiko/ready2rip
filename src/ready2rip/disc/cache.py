@@ -74,7 +74,7 @@ def detect_drive_cache(
             _extract_span(device, span, b, timeout=timeout)
             second_ms = (time.monotonic() - t1) * 1000.0
             crc_b = _pcm_crc(b)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning('Drive cache detection failed: %s', exc)
             return DriveCacheResult(
                 caches=None,
@@ -138,7 +138,7 @@ def flush_drive_cache(
         out = Path(tmp) / 'flush.wav'
         try:
             _extract_span(device, span, out, timeout=timeout, quiet=True)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.debug('Cache flush read failed (non-fatal): %s', exc)
 
 
@@ -223,7 +223,7 @@ def _pcm_crc(wav_path: Path) -> int | None:
                 remaining -= take
                 crc = zlib.crc32(data, crc)
             return crc & 0xFFFFFFFF
-    except Exception:  # noqa: BLE001
+    except Exception:
         try:
             raw = wav_path.read_bytes()
             pcm = raw[44:] if len(raw) > 44 and raw[:4] == b'RIFF' else raw

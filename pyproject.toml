@@ -1,0 +1,63 @@
+[project]
+name = "ready2rip"
+version = "0.4.0"
+description = "Secure CD ripper for Linux"
+requires-python = ">=3.11"
+dependencies = [
+  "mutagen>=1.47",
+]
+
+[tool.ruff]
+target-version = "py311"
+src = ["src"]
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes
+  "I",   # isort
+  "UP",  # pyupgrade
+  "B",   # bugbear
+  "SIM", # simplify
+  "RUF", # ruff
+]
+ignore = [
+  "E402",  # module level import not at top — required for gi.require_version
+  "E501",  # line length — UI / log strings
+  "SIM105", # prefer contextlib.suppress — explicit except is clearer here
+  "SIM108", # ternary — keep explicit branches in UI code
+  "RUF001", # allow × / fancy punctuation in UI strings
+  "RUF002", # allow × in docstrings
+  "RUF003", # allow en-dash in comments
+  "SIM102", # nested guards are clearer for tray/state machines
+  "RUF012", # ClassVar for mutable defaults — noisy with dataclasses
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/ready2rip/window.py" = ["C901", "PLR0911", "PLR0912", "PLR0915"]
+
+[tool.basedpyright]
+include = ["src"]
+exclude = ["**/__pycache__", "build", "build-appimage", "dist", ".tools"]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+# PyGObject has no usable stubs in this environment; don't flood the IDE.
+reportMissingTypeStubs = "none"
+reportMissingModuleSource = "none"
+reportUnknownMemberType = "none"
+reportUnknownVariableType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownParameterType = "none"
+reportUnknownLambdaType = "none"
+reportMissingParameterType = "none"
+reportAttributeAccessIssue = "none"
+reportAny = "none"
+# Keep real problems.
+reportUndefinedVariable = "error"
+reportOptionalMemberAccess = "warning"
+reportArgumentType = "warning"
+reportAssignmentType = "warning"
+reportGeneralTypeIssues = "warning"
+# mutagen's public ID3 frames are re-exported; stubs mark them private.
+reportPrivateImportUsage = "none"

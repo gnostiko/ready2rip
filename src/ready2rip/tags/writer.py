@@ -10,6 +10,7 @@ from pathlib import Path
 from ready2rip.metadata.providers import AlbumMetadata
 from ready2rip.paths import track_meta_for
 from ready2rip.tags.artists import normalize_artists, split_artists
+from ready2rip.util import normalize_release_date
 
 log = logging.getLogger(__name__)
 
@@ -44,7 +45,8 @@ class TagWriter:
         )
         album_title = album.title or 'Unknown Album'
         album_artist = normalize_artists(album.artist or artist)
-        date = album.date or ''
+        # Keep full YYYY-MM-DD when available (not year-only).
+        date = normalize_release_date(album.date or '')
         total = total_tracks if total_tracks is not None else (
             len(album.tracks) if album.tracks else None
         )
@@ -164,7 +166,7 @@ class TagWriter:
 
             try:
                 audio = OggOpus(path)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 from mutagen.oggvorbis import OggVorbis
 
                 audio = OggVorbis(path)
@@ -226,7 +228,7 @@ class TagWriter:
 
             try:
                 audio = OggOpus(path)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 from mutagen.oggvorbis import OggVorbis
 
                 audio = OggVorbis(path)
@@ -254,7 +256,7 @@ class TagWriter:
 
         try:
             audio = OggOpus(path)
-        except Exception:  # noqa: BLE001
+        except Exception:
             from mutagen.oggvorbis import OggVorbis
 
             audio = OggVorbis(path)
@@ -284,6 +286,8 @@ class TagWriter:
         )
         if date:
             audio['DATE'] = [date]
+            # Picard-compatible: ORIGINALDATE also carries full precision.
+            audio['ORIGINALDATE'] = [date]
         if total_tracks:
             audio['TRACKNUMBER'] = [f'{track_number}/{total_tracks}']
             audio['TRACKTOTAL'] = [str(total_tracks)]
@@ -372,6 +376,13 @@ class TagWriter:
             tags.add(TPOS(encoding=3, text=f'{disc_num}/{total}'))
         if date:
             tags.add(TDRC(encoding=3, text=date))
+            try:
+                from mutagen.id3 import TDOR
+
+                tags.delall('TDOR')
+                tags.add(TDOR(encoding=3, text=date))
+            except ImportError:
+                pass
         if album_meta and album_meta.musicbrainz_release_id:
             tags.delall('TXXX:MusicBrainz Album Id')
             tags.add(
@@ -392,7 +403,8 @@ class TagWriter:
         if album_meta and album_meta.label:
             tags.delall('TXXX:LABEL')
             tags.add(TXXX(encoding=3, desc='LABEL', text=[album_meta.label]))
-        audio.save()
+        # ID3v2.4 keeps full ISO dates in TDRC/TDOR (v2.3 TYER is year-only).
+        audio.save(v2_version=4)
 
     def _tag_wav(
         self,
@@ -439,7 +451,7 @@ class TagWriter:
             if date:
                 tags.add(TDRC(encoding=3, text=date))
             audio.save()
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.debug('WAV tagging failed for %s', path, exc_info=True)
 
 

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -117,7 +118,7 @@ def write_cue_sheet(
 def write_multi_file_cue_sheet(
     cue_path: Path,
     *,
-    track_files: list[tuple[int, Path | str]],
+    track_files: Sequence[tuple[int, Path | str]],
     file_type: str,
     disc: DiscInfo | None,
     album: AlbumMetadata | None,
@@ -194,12 +195,14 @@ def multi_file_cue_basename(album: AlbumMetadata | None, disc: DiscInfo | None) 
 def _cue_header(album: AlbumMetadata | None, *, comment: str) -> list[str]:
     album_title = (album.title if album else '') or 'Unknown Album'
     album_artist = (album.artist if album else '') or 'Unknown Artist'
-    date = (album.date if album else '') or ''
+    from ready2rip.util import normalize_release_date
+
+    date = normalize_release_date((album.date if album else '') or '')
 
     lines: list[str] = []
     if date:
-        year = date[:4] if len(date) >= 4 else date
-        lines.append(f'REM DATE {year}')
+        # Full YYYY-MM-DD when known (year-only still valid).
+        lines.append(f'REM DATE {date}')
     lines.append(f'REM COMMENT {_cue_quote(comment)}')
     lines.append(f'PERFORMER {_cue_quote(album_artist)}')
     lines.append(f'TITLE {_cue_quote(album_title)}')

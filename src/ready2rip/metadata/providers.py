@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
-from ready2rip.util import is_safe_http_url, read_limited
+from ready2rip.util import is_safe_http_url, normalize_release_date, read_limited
 
 log = logging.getLogger(__name__)
 
@@ -113,12 +113,14 @@ class MusicBrainzProvider(MetadataProvider):
                 albums.append(album)
         return albums
 
-    def search(self, artist: str, album: str, limit: int = 10) -> list[AlbumMetadata]:
+    def search(
+        self, artist: str, album_title: str, limit: int = 10
+    ) -> list[AlbumMetadata]:
         query_parts = []
         if artist:
             query_parts.append(f'artist:"{artist}"')
-        if album:
-            query_parts.append(f'release:"{album}"')
+        if album_title:
+            query_parts.append(f'release:"{album_title}"')
         if not query_parts:
             return []
         params = {
@@ -139,9 +141,9 @@ class MusicBrainzProvider(MetadataProvider):
                 if full is not None:
                     albums.append(full)
                     continue
-            album = self._release_to_album(release, discid='')
-            if album is not None:
-                albums.append(album)
+            parsed = self._release_to_album(release, discid='')
+            if parsed is not None:
+                albums.append(parsed)
         return albums
 
     def get_release(
@@ -190,7 +192,7 @@ class MusicBrainzProvider(MetadataProvider):
             try:
                 exc.read()
                 exc.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             return None
         except (
@@ -215,7 +217,6 @@ class MusicBrainzProvider(MetadataProvider):
 
         title = release.get('title') or ''
         artist = _artist_credit(release.get('artist-credit'))
-        date = release.get('date') or ''
         barcode = release.get('barcode') or ''
         country = release.get('country') or ''
         status = release.get('status') or ''
@@ -224,6 +225,12 @@ class MusicBrainzProvider(MetadataProvider):
 
         rg = release.get('release-group') or {}
         rg_id = rg.get('id') or ''
+        # Prefer the most complete of release date vs RG first-release-date
+        # (YYYY / YYYY-MM / YYYY-MM-DD).
+        date = normalize_release_date(
+            release.get('date') or '',
+            rg.get('first-release-date') or '',
+        )
 
         label = ''
         catalog = ''
@@ -432,7 +439,7 @@ def _parse_cddb_entry(text: str, source: str = 'freedb') -> AlbumMetadata | None
         if line.startswith('DTITLE='):
             dtitle += line[7:]
         elif line.startswith('DYEAR='):
-            dyear = line[6:].strip()
+            dyear = normalize_release_date(line[6:].strip())
         elif line.startswith('DGENRE='):
             dgenre = line[7:].strip()
         else:
@@ -542,13 +549,13 @@ def lookup_metadata(
     if use_musicbrainz and musicbrainz_discid:
         try:
             _add(MusicBrainzProvider().lookup_by_discid(musicbrainz_discid))
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.exception('MusicBrainz lookup failed')
 
     if use_freedb and freedb_id:
         try:
             _add(FreeDBProvider().lookup_by_discid(freedb_id))
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.exception('FreeDB lookup failed')
 
     return results

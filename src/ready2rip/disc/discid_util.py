@@ -175,7 +175,7 @@ def _libdiscid_put(
         if not disc_id:
             return None
         return disc_id.decode('ascii')
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.exception('libdiscid put failed')
         return None
     finally:

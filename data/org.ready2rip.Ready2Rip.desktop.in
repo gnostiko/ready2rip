@@ -8,3 +8,4 @@ Type=Application
 Categories=AudioVideo;Audio;Music;
 Keywords=CD;Rip;Audio;Music;Secure;AccurateRip;MusicBrainz;Linux;
 StartupNotify=true
+StartupWMClass=@APPLICATION_ID@

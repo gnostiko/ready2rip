@@ -127,7 +127,7 @@ mkdir -p "${APPDIR}/usr/bin" \
 echo "==> pip install mutagen"
 python3 -m pip install --upgrade --no-compile \
   --target="${APPDIR}/usr/lib/python3/site-packages" \
-  "mutagen>=1.48.1"
+  "mutagen>=1.47"
 
 # ---------------------------------------------------------------------------
 # Bundle PyGObject (gi) from the build host

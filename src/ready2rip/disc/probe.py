@@ -23,7 +23,7 @@ class TrackInfo:
 
     @property
     def duration_label(self) -> str:
-        total = int(round(self.duration_seconds))
+        total = round(self.duration_seconds)
         minutes, seconds = divmod(total, 60)
         return f'{minutes}:{seconds:02d}'
 

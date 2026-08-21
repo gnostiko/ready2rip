@@ -210,6 +210,15 @@
                                                 </style>
                                               </object>
                                             </child>
+                                            <!-- Metadata lookup pulse — above Art | Album -->
+                                            <child>
+                                              <object class="GtkProgressBar" id="lookup_progress">
+                                                <property name="visible">false</property>
+                                                <property name="pulse-step">0.2</property>
+                                                <property name="halign">fill</property>
+                                                <property name="hexpand">true</property>
+                                              </object>
+                                            </child>
                                             <child>
                                               <object class="GtkBox" id="cover_hero">
                                                 <property name="orientation">horizontal</property>
@@ -416,16 +425,6 @@
                                                     <property name="halign">fill</property>
                                                     <property name="hexpand">true</property>
                                                     <property name="valign">start</property>
-                                                  </object>
-                                                </child>
-                                                <child>
-                                                  <object class="GtkProgressBar" id="lookup_progress">
-                                                    <property name="visible">false</property>
-                                                    <property name="pulse-step">0.2</property>
-                                                    <property name="halign">fill</property>
-                                                    <property name="hexpand">true</property>
-                                                    <property name="margin-start">12</property>
-                                                    <property name="margin-end">12</property>
                                                   </object>
                                                 </child>
                                               </object>

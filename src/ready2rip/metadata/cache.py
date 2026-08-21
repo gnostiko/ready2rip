@@ -8,7 +8,7 @@ import logging
 import os
 import re
 from dataclasses import asdict, fields
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from ready2rip.artwork.fetch import ArtworkImage
@@ -185,7 +185,7 @@ class MetadataCache:
         payload = {
             'version': _CACHE_VERSION,
             'key': key,
-            'saved_at': datetime.now(timezone.utc).isoformat(),
+            'saved_at': datetime.now(UTC).isoformat(),
             'device': info.device,
             'track_count': info.track_count,
             'album': _album_to_dict(album),

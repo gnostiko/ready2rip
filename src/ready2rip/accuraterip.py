@@ -198,7 +198,7 @@ def fetch_database(ids: AccurateRipDiscIds, timeout: float = 15.0) -> AccurateRi
         try:
             exc.read()
             exc.close()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         return None
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
@@ -220,7 +220,7 @@ def _parse_dbar(raw: bytes, ids: AccurateRipDiscIds) -> AccurateRipDatabase:
     while offset < len(raw):
         if offset + 13 > len(raw):
             raise ValueError('Truncated AccurateRip header')
-        num_tracks, ar1, ar2, freedb = struct.unpack_from('<BLLL', raw, offset)
+        num_tracks, ar1, ar2, _freedb = struct.unpack_from('<BLLL', raw, offset)
         offset += 13
         if num_tracks != expected_tracks:
             raise ValueError(
@@ -379,7 +379,7 @@ class AccurateRipVerifier:
                 self._total_tracks,
                 sample_offset=self.sample_offset,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning('AccurateRip CRC failed for track %s: %s', track_number, exc)
             return AccurateRipResult(
                 track_number=track_number,

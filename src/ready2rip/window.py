@@ -11,41 +11,41 @@ import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 
-from gi.repository import Adw, Gio, GLib, Gtk, Pango  # noqa: E402
+from gi.repository import Adw, Gio, GLib, Gtk, Pango
 
-from ready2rip.artwork.fetch import (  # noqa: E402
+from ready2rip.artwork.fetch import (
     ArtworkFetcher,
     ArtworkImage,
     ArtworkSourceOptions,
     apply_artwork_to_picture,
 )
-from ready2rip.disc.discid_util import DiscIdentifiers, identifiers_from_disc  # noqa: E402
-from ready2rip.disc.drive_info import DriveInfo, probe_drive  # noqa: E402
-from ready2rip.disc.drive_status import (  # noqa: E402
+from ready2rip.disc.discid_util import DiscIdentifiers, identifiers_from_disc
+from ready2rip.disc.drive_info import DriveInfo, probe_drive
+from ready2rip.disc.drive_status import (
     DriveStatus,
     DriveTrayState,
     eject_drive,
     query_drive_status,
 )
-from ready2rip.disc.probe import DiscInfo, probe_disc  # noqa: E402
-from ready2rip.metadata.cache import MetadataCache  # noqa: E402
-from ready2rip.metadata.providers import (  # noqa: E402
+from ready2rip.disc.probe import DiscInfo, probe_disc
+from ready2rip.metadata.cache import MetadataCache
+from ready2rip.metadata.providers import (
     AlbumMetadata,
     TrackMetadata,
     fetch_album_from_musicbrainz_link,
     lookup_metadata,
     parse_musicbrainz_release_id,
 )
-from ready2rip.metadata_dialog import MetadataPickerDialog  # noqa: E402
-from ready2rip.paths import track_meta_for  # noqa: E402
-from ready2rip.rip.engine import RipEngine, RipJob, RipProgress, RipResult, RipState  # noqa: E402
-from ready2rip.settings import (  # noqa: E402
+from ready2rip.metadata_dialog import MetadataPickerDialog
+from ready2rip.paths import track_meta_for
+from ready2rip.rip.engine import RipEngine, RipJob, RipProgress, RipResult, RipState
+from ready2rip.settings import (
     ARTWORK_SIZES,
     ENCODERS,
     SettingsStore,
     default_output_directory,
 )
-from ready2rip.theme import (  # noqa: E402
+from ready2rip.theme import (
     COLOR_SCHEME_ICONS,
     COLOR_SCHEME_LABELS,
     COLOR_SCHEMES,
@@ -54,8 +54,8 @@ from ready2rip.theme import (  # noqa: E402
     next_color_scheme,
     normalize_color_scheme,
 )
-from ready2rip.window_styles import install_window_styles  # noqa: E402
-
+from ready2rip.util import normalize_release_date, parse_disc_field
+from ready2rip.window_styles import install_window_styles
 
 _WINDOW_UI = str(Path(__file__).with_name('window.ui'))
 
@@ -194,7 +194,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         # Drive identity (udev/sysfs) is cheap — fill Technical → Drive immediately.
         try:
             self._rebuild_drive_rows(device, allow_optical=False)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         self._start_async_probe(device, reason='startup')
         return GLib.SOURCE_REMOVE
@@ -233,7 +233,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 # (TOC probe below already opens the drive once).
                 try:
                     drive = probe_drive(device, allow_optical=False)
-                except Exception as drive_exc:  # noqa: BLE001
+                except Exception as drive_exc:
                     log.debug('Drive identity probe failed: %s', drive_exc)
                     drive = DriveInfo(device=device, notes=[f'Probe failed: {drive_exc}'])
 
@@ -246,7 +246,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                     if info is not None and info.tracks:
                         # TOC-only IDs — never re-open the device here.
                         ids = identifiers_from_disc(info)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 log.exception('Background disc probe failed (%s)', reason)
                 err = str(exc)
 
@@ -279,7 +279,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                         )
                     if reason == 'startup':
                         self._start_drive_monitor()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     log.exception('Disc probe UI update failed (%s)', reason)
                     if reason == 'startup':
                         self._start_drive_monitor()
@@ -981,7 +981,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         )
         try:
             Gio.Settings.sync()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         row.set_subtitle(f'Configured for {device}')
 
@@ -1273,7 +1273,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                     folder_art = full
                     embed_art = self._artwork_embed or full
                     self._show_artwork(full)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         elif folder_art is not None and embed_art is None:
             self._prepare_embed_artwork()
@@ -1569,7 +1569,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         def work() -> None:
             try:
                 status = query_drive_status(device)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 import logging
 
                 logging.getLogger(__name__).debug('Drive poll failed: %s', exc)
@@ -1974,7 +1974,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             rows.append(('FreeDB disc ID', ids.freedb_id))
 
         total_sectors = sum(t.length_sectors for t in info.tracks)
-        minutes, seconds = divmod(int(round(total_sectors / 75.0)), 60)
+        minutes, seconds = divmod(round(total_sectors / 75.0), 60)
         rows.append(('Duration', f'{minutes}:{seconds:02d}'))
         rows.append(('Total sectors', str(total_sectors)))
 
@@ -2006,7 +2006,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if info is None or info.device != device:
             try:
                 info = probe_drive(device, allow_optical=allow_optical)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 info = DriveInfo(device=device, notes=[f'Probe failed: {exc}'])
             self._drive_info = info
 
@@ -2096,39 +2096,46 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self.album_edit_group.set_title('Album')
         self.album_edit_group.set_description(None)
 
-        self._album_title_row = Adw.EntryRow(title='Album')
-        self._album_title_row.connect('changed', self._on_album_field_changed)
-        self.album_edit_group.add(self._album_title_row)
-        self._album_field_rows.append(self._album_title_row)
+        title_row = Adw.EntryRow(title='Album')
+        title_row.connect('changed', self._on_album_field_changed)
+        self.album_edit_group.add(title_row)
+        self._album_field_rows.append(title_row)
+        self._album_title_row = title_row
 
-        self._album_artist_row = Adw.EntryRow(title='Album artist')
-        self._album_artist_row.set_tooltip_text(
+        artist_row = Adw.EntryRow(title='Album artist')
+        artist_row.set_tooltip_text(
             'Multiple artists: separate with a semicolon '
             '(e.g. Artist One; Artist Two)'
         )
-        self._album_artist_row.connect('changed', self._on_album_field_changed)
-        self.album_edit_group.add(self._album_artist_row)
-        self._album_field_rows.append(self._album_artist_row)
+        artist_row.connect('changed', self._on_album_field_changed)
+        self.album_edit_group.add(artist_row)
+        self._album_field_rows.append(artist_row)
+        self._album_artist_row = artist_row
 
-        self._album_date_row = Adw.EntryRow(title='Year')
-        self._album_date_row.set_tooltip_text('Release date (e.g. 1997 or 1997-03-01)')
-        self._album_date_row.connect('changed', self._on_album_field_changed)
-        self.album_edit_group.add(self._album_date_row)
-        self._album_field_rows.append(self._album_date_row)
+        date_row = Adw.EntryRow(title='Date')
+        date_row.set_tooltip_text(
+            'Release date as YYYY, YYYY-MM, or YYYY-MM-DD (e.g. 1997-03-01)'
+        )
+        date_row.connect('changed', self._on_album_field_changed)
+        self.album_edit_group.add(date_row)
+        self._album_field_rows.append(date_row)
+        self._album_date_row = date_row
 
-        self._album_label_row = Adw.EntryRow(title='Label')
-        self._album_label_row.connect('changed', self._on_album_field_changed)
-        self.album_edit_group.add(self._album_label_row)
-        self._album_field_rows.append(self._album_label_row)
+        label_row = Adw.EntryRow(title='Label')
+        label_row.connect('changed', self._on_album_field_changed)
+        self.album_edit_group.add(label_row)
+        self._album_field_rows.append(label_row)
+        self._album_label_row = label_row
 
-        self._album_disc_row = Adw.EntryRow(title='Disc')
-        self._album_disc_row.set_text('1/1')
-        self._album_disc_row.set_tooltip_text(
+        disc_row = Adw.EntryRow(title='Disc')
+        disc_row.set_text('1/1')
+        disc_row.set_tooltip_text(
             'Disc as N/M (e.g. 1/1 or 2/3) — DISCNUMBER / TPOS'
         )
-        self._album_disc_row.connect('changed', self._on_album_field_changed)
-        self.album_edit_group.add(self._album_disc_row)
-        self._album_field_rows.append(self._album_disc_row)
+        disc_row.connect('changed', self._on_album_field_changed)
+        self.album_edit_group.add(disc_row)
+        self._album_field_rows.append(disc_row)
+        self._album_disc_row = disc_row
 
     def _blank_album_for_disc(self, info: DiscInfo) -> AlbumMetadata:
         tracks = [
@@ -2170,7 +2177,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                     normalize_artists(album.artist) if album else ''
                 )
             if self._album_date_row is not None:
-                self._album_date_row.set_text(album.date if album else '')
+                self._album_date_row.set_text(
+                    normalize_release_date(album.date) if album else ''
+                )
             if self._album_label_row is not None:
                 self._album_label_row.set_text(album.label if album else '')
             disc_num = max(1, int(album.medium_position)) if album else 1
@@ -2191,7 +2200,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if self._album_artist_row is not None:
             album.artist = normalize_artists(self._album_artist_row.get_text())
         if self._album_date_row is not None:
-            album.date = self._album_date_row.get_text().strip()
+            album.date = normalize_release_date(self._album_date_row.get_text())
         if self._album_label_row is not None:
             album.label = self._album_label_row.get_text().strip()
         if self._album_disc_row is not None:
@@ -2697,7 +2706,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                     use_freedb=use_fb,
                 )
                 error = None
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 results = []
                 error = str(exc)
 
@@ -2744,7 +2753,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 )
             except ValueError as exc:
                 error = str(exc)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 error = str(exc)
 
             def done() -> bool:
@@ -2979,7 +2988,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             try:
                 image = ArtworkFetcher().fetch_best(album, sources=sources)
                 error = None
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 image = None
                 error = str(exc)
 

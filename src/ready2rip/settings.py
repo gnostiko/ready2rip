@@ -8,7 +8,6 @@ from pathlib import Path
 
 from gi.repository import Gio, GLib
 
-
 SCHEMA_ID = 'org.ready2rip.Ready2Rip'
 
 ENCODERS = (
@@ -39,14 +38,14 @@ def _get_bool(settings: Gio.Settings, key: str, default: bool) -> bool:
     """Read a boolean key; fall back if the installed schema is older."""
     try:
         return settings.get_boolean(key)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return default
 
 
 def _get_string(settings: Gio.Settings, key: str, default: str) -> str:
     try:
         return settings.get_string(key) or default
-    except Exception:  # noqa: BLE001
+    except Exception:
         return default
 
 

@@ -8,15 +8,15 @@ import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 
-from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gio, GLib, Gtk
 
-from ready2rip import config  # noqa: E402
-from ready2rip.drive_setup import needs_drive_setup  # noqa: E402
-from ready2rip.icons import register_application_icons  # noqa: E402
-from ready2rip.settings import SettingsStore  # noqa: E402
-from ready2rip.setup_dialog import DriveSetupDialog  # noqa: E402
-from ready2rip.theme import apply_color_scheme  # noqa: E402
-from ready2rip.window import Ready2RipWindow  # noqa: E402
+from ready2rip import config
+from ready2rip.drive_setup import needs_drive_setup
+from ready2rip.icons import register_application_icons
+from ready2rip.settings import SettingsStore
+from ready2rip.setup_dialog import DriveSetupDialog
+from ready2rip.theme import apply_color_scheme
+from ready2rip.window import Ready2RipWindow
 
 
 class Application(Adw.Application):
@@ -56,15 +56,11 @@ class Application(Adw.Application):
         GLib.set_prgname(config.APPLICATION_ID)
         # Apply saved light/dark/system preference before the first window paints.
         apply_color_scheme(self.store.get().color_scheme)
-        # Icons are nice-to-have; don't block startup if theme search is slow.
-        GLib.idle_add(self._deferred_register_icons)
-
-    def _deferred_register_icons(self) -> bool:
+        # Register icons before any window so GNOME can resolve the app icon.
         try:
             register_application_icons()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
-        return GLib.SOURCE_REMOVE
 
     def on_about(self, *_args) -> None:
         about = Adw.AboutDialog(

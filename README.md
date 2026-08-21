@@ -5,8 +5,6 @@
 A CD ripper focused on careful archival extraction with full cdparanoia,
 AccurateRip verification, modern metadata, and various tag options, utilizing GNOME design.
 
-<img width="2180" height="1482" alt="Screenshot From 2026-07-21 08-28-31" src="https://github.com/user-attachments/assets/ca236dff-7f8f-4b4b-89ca-8be169fcfa54" />
-
 
 ## What it does
 
@@ -15,9 +13,9 @@ AccurateRip verification, modern metadata, and various tag options, utilizing GN
 | Secure rip | Full cdparanoia, retries, optional test & copy |
 | AccurateRip | Online CRC database check after extraction |
 | Metadata | MusicBrainz + FreeDB-compatible (e.g. gnudb) |
-| Tags | mutagen — FLAC / MP3 / Opus / WAV |
+| Tags | mutagen - FLAC / MP3 / Opus / WAV |
 | ReplayGain | Track + album loudness tags |
-| Artwork | Cover Art Archive, Deezer and iTunes; optional embed sizes |
+| Artwork | Cover Art Archive, Deezer and iTunes, with optional embed sizes |
 | Logs & CUE | Detailed rip log and multi-file / image CUE sheets |
 | Drive setup | Sample offset, Accurate Stream, cache probe |
 
@@ -40,12 +38,12 @@ ready2rip aims for secure archival ripping on Linux via cdparanoia / libcdio-par
 | Step | Behaviour |
 |------|-----------|
 | Full paranoia | Overlap / jitter correction and multi-read repair (not burst mode by default) |
-| Never-skip + abort-on-skip | `--never-skip=200` and `-X` — keep re-reading imperfect data; don’t silently leave holes |
+| Never-skip + abort-on-skip | `--never-skip=200` and `-X` - keep re-reading imperfect data; don’t silently leave holes |
 | Sample offset | Applied at extract time (`-O`) when calibrated (read offset correction) |
 | Test and copy | Extract twice, compare CRC32; retry on mismatch; defeat drive audio cache between passes when needed |
 | AccurateRip | Verifies the offset-corrected audio against the public AR database |
 | Error logging | Parses cdparanoia progress into quality / fixups / skips / suspicious positions |
-| Burst fallback | Only if secure extract fails and the option is on — paranoia off (`-Z`), noted in the log |
+| Burst fallback | Only if secure extract fails and the option is on - paranoia off (`-Z`), noted in the log |
 
 **Copy Image** mode rips one continuous disc image (FLAC/WAV) instead of per-track files; enable **Write .cue file** for a matching image CUE. Per-track rips use a multi-file CUE (“left-out gaps”) when that option is on.
 
@@ -135,7 +133,7 @@ You mainly need:
 | Meson, Ninja, gcc | Build / AppImage packaging |
 
 ```bash
-pip3 install --user 'mutagen>=1.48.1'
+pip3 install --user mutagen
 ```
 
 Optional: **libdiscid** (ctypes) for DiscID helpers; pure-Python TOC IDs are used if it is missing.
@@ -243,10 +241,8 @@ ready2rip/
 
 ## Inspired by
 
+- [Exact Audio Copy](https://www.exactaudiocopy.de/)
 - [dBpoweramp](https://www.dbpoweramp.com/)
-- [fre:ac](https://www.freac.org/)
-- [ABCDE](https://abcde.einval.com/)
-- [Whipper](https://github.com/whipper-team/whipper)
 - [cyanrip](https://github.com/cyanreg/cyanrip)
 
 Thanks to those projects and their communities for defining what careful, accurate CD ripping looks like on every platform.

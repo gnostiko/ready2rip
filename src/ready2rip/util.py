@@ -68,9 +68,7 @@ def is_safe_http_url(url: str) -> bool:
     if parsed.username is not None or parsed.password is not None:
         return False
     host = (parsed.hostname or '').casefold()
-    if host in {'localhost', '127.0.0.1', '::1', '0.0.0.0'}:
-        return False
-    return True
+    return host not in {'localhost', '127.0.0.1', '::1', '0.0.0.0'}
 
 
 def ensure_path_under(base: Path, path: Path) -> Path:
@@ -135,5 +133,52 @@ def parse_disc_field(text: str) -> tuple[int, int]:
     except ValueError:
         return 1, 1
     return disc, disc
+
+
+def normalize_release_date(*candidates: str) -> str:
+    """Return the most complete release date among *candidates*.
+
+    Accepts ``YYYY``, ``YYYY-MM``, or ``YYYY-MM-DD`` (slashes allowed). Month and
+    day are zero-padded when present; missing parts are omitted (never filled
+    with ``00``). Prefers the candidate with the most precision.
+    """
+    best = ''
+    best_parts = -1
+    for raw in candidates:
+        parsed = _parse_partial_iso_date(raw)
+        if not parsed:
+            continue
+        parts = parsed.count('-') + 1
+        if parts > best_parts:
+            best = parsed
+            best_parts = parts
+    return best
+
+
+def _parse_partial_iso_date(raw: str) -> str:
+    text = (raw or '').strip()
+    if not text:
+        return ''
+    text = text.replace('/', '-').split('T', 1)[0].split(' ', 1)[0].strip()
+    match = re.match(
+        r'^(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?$',
+        text,
+    )
+    if not match:
+        return ''
+    year = match.group(1)
+    month = match.group(2)
+    day = match.group(3)
+    if month is None:
+        return year
+    month_i = int(month)
+    if month_i < 1 or month_i > 12:
+        return year
+    if day is None:
+        return f'{year}-{month_i:02d}'
+    day_i = int(day)
+    if day_i < 1 or day_i > 31:
+        return f'{year}-{month_i:02d}'
+    return f'{year}-{month_i:02d}-{day_i:02d}'
 
 

@@ -9,13 +9,13 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from ready2rip.accuraterip import (
-    AccurateRipDatabase,
     POPULAR_OFFSETS,
+    AccurateRipDatabase,
     compute_checksums_samples,
     disc_ids_from_info,
     fetch_database,
@@ -255,7 +255,7 @@ def calibrate_drive_offset(
                 on_progress=on_progress,
             )
             if result is not None:
-                off, conf, v1, v2 = result
+                off, conf, _v1, _v2 = result
                 offset_msg = (
                     f'Detected sample offset {off} '
                     f'(AccurateRip match on track {track.number}, confidence {conf})'
@@ -561,7 +561,7 @@ def save_calibration(
         from gi.repository import Gio
 
         Gio.Settings.sync()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     log.info(

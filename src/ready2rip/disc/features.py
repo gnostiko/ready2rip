@@ -81,7 +81,7 @@ def test_accurate_stream(
                 flush_drive_cache(device, disc, timeout=min(60, timeout))
                 _burst_span(device, span, b, timeout=timeout)
                 crc_b = _pcm_crc(b)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors += 1
                 last_detail = str(exc)
                 log.warning('Accurate Stream trial %s failed: %s', trial + 1, exc)
@@ -192,7 +192,7 @@ def _pcm_crc(wav_path: Path) -> int | None:
                 remaining -= take
                 crc = zlib.crc32(data, crc)
             return crc & 0xFFFFFFFF
-    except Exception:  # noqa: BLE001
+    except Exception:
         try:
             raw = wav_path.read_bytes()
             pcm = raw[44:] if len(raw) > 44 and raw[:4] == b'RIFF' else raw

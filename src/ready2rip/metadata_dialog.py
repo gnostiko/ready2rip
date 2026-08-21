@@ -8,9 +8,9 @@ import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 
-from gi.repository import Adw, Gtk  # noqa: E402
+from gi.repository import Adw, Gtk
 
-from ready2rip.metadata.providers import AlbumMetadata  # noqa: E402
+from ready2rip.metadata.providers import AlbumMetadata
 
 
 class MetadataPickerDialog(Adw.Dialog):

@@ -275,7 +275,7 @@ class RipLog:
             lines.append(f'Selected bitrate                : {self.opus_bitrate} kBit/s')
         else:
             lines.append('Selected bitrate                : uncompressed PCM')
-        lines.append(f'Add tags                        : Yes')
+        lines.append('Add tags                        : Yes')
         lines.append(f'Embed artwork                   : {"Yes" if self.embed_artwork else "No"}')
         lines.append(f'ReplayGain                      : {"Yes" if self.apply_replaygain else "No"}')
         lines.append(f'AccurateRip                     : {"Yes" if self.verify_accuraterip else "No"}')
@@ -520,7 +520,7 @@ def analyze_wav_for_log(
                     if a > peak:
                         peak = a
             crc &= 0xFFFFFFFF
-    except Exception:  # noqa: BLE001
+    except Exception:
         try:
             raw = wav_path.read_bytes()
             pcm = raw[44:] if len(raw) > 44 and raw[:4] == b'RIFF' else raw

@@ -21,10 +21,10 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Callable
 
 from ready2rip.accuraterip import AccurateRipConfidence, AccurateRipResult, AccurateRipVerifier
 from ready2rip.artwork.fetch import ArtworkFetcher, ArtworkImage
@@ -277,7 +277,6 @@ class RipEngine:
         burst_tracks: list[int] = []
         test_copy_mismatches: list[int] = []
         album_dir: Path | None = None
-        log_path: Path | None = None
         cover_path: Path | None = None
         htoa_ripped = False
         cache_result: DriveCacheResult | None = None
@@ -335,7 +334,7 @@ class RipEngine:
             path=album_dir,
         )
 
-        embed_art, folder_art, cover_path, art_notes = _prepare_artwork(
+        embed_art, _folder_art, cover_path, art_notes = _prepare_artwork(
             job, album_dir
         )
         notes.extend(art_notes)
@@ -544,11 +543,11 @@ class RipEngine:
                                     f'CUE sheet (multi-file, left-out gaps): '
                                     f'{cue_path.name}'
                                 )
-                    except Exception as cue_exc:  # noqa: BLE001
+                    except Exception as cue_exc:
                         log.warning('Failed to write multi-file CUE: %s', cue_exc)
                         notes.append(f'CUE sheet warning: {cue_exc}')
 
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.exception('Rip failed')
             return _finish_result(
                 success=False,
@@ -670,7 +669,7 @@ class RipEngine:
                 mode='secure',
                 sample_offset=job.sample_offset,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if job.burst_fallback:
                 try:
                     extract_htoa(
@@ -681,7 +680,7 @@ class RipEngine:
                         sample_offset=job.sample_offset,
                     )
                     notes.append('HTOA extracted in burst mode')
-                except Exception as exc2:  # noqa: BLE001
+                except Exception as exc2:
                     notes.append(f'HTOA extract failed: {exc2}')
                     if log_entry is not None:
                         log_entry.status = 'FAILED'
@@ -870,9 +869,8 @@ class RipEngine:
             return 'flac encoder not found'
         if fmt == 'mp3' and not shutil.which('lame'):
             return 'lame encoder not found'
-        if fmt == 'opus':
-            if not shutil.which('opusenc') and not shutil.which('ffmpeg'):
-                return 'opusenc or ffmpeg required for Opus'
+        if fmt == 'opus' and not shutil.which('opusenc') and not shutil.which('ffmpeg'):
+            return 'opusenc or ffmpeg required for Opus'
         return None
 
     @staticmethod
@@ -1456,7 +1454,7 @@ class RipEngine:
                         p.unlink(missing_ok=True)
                     except OSError:
                         pass
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 last_err = str(exc)
                 log.warning(
                     'Track %s attempt %s failed: %s',
@@ -1830,7 +1828,7 @@ class RipEngine:
                     f'(exit {secure_stats.exit_code})'
                 )
             return 'secure', secure_stats
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if self._cancelled:
                 raise
             secure_err = str(exc)
@@ -1852,7 +1850,7 @@ class RipEngine:
                         what,
                     )
                     return 'secure', secure_stats
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
 
         if not burst_fallback:
@@ -1876,7 +1874,7 @@ class RipEngine:
                 min_ratio=max(0.5, min_ratio * 0.85),
                 label='burst',
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise RuntimeError(
                 f'Secure and burst rip both failed for {what}. '
                 f'Secure: {secure_err}; burst: {exc}'
@@ -1968,7 +1966,7 @@ class RipEngine:
             return RipResult(success=False, error=f'Cannot create album folder: {exc}')
 
         report(RipState.PREPARING, 0.02, 'Preparing album folder (Copy Image)…', album_dir)
-        embed_art, folder_art, cover_path, art_notes = _prepare_artwork(job, album_dir)
+        embed_art, _folder_art, cover_path, art_notes = _prepare_artwork(job, album_dir)
         notes.extend(art_notes)
 
         # Image span: start at track 1 INDEX 01 unless HTOA is
@@ -1992,7 +1990,6 @@ class RipEngine:
         expected_bytes = 44 + total_sectors * 2352  # WAV header + CDDA
 
         basename = image_basename(job.album, disc)
-        wav_path = album_dir / f'{basename}.wav'
         out_path = album_dir / f'{basename}{ext}'
         cue_path = album_dir / f'{basename}.cue'
 
@@ -2141,8 +2138,10 @@ class RipEngine:
                             total_tracks=disc.track_count,
                         )
                         if job.embed_artwork and embed_art is not None:
-                            self._tags.embed_artwork(out_path, embed_art)
-                    except Exception as exc:  # noqa: BLE001
+                            self._tags.embed_artwork(
+                                out_path, embed_art.data, embed_art.mime
+                            )
+                    except Exception as exc:
                         notes.append(f'Image tagging warning: {exc}')
 
                 output_files: list[Path] = [out_path]
@@ -2168,7 +2167,7 @@ class RipEngine:
                 if rip_log is not None:
                     try:
                         log_path = rip_log.write(album_dir)
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:
                         notes.append(f'Rip log warning: {exc}')
 
                 done_label = out_path.name
@@ -2189,7 +2188,7 @@ class RipEngine:
                     cover_path=cover_path,
                     htoa_ripped=htoa_in_image,
                 )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.exception('Copy Image failed')
             return RipResult(
                 success=False,
@@ -2455,7 +2454,7 @@ class RipEngine:
                 self._proc.kill()
                 try:
                     self._proc.communicate(timeout=5)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
                 raise RuntimeError(f'{what} timed out after {timeout}s') from None
             code = self._proc.returncode if self._proc is not None else -1
@@ -2508,8 +2507,9 @@ def _prepare_artwork(
             # Re-encode non-JPEG as JPEG for a consistent cover.jpg when needed.
             if folder_art.mime not in ('image/jpeg', 'image/jpg') and cover_path.suffix == '.jpg':
                 try:
-                    from PIL import Image
                     import io
+
+                    from PIL import Image
 
                     with Image.open(io.BytesIO(folder_art.data)) as im:
                         if im.mode in ('RGBA', 'LA', 'P'):
@@ -2526,7 +2526,7 @@ def _prepare_artwork(
                             f'Folder cover written ({im.size[0]}×{im.size[1]})'
                         )
                         return embed_art, folder_art, cover_path, notes
-                except Exception:  # noqa: BLE001
+                except Exception:
                     cover_path = album_dir / 'cover.png'
         try:
             cover_path.write_bytes(folder_art.data)
@@ -2571,8 +2571,11 @@ def _retag_title(path: Path, title: str, *, track_number: int = 0) -> None:
             audio = MP3(path, ID3=ID3)
             if audio.tags is None:
                 audio.add_tags()
-            audio.tags.add(TIT2(encoding=3, text=title))
-            audio.tags.add(TRCK(encoding=3, text=str(track_number)))
+            tags = audio.tags
+            if tags is None:
+                return
+            tags.add(TIT2(encoding=3, text=title))
+            tags.add(TRCK(encoding=3, text=str(track_number)))
             audio.save()
         elif suffix in {'.opus', '.ogg'}:
             from mutagen.oggopus import OggOpus
@@ -2580,12 +2583,12 @@ def _retag_title(path: Path, title: str, *, track_number: int = 0) -> None:
 
             try:
                 audio = OggOpus(path)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 audio = OggVorbis(path)
             audio['TITLE'] = [title]
             audio['TRACKNUMBER'] = [str(track_number)]
             audio.save()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.warning('Could not retag HTOA title on %s: %s', path, exc)
 
 

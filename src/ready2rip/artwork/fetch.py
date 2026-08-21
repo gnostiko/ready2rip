@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ready2rip.metadata.providers import AlbumMetadata, USER_AGENT
+from ready2rip.metadata.providers import USER_AGENT, AlbumMetadata
 from ready2rip.util import is_safe_http_url, read_limited
 
 log = logging.getLogger(__name__)
@@ -456,11 +456,11 @@ def _close_http_error(exc: urllib.error.HTTPError) -> None:
     """Drain/close HTTPError to avoid ResourceWarning on CPython."""
     try:
         exc.read()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     try:
         exc.close()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
@@ -555,9 +555,7 @@ def _looks_like_image_url(url: str) -> bool:
         # Allow /front and /front-500 style image redirects.
         if re.search(r'/front(-\d+)?$', lower):
             return True
-        if re.search(r'/\d+\.(jpg|jpeg|png|webp)$', lower):
-            return True
-        return False
+        return bool(re.search(r'/\d+\.(jpg|jpeg|png|webp)$', lower))
     return True
 
 
@@ -581,14 +579,14 @@ def _image_size(data: bytes) -> tuple[int, int]:
 
         with Image.open(io.BytesIO(data)) as im:
             return im.size
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     try:
         import gi
 
         gi.require_version('GdkPixbuf', '2.0')
-        from gi.repository import GdkPixbuf, GLib
+        from gi.repository import GdkPixbuf
 
         loader = GdkPixbuf.PixbufLoader()
         loader.write(data)
@@ -596,7 +594,7 @@ def _image_size(data: bytes) -> tuple[int, int]:
         pixbuf = loader.get_pixbuf()
         if pixbuf:
             return pixbuf.get_width(), pixbuf.get_height()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return 0, 0
 
@@ -652,7 +650,7 @@ def texture_from_artwork(image: ArtworkImage, display_max: int = 0):
             return Gdk.Texture.new_from_bytes(GLib.Bytes.new(image.data))
         except GLib.Error:
             pass
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     pixbuf = pixbuf_from_artwork(
@@ -663,7 +661,7 @@ def texture_from_artwork(image: ArtworkImage, display_max: int = 0):
         if image.data:
             try:
                 return Gdk.Texture.new_from_bytes(GLib.Bytes.new(image.data))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 return None
         return None
 
@@ -678,7 +676,7 @@ def cover_texture_from_artwork(image: ArtworkImage, edge: int = 240):
     import gi
 
     gi.require_version('GdkPixbuf', '2.0')
-    from gi.repository import GdkPixbuf, GLib
+    from gi.repository import GdkPixbuf
 
     # Decode at a generous cap so crop source stays sharp on HiDPI.
     pixbuf = pixbuf_from_artwork(image, display_max=max(edge * 3, 1024))
@@ -691,8 +689,8 @@ def cover_texture_from_artwork(image: ArtworkImage, edge: int = 240):
 
     # Scale so the shorter side becomes *edge* (cover / crop-to-fill).
     scale = max(edge / w, edge / h)
-    nw = max(edge, int(round(w * scale)))
-    nh = max(edge, int(round(h * scale)))
+    nw = max(edge, round(w * scale))
+    nh = max(edge, round(h * scale))
     scaled = pixbuf.scale_simple(nw, nh, GdkPixbuf.InterpType.BILINEAR)
     if scaled is None:
         return None
@@ -705,7 +703,7 @@ def cover_texture_from_artwork(image: ArtworkImage, edge: int = 240):
         return _texture_from_pixbuf(scaled)
     try:
         cropped = cropped.copy()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return _texture_from_pixbuf(cropped)
 

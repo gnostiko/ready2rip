@@ -10,14 +10,14 @@ import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 
-from gi.repository import Adw, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, GLib, Gtk
 
-from ready2rip.drive_setup import (  # noqa: E402
+from ready2rip.drive_setup import (
     CalibrationResult,
     calibrate_drive_offset,
     save_calibration,
 )
-from ready2rip.settings import SettingsStore  # noqa: E402
+from ready2rip.settings import SettingsStore
 
 
 class DriveSetupDialog(Adw.Dialog):
@@ -296,7 +296,7 @@ class DriveSetupDialog(Adw.Dialog):
                         from gi.repository import Gio
 
                         Gio.Settings.sync()
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
 
             self._result_icon.set_from_icon_name('dialog-warning-symbolic')

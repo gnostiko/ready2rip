@@ -10,7 +10,7 @@ import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 
-from gi.repository import Adw, Gtk  # noqa: E402
+from gi.repository import Adw, Gtk
 
 ColorSchemeName = Literal['default', 'light', 'dark']
 COLOR_SCHEMES: tuple[ColorSchemeName, ...] = ('default', 'light', 'dark')
@@ -94,8 +94,8 @@ def chrome_raised_for_base(
             return b
         pct = (a1 - a0) / a0
         if b <= 0:
-            return max(0, min(255, int(round(pct * 255))))
-        return max(0, min(255, int(round(b * (1.0 + pct)))))
+            return max(0, min(255, round(pct * 255)))
+        return max(0, min(255, round(b * (1.0 + pct))))
 
     r, g, b = channel(br, r0, r1), channel(bg, g0, g1), channel(bb, b0, b1)
     return f'#{r:02x}{g:02x}{b:02x}'

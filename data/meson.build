@@ -14,6 +14,15 @@ appstream_file = configure_file(
   install_dir: datadir / 'metainfo',
 )
 
+# Application icons (optimized PNG sizes + compact scalable/symbolic SVGs).
+icon_sizes = ['16x16', '24x24', '32x32', '48x48', '64x64', '128x128', '256x256', '512x512']
+foreach size : icon_sizes
+  install_data(
+    'icons/hicolor' / size / 'apps' / 'org.ready2rip.Ready2Rip.png',
+    install_dir: datadir / 'icons/hicolor' / size / 'apps',
+  )
+endforeach
+
 install_data(
   'icons/hicolor/scalable/apps/org.ready2rip.Ready2Rip.svg',
   install_dir: datadir / 'icons/hicolor/scalable/apps',
