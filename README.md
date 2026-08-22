@@ -7,7 +7,7 @@ AccurateRip verification, modern metadata, and various tag options, utilizing GN
 
 <img width="2100" height="1500" alt="Screenshot From 2026-08-21 14-51-22" src="https://github.com/user-attachments/assets/73330a71-a8ce-40a8-bd83-053721e0b4f5" />
 <img width="2100" height="1500" alt="Screenshot From 2026-08-11 19-33-01" src="https://github.com/user-attachments/assets/e98ef01c-eebc-4c1b-99ae-830bcf459eae" />
-<img width="2100" height="1500" alt="Screenshot From 2026-08-11 19-34-48" src="https://github.com/user-attachments/assets/7f924b51-35e3-41d5-9fa0-415cb1b5c902" />
+<img width="2100" height="1500" alt="Screenshot From 2026-08-21 19-06-05" src="https://github.com/user-attachments/assets/1dccf77b-a5dd-4658-a089-8e22287f96e1" />
 
 
 
