@@ -124,10 +124,11 @@ mkdir -p "${APPDIR}/usr/bin" \
 # ---------------------------------------------------------------------------
 # Python deps
 # ---------------------------------------------------------------------------
-echo "==> pip install mutagen"
+echo "==> pip install mutagen pillow"
 python3 -m pip install --upgrade --no-compile \
   --target="${APPDIR}/usr/lib/python3/site-packages" \
-  "mutagen>=1.47"
+  "mutagen>=1.47" \
+  "pillow>=10.0.0"
 
 # ---------------------------------------------------------------------------
 # Bundle PyGObject (gi) from the build host

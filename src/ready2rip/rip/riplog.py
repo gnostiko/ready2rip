@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import array
 import platform
+import sys
 import wave
 import zlib
 from dataclasses import dataclass, field
@@ -494,6 +496,36 @@ class RipLog:
         return path
 
 
+_PCM_CHUNK_FRAMES = 131072  # 256 KiB of 16-bit stereo
+
+
+def _pcm_crc_from_raw(path: Path) -> str:
+    raw = path.read_bytes()
+    pcm = raw[44:] if len(raw) > 44 and raw[:4] == b'RIFF' else raw
+    return f'{zlib.crc32(pcm) & 0xFFFFFFFF:08x}'
+
+
+def wav_pcm_crc(wav_path: Path) -> str:
+    """PCM CRC32 of a CDDA WAV (no peak scan). Fast path for the test pass."""
+    crc = 0
+    try:
+        with wave.open(str(wav_path), 'rb') as wf:
+            remaining = wf.getnframes()
+            while remaining > 0:
+                take = min(_PCM_CHUNK_FRAMES, remaining)
+                data = wf.readframes(take)
+                if not data:
+                    break
+                remaining -= take
+                crc = zlib.crc32(data, crc)
+        return f'{crc & 0xFFFFFFFF:08x}'
+    except Exception:
+        try:
+            return _pcm_crc_from_raw(wav_path)
+        except OSError:
+            return ''
+
+
 def analyze_wav_for_log(
     wav_path: Path,
     _length_sectors: int = 0,
@@ -508,24 +540,25 @@ def analyze_wav_for_log(
                 crc = zlib.crc32(raw) & 0xFFFFFFFF
                 return f'{crc:08x}', None, None
             remaining = wf.getnframes()
-            chunk = 65536
             while remaining > 0:
-                take = min(chunk, remaining)
+                take = min(_PCM_CHUNK_FRAMES, remaining)
                 data = wf.readframes(take)
+                if not data:
+                    break
                 remaining -= take
                 crc = zlib.crc32(data, crc)
-                for i in range(0, len(data) - 1, 2):
-                    sample = int.from_bytes(data[i : i + 2], 'little', signed=True)
-                    a = abs(sample)
-                    if a > peak:
-                        peak = a
+                samples = array.array('h')
+                samples.frombytes(data)
+                if sys.byteorder != 'little':
+                    samples.byteswap()
+                if samples:
+                    local = max(abs(min(samples)), abs(max(samples)))
+                    if local > peak:
+                        peak = local
             crc &= 0xFFFFFFFF
     except Exception:
         try:
-            raw = wav_path.read_bytes()
-            pcm = raw[44:] if len(raw) > 44 and raw[:4] == b'RIFF' else raw
-            crc = zlib.crc32(pcm) & 0xFFFFFFFF
-            return f'{crc:08x}', None, None
+            return _pcm_crc_from_raw(wav_path), None, None
         except OSError:
             return '', None, None
 

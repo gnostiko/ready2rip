@@ -124,11 +124,12 @@
     </key>
 
     <key name="album-folder-template" type="s">
-      <default>'{album_artist}/{album}/{disc_folder}'</default>
+      <default>'{album_artist}/{dated_album}/{disc_folder}'</default>
       <summary>Album folder template under the output directory</summary>
       <description>
-        Placeholders: {album_artist}, {album}, {year}, {disc}, {totaldiscs},
-        {disc_folder} (CD1/CD2 only when total discs &gt; 1; empty otherwise).
+        Placeholders: {album_artist}, {album}, {dated_album} ((YYYY-MM-DD) - album),
+        {date}, {year}, {disc}, {totaldiscs}, {disc_folder} (CD1/CD2 only when
+        total discs &gt; 1; empty otherwise).
       </description>
     </key>
 

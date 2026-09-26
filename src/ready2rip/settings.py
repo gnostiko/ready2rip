@@ -33,6 +33,21 @@ _ARTWORK_SIZE_ALIASES = {
     720: 800,
 }
 
+DEFAULT_ALBUM_FOLDER_TEMPLATE = '{album_artist}/{dated_album}/{disc_folder}'
+_LEGACY_ALBUM_FOLDER_TEMPLATES = {
+    '{album_artist}/{album}/{disc_folder}',
+    '{album_artist}/{album}',
+    '{album_artist}/({date}) - {album}/{disc_folder}',
+    '{album_artist}/({date}) - {album}',
+}
+
+
+def _migrate_album_folder_template(template: str | None) -> str:
+    text = (template or '').strip()
+    if not text or text in _LEGACY_ALBUM_FOLDER_TEMPLATES:
+        return DEFAULT_ALBUM_FOLDER_TEMPLATE
+    return text
+
 
 def _get_bool(settings: Gio.Settings, key: str, default: bool) -> bool:
     """Read a boolean key; fall back if the installed schema is older."""
@@ -89,7 +104,7 @@ class AppSettings:
     auto_lookup_metadata: bool = True
     filename_template: str = '{track:02d} - {title}'
     # {disc_folder} expands to CD1, CD2, … only when total discs > 1.
-    album_folder_template: str = '{album_artist}/{album}/{disc_folder}'
+    album_folder_template: str = '{album_artist}/{dated_album}/{disc_folder}'
     verify_accuraterip: bool = True
     drive_sample_offset: int = 0
     drive_offset_configured: bool = False
@@ -169,8 +184,9 @@ class SettingsStore:
                 auto_lookup_metadata=s.get_boolean('auto-lookup-metadata'),
                 filename_template=s.get_string('filename-template')
                 or '{track:02d} - {title}',
-                album_folder_template=s.get_string('album-folder-template')
-                or '{album_artist}/{album}/{disc_folder}',
+                album_folder_template=_migrate_album_folder_template(
+                    s.get_string('album-folder-template')
+                ),
                 verify_accuraterip=s.get_boolean('verify-accuraterip'),
                 drive_sample_offset=s.get_int('drive-sample-offset'),
                 drive_offset_configured=s.get_boolean('drive-offset-configured'),
@@ -198,6 +214,12 @@ class SettingsStore:
 
         if not snap.output_directory.strip():
             snap.output_directory = default_output_directory()
+
+        # Persist album-folder default if the stored template was the old one.
+        if s is not None:
+            stored_folder = (s.get_string('album-folder-template') or '').strip()
+            if snap.album_folder_template != stored_folder:
+                s.set_string('album-folder-template', snap.album_folder_template)
 
         # Migrate removed artwork size presets (e.g. 720 → 800).
         allowed = {px for px, _label in ARTWORK_SIZES}

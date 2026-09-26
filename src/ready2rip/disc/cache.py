@@ -1,6 +1,3 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
-"""Drive audio-cache detection and defeat (whipper / cyanrip style)."""
-
 from __future__ import annotations
 
 import logging
@@ -16,8 +13,8 @@ from ready2rip.disc.probe import DiscInfo
 
 log = logging.getLogger(__name__)
 
-# Short segment used for cache probes (1 second of CDDA).
-_PROBE_SECTORS = 75
+# Short segment used for cache probes (~2 s of CDDA gives clearer timing).
+_PROBE_SECTORS = 150
 
 
 @dataclass
@@ -28,6 +25,7 @@ class DriveCacheResult:
     message: str
     first_ms: float = 0.0
     second_ms: float = 0.0
+    third_ms: float = 0.0
     crc_match: bool | None = None
 
 
@@ -60,20 +58,51 @@ def detect_drive_cache(
             message='No usable sector range for cache detection',
         )
 
+    first_ms = 0.0
+    second_ms = 0.0
+    third_ms = 0.0
+    crc_a: int | None = None
+    crc_b: int | None = None
+    crc_c: int | None = None
+
     with tempfile.TemporaryDirectory(prefix='ready2rip-cache-') as tmp:
         tmp_path = Path(tmp)
         a = tmp_path / 'a.wav'
         b = tmp_path / 'b.wav'
+        flush_tmp = tmp_path / 'flush.wav'
         try:
+            # Cold flush: read something far away so the first probe read must come from media.
+            flush_span = _flush_span(disc) or span
+            try:
+                _extract_span(device, flush_span, flush_tmp, timeout=timeout, quiet=True, burst=True)
+            except Exception:
+                pass  # best-effort cold start
+
+            # Give the drive a moment to actually perform the flush seek.
+            time.sleep(0.06)
+
             t0 = time.monotonic()
-            _extract_span(device, span, a, timeout=timeout)
+            _extract_span(device, span, a, timeout=timeout, burst=True)
             first_ms = (time.monotonic() - t0) * 1000.0
             crc_a = _pcm_crc(a)
 
+            # Immediate re-read of the exact same span — should hit audio cache if present.
             t1 = time.monotonic()
-            _extract_span(device, span, b, timeout=timeout)
+            _extract_span(device, span, b, timeout=timeout, burst=True)
             second_ms = (time.monotonic() - t1) * 1000.0
             crc_b = _pcm_crc(b)
+
+            # Optional third read for confirmation when it looks fast.
+            if crc_b is not None:
+                t2 = time.monotonic()
+                try:
+                    c = tmp_path / 'c.wav'
+                    _extract_span(device, span, c, timeout=timeout, burst=True)
+                    third_ms = (time.monotonic() - t2) * 1000.0
+                    crc_c = _pcm_crc(c)
+                except Exception:
+                    third_ms = 0.0
+                    crc_c = None
         except Exception as exc:
             log.warning('Drive cache detection failed: %s', exc)
             return DriveCacheResult(
@@ -82,33 +111,51 @@ def detect_drive_cache(
             )
 
     match = crc_a is not None and crc_a == crc_b and crc_a != 0
-    # Second pass much faster with identical data ⇒ audio cache.
-    caches = False
-    if match and first_ms > 80.0 and second_ms < first_ms * 0.35 and second_ms < 400.0:
-        caches = True
+    if match and crc_c is not None and crc_c != crc_a:
+        match = False
+
+    if not match:
+        # CRC mismatch means we can't trust the timing comparison.
+        # Don't claim "no cache" — leave it unknown so defeat can still be on by default.
         message = (
-            f'Drive caches audio (re-read {second_ms:.0f} ms vs '
-            f'{first_ms:.0f} ms, CRC match)'
-        )
-    elif match:
-        message = (
-            f'No clear audio cache (re-read {second_ms:.0f} ms vs '
-            f'{first_ms:.0f} ms, CRC match)'
-        )
-        caches = False
-    else:
-        message = (
-            f'Cache probe CRCs differ (unstable read or no cache); '
+            f'Cache probe CRCs differ (unstable read); '
             f'times {first_ms:.0f}/{second_ms:.0f} ms'
         )
-        caches = False
+        caches = None
+    else:
+        ratio = second_ms / first_ms if first_ms > 1.0 else 1.0
+        abs_speedup = first_ms - second_ms
 
-    log.info('Drive cache: %s', message)
+        # Heuristic tuned for both old mechanical drives and faster USB/Blu-ray ones.
+        # Requires first read to have taken some real time, and second to be substantially faster.
+        if (first_ms > 15.0 and second_ms < 400.0 and
+                (ratio <= 0.48 or (second_ms < 150.0 and abs_speedup >= 18.0))):
+            caches = True
+            message = (
+                f'Drive caches audio (re-read {second_ms:.0f} ms vs '
+                f'{first_ms:.0f} ms, CRC match)'
+            )
+        else:
+            message = (
+                f'No clear audio cache (re-read {second_ms:.0f} ms vs '
+                f'{first_ms:.0f} ms, CRC match)'
+            )
+            caches = False
+
+    log.info(
+        'Drive cache detection: %s (first=%.0f ms, second=%.0f ms, third=%.0f ms, CRC match=%s)',
+        message,
+        first_ms,
+        second_ms,
+        third_ms,
+        match,
+    )
     return DriveCacheResult(
         caches=caches,
         message=message,
         first_ms=first_ms,
         second_ms=second_ms,
+        third_ms=third_ms,
         crc_match=match,
     )
 
@@ -137,7 +184,11 @@ def flush_drive_cache(
     with tempfile.TemporaryDirectory(prefix='ready2rip-flush-') as tmp:
         out = Path(tmp) / 'flush.wav'
         try:
-            _extract_span(device, span, out, timeout=timeout, quiet=True)
+            # Burst seek+read is enough to evict cache and is much faster than
+            # a paranoia pass whose audio we immediately discard.
+            _extract_span(
+                device, span, out, timeout=timeout, quiet=True, burst=True
+            )
         except Exception as exc:
             log.debug('Cache flush read failed (non-fatal): %s', exc)
 
@@ -181,6 +232,7 @@ def _extract_span(
     *,
     timeout: int,
     quiet: bool = True,
+    burst: bool = False,
 ) -> None:
     from ready2rip.util import find_cdparanoia
 
@@ -192,9 +244,12 @@ def _extract_span(
         '-w',
         '-d',
         device,
-        # Single token — "-z" "20" is misread as track 20 by cdparanoia.
-        '--never-skip=20',
     ]
+    if burst:
+        cmd.append('-Z')  # raw burst — essential for reliable cache timing
+    else:
+        # Single token — "-z" "20" is misread as track 20 by cdparanoia.
+        cmd.append('--never-skip=20')
     if quiet:
         cmd.append('-q')
     cmd.extend([span, str(wav_path)])

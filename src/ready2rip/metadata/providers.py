@@ -19,8 +19,16 @@ log = logging.getLogger(__name__)
 
 USER_AGENT = 'ready2rip/0.4.1 ( https://github.com/gnostiko/ready2rip )'
 MB_BASE = 'https://musicbrainz.org/ws/2'
-# gnudb HTTP API (FreeDB-compatible)
-GNUDB_BASE = 'https://gnudb.gnudb.org/gnudb'
+# gnudb CDDB HTTP gateway (port 80). HTTPS on gnudb.gnudb.org is often refused.
+GNUDB_CGI_URLS = (
+    'http://gnudb.gnudb.org/~cddb/cddb.cgi',
+    'http://gnudb.org/~cddb/cddb.cgi',
+)
+# Last-resort FreeDB-style path used by some mirrors.
+GNUDB_REST_URLS = (
+    'http://gnudb.gnudb.org/gnudb',
+)
+GNUDB_BASE = GNUDB_REST_URLS[0]
 
 # MusicBrainz release UUID (with optional URL / release: prefix).
 _MB_RELEASE_ID_RE = re.compile(
@@ -312,65 +320,152 @@ class MusicBrainzProvider(MetadataProvider):
 
 
 class FreeDBProvider(MetadataProvider):
-    """FreeDB-compatible lookup via gnudb.org HTTP.
+    """FreeDB-compatible lookup via gnudb CDDB HTTP CGI.
 
     ``discid`` here is the 8-hex FreeDB ID, not the MusicBrainz DiscID.
+    Pass MusicBrainz-style TOC *offsets* (leadout first) when available so we
+    can issue a proper ``cddb query`` instead of probing every genre path.
     """
+
+    _CDDB_CATEGORIES = (
+        'rock',
+        'pop',
+        'blues',
+        'classical',
+        'country',
+        'data',
+        'folk',
+        'jazz',
+        'misc',
+        'newage',
+        'reggae',
+        'soundtrack',
+    )
 
     def __init__(
         self,
         base_url: str = GNUDB_BASE,
         user_agent: str = USER_AGENT,
         timeout: float = 15.0,
+        offsets: tuple[int, ...] = (),
+        track_count: int = 0,
     ) -> None:
         self.base_url = base_url.rstrip('/')
         self.user_agent = user_agent
         self.timeout = timeout
+        self.offsets = offsets
+        self.track_count = track_count
+        self._cgi_url: str | None = None
+        self._network_dead = False
 
     def lookup_by_discid(self, discid: str) -> list[AlbumMetadata]:
         """Look up FreeDB ID. Also accepts ``category/id`` paths."""
         if not discid:
             return []
 
-        # If we only have the ID, try common categories via query.
-        if '/' not in discid:
-            return self._lookup_id_only(discid)
+        if '/' in discid:
+            return self._fetch_rest_entry(discid)
 
-        return self._fetch_entry(discid)
+        albums = self._cddb_query_and_read(discid)
+        if albums or self._network_dead:
+            return albums
+        return self._lookup_id_only(discid)
+
+    def _cddb_hello(self) -> str:
+        from ready2rip import config
+
+        version = getattr(config, 'APPLICATION_VERSION', '0.4.1')
+        return f'anonymous localhost {config.APPLICATION_NAME} {version}'
+
+    def _cddb_query_and_read(self, freedb_id: str) -> list[AlbumMetadata]:
+        if len(self.offsets) < 2:
+            return []
+        ntracks = self.track_count or (len(self.offsets) - 1)
+        if ntracks < 1:
+            return []
+        starts = [int(o) for o in self.offsets[1 : 1 + ntracks]]
+        leadout = int(self.offsets[0])
+        if not starts or leadout <= starts[-1]:
+            return []
+        total_sec = max(1, leadout // 75)
+        cmd = (
+            f'cddb query {freedb_id} {ntracks} '
+            f'{" ".join(str(s) for s in starts)} {total_sec}'
+        )
+        text = self._cddb_request(cmd)
+        if not text:
+            return []
+
+        matches = _parse_cddb_query_matches(text, fallback_id=freedb_id)
+        albums: list[AlbumMetadata] = []
+        for category, disc_id in matches[:3]:
+            body = self._cddb_request(f'cddb read {category} {disc_id}')
+            album = _parse_cddb_entry(body or '', source='freedb')
+            if album is not None:
+                albums.append(album)
+        return albums
+
+    def _cddb_request(self, cmd: str) -> str | None:
+        if self._network_dead:
+            return None
+        params = {
+            'cmd': cmd,
+            'hello': self._cddb_hello(),
+            'proto': '6',
+        }
+        query = urllib.parse.urlencode(params)
+        urls = ((self._cgi_url,) if self._cgi_url else GNUDB_CGI_URLS)
+        last_exc: Exception | None = None
+        for base in urls:
+            if not is_safe_http_url(base):
+                continue
+            url = f'{base}?{query}'
+            text, exc = self._http_get_text(url)
+            if text is not None:
+                self._cgi_url = base
+                return text
+            last_exc = exc
+            if _is_connection_refused(exc):
+                continue
+        if last_exc is not None:
+            self._network_dead = _is_connection_refused(last_exc)
+            log.warning('gnudb request failed: %s', last_exc)
+        return None
 
     def _lookup_id_only(self, freedb_id: str) -> list[AlbumMetadata]:
-        # gnudb cddb query protocol over HTTP is awkward; try genre paths.
-        categories = (
-            'rock',
-            'pop',
-            'blues',
-            'classical',
-            'country',
-            'data',
-            'folk',
-            'jazz',
-            'misc',
-            'newage',
-            'reggae',
-            'soundtrack',
-        )
         results: list[AlbumMetadata] = []
-        for category in categories:
-            found = self._fetch_entry(f'{category}/{freedb_id}')
+        for category in self._CDDB_CATEGORIES:
+            if self._network_dead:
+                break
+            found = self._fetch_rest_entry(f'{category}/{freedb_id}')
             results.extend(found)
             if results:
-                # One hit is enough for first pass; still return all found in this category.
                 break
         return results
 
-    def _fetch_entry(self, path: str) -> list[AlbumMetadata]:
+    def _fetch_rest_entry(self, path: str) -> list[AlbumMetadata]:
         # Keep path relative; never allow scheme injection via FreeDB id.
         safe = path.lstrip('/')
         if '..' in safe.split('/') or safe.startswith('http'):
             return []
-        url = f'{self.base_url}/{safe}'
-        if not is_safe_http_url(url):
-            return []
+        last_exc: Exception | None = None
+        for base in GNUDB_REST_URLS:
+            url = f'{base.rstrip("/")}/{safe}'
+            if not is_safe_http_url(url):
+                continue
+            text, exc = self._http_get_text(url)
+            if text is not None:
+                album = _parse_cddb_entry(text, source='freedb')
+                return [album] if album else []
+            last_exc = exc
+            if _is_connection_refused(exc):
+                self._network_dead = True
+                break
+        if last_exc is not None:
+            log.warning('gnudb request failed: %s', last_exc)
+        return []
+
+    def _http_get_text(self, url: str) -> tuple[str | None, Exception | None]:
         request = urllib.request.Request(
             url,
             headers={'User-Agent': self.user_agent},
@@ -380,18 +475,15 @@ class FreeDBProvider(MetadataProvider):
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 final = response.geturl()
                 if final and not is_safe_http_url(final):
-                    return []
+                    return None, ValueError('unsafe redirect')
                 text = read_limited(response).decode('utf-8', errors='replace')
+                return text, None
         except urllib.error.HTTPError as exc:
             if exc.code != 404:
                 log.debug('gnudb HTTP %s for %s', exc.code, url)
-            return []
+            return None, exc
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
-            log.warning('gnudb request failed: %s', exc)
-            return []
-
-        album = _parse_cddb_entry(text, source='freedb')
-        return [album] if album else []
+            return None, exc
 
 
 def _artist_credit(credit: Any) -> str:
@@ -420,6 +512,49 @@ def _artist_credit(credit: Any) -> str:
         if name:
             names.append(str(name).strip())
     return join_artists(names)
+
+
+def _is_connection_refused(exc: Exception | None) -> bool:
+    if exc is None:
+        return False
+    reason = getattr(exc, 'reason', exc)
+    errno = getattr(reason, 'errno', None)
+    if errno == 111:
+        return True
+    text = str(exc).casefold()
+    return 'connection refused' in text or 'errno 111' in text
+
+
+def _parse_cddb_query_matches(
+    text: str,
+    *,
+    fallback_id: str,
+) -> list[tuple[str, str]]:
+    """Parse ``cddb query`` status lines into ``(category, discid)`` pairs."""
+    matches: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#') or line == '.':
+            continue
+        parts = line.split()
+        if parts and parts[0].isdigit():
+            parts = parts[1:]
+        if len(parts) < 2:
+            continue
+        category, disc_id = parts[0].lower(), parts[1].lower()
+        if not re.fullmatch(r'[a-z]+', category):
+            continue
+        if not re.fullmatch(r'[0-9a-f]{8}', disc_id):
+            disc_id = fallback_id.lower()
+            if not re.fullmatch(r'[0-9a-f]{8}', disc_id):
+                continue
+        key = (category, disc_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        matches.append(key)
+    return matches
 
 
 def _parse_cddb_entry(text: str, source: str = 'freedb') -> AlbumMetadata | None:
@@ -530,6 +665,8 @@ def lookup_metadata(
     *,
     use_musicbrainz: bool = True,
     use_freedb: bool = True,
+    offsets: tuple[int, ...] = (),
+    track_count: int = 0,
 ) -> list[AlbumMetadata]:
     """Query enabled providers and return combined candidates (MB first)."""
     results: list[AlbumMetadata] = []
@@ -554,7 +691,12 @@ def lookup_metadata(
 
     if use_freedb and freedb_id:
         try:
-            _add(FreeDBProvider().lookup_by_discid(freedb_id))
+            _add(
+                FreeDBProvider(
+                    offsets=offsets,
+                    track_count=track_count,
+                ).lookup_by_discid(freedb_id)
+            )
         except Exception:
             log.exception('FreeDB lookup failed')
 

@@ -41,6 +41,7 @@ from ready2rip.paths import track_meta_for
 from ready2rip.rip.engine import RipEngine, RipJob, RipProgress, RipResult, RipState
 from ready2rip.settings import (
     ARTWORK_SIZES,
+    DEFAULT_ALBUM_FOLDER_TEMPLATE,
     ENCODERS,
     SettingsStore,
     default_output_directory,
@@ -530,7 +531,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._folder_template_row = Adw.EntryRow(title='Album folder')
         self._folder_template_row.set_text(settings.album_folder_template)
         self._folder_template_row.set_tooltip_text(
-            '{album_artist}/{album}/{disc_folder} · {year}, {disc}, {totaldiscs}'
+            '{album_artist}/{dated_album}/{disc_folder} · {date}, {year}, {disc}, {totaldiscs}'
         )
         self._folder_template_row.connect(
             'changed', self._on_folder_template_changed
@@ -946,7 +947,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _on_folder_template_changed(self, row: Adw.EntryRow) -> None:
         self.store.update(
             album_folder_template=row.get_text().strip()
-            or '{album_artist}/{album}/{disc_folder}'
+            or DEFAULT_ALBUM_FOLDER_TEMPLATE
         )
 
     def _on_filename_changed(self, row: Adw.EntryRow) -> None:
@@ -2059,13 +2060,14 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._drive_rows.append(astream_row)
 
         if settings.drive_cache_configured:
-            cache_sub = (
-                'Yes — defeat between test and copy'
-                if settings.drive_caches_audio
-                else 'No clear audio cache'
-            )
             if settings.drive_cache_message:
-                cache_sub = f'{cache_sub}. {settings.drive_cache_message}'
+                cache_sub = settings.drive_cache_message
+            else:
+                cache_sub = (
+                    'Yes — defeat between test and copy'
+                    if settings.drive_caches_audio
+                    else 'No clear audio cache'
+                )
         else:
             cache_sub = 'Not measured — run Drive setup'
         cache_row = Adw.ActionRow(title='Audio cache', subtitle=cache_sub)
@@ -2694,6 +2696,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
         mb_id = self._ids.musicbrainz_discid
         freedb_id = self._ids.freedb_id
+        offsets = self._ids.offsets
+        track_count = self._ids.last_track
         use_mb = settings.use_musicbrainz
         use_fb = settings.use_freedb
 
@@ -2704,6 +2708,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                     freedb_id,
                     use_musicbrainz=use_mb,
                     use_freedb=use_fb,
+                    offsets=offsets,
+                    track_count=track_count,
                 )
                 error = None
             except Exception as exc:

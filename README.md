@@ -134,11 +134,12 @@ You mainly need:
 | Python 3 + **PyGObject** (Gtk 4, Adw 1) | UI |
 | **cdparanoia** or **cd-paranoia** | TOC + secure extract |
 | **mutagen** | Tags / ReplayGain writing |
+| **Pillow** | Cover-art JPEG conversion |
 | **flac**, **lame**, **ffmpeg** / **opusenc** | Encoding (and RG analysis where needed) |
 | Meson, Ninja, gcc | Build / AppImage packaging |
 
 ```bash
-pip3 install --user mutagen
+pip3 install --user mutagen pillow
 ```
 
 Optional: **libdiscid** (ctypes) for DiscID helpers; pure-Python TOC IDs are used if it is missing.

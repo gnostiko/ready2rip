@@ -67,6 +67,7 @@ def build_output_paths(
     album_artist = 'Unknown Artist'
     album_title = 'Unknown Album'
     year = ''
+    date = ''
     track_title = f'Track {track_number:02d}'
     track_artist = album_artist
 
@@ -76,7 +77,8 @@ def build_output_paths(
         album_artist = album.artist or album_artist
         album_title = album.title or album_title
         if album.date:
-            year = album.date[:4] if len(album.date) >= 4 else album.date
+            date = album.date.strip()
+            year = date[:4] if len(date) >= 4 else date
         disc = max(1, int(album.medium_position or 1))
         total_discs = max(1, int(album.medium_count or 1))
         meta = track_meta_for(album, track_number)
@@ -95,6 +97,11 @@ def build_output_paths(
         'album_artist': sanitize_component(album_artist),
         'album': sanitize_component(album_title),
         'year': sanitize_component(year, fallback=''),
+        'date': sanitize_component(date, fallback=''),
+        # (YYYY-MM-DD) - Album when a date is known; otherwise just the album.
+        'dated_album': sanitize_component(
+            f'({date}) - {album_title}' if date else album_title
+        ),
         'track': track_number,
         'title': sanitize_component(track_title),
         'artist': sanitize_component(track_artist),

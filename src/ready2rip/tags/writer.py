@@ -427,13 +427,13 @@ class TagWriter:
         audio = WAVE(path)
         if audio.tags is None:
             audio.add_tags()
+        tags = audio.tags
         # INFO chunk style via mutagen id3-like if present
         try:
             from mutagen.id3 import ID3, TALB, TDRC, TIT2, TPE1, TPE2, TPOS, TRCK
 
-            if not isinstance(audio.tags, ID3):
+            if tags is None or not isinstance(tags, ID3):
                 return
-            tags = audio.tags
             tags.add(TIT2(encoding=3, text=title))
             tags.add(TPE1(encoding=3, text=split_artists(artist) or [artist]))
             tags.add(TALB(encoding=3, text=album))
