@@ -21,7 +21,6 @@ log = logging.getLogger(__name__)
 
 CAA_RELEASE = 'https://coverartarchive.org/release/{mbid}'
 ITUNES_SEARCH = 'https://itunes.apple.com/search'
-DEEZER_SEARCH_ALBUM = 'https://api.deezer.com/search/album'
 
 
 @dataclass
@@ -50,11 +49,10 @@ class ArtworkSourceOptions:
 
     itunes: bool = True
     cover_art_archive: bool = True
-    deezer: bool = True
 
     @property
     def any_enabled(self) -> bool:
-        return self.itunes or self.cover_art_archive or self.deezer
+        return self.itunes or self.cover_art_archive
 
 
 class ArtworkFetcher:
@@ -63,8 +61,7 @@ class ArtworkFetcher:
     Candidates (when enabled):
     1. Apple Music / iTunes (high-res URL rewrite)
     2. Cover Art Archive original (MusicBrainz release)
-    3. Deezer album search (cover_xl / upscaled CDN)
-    4. Any direct cover_url already on the album record
+    3. Any direct cover_url already on the album record
     """
 
     def __init__(self, user_agent: str = USER_AGENT, timeout: float = 30.0) -> None:
@@ -89,11 +86,6 @@ class ArtworkFetcher:
             caa = self.fetch_from_cover_art_archive(album.musicbrainz_release_id)
             if caa is not None:
                 candidates.append(caa)
-
-        if opts.deezer:
-            deezer = self.fetch_from_deezer(album.artist, album.title)
-            if deezer is not None:
-                candidates.append(deezer)
 
         if album.cover_url and _looks_like_image_url(album.cover_url):
             direct = self._download_image(album.cover_url, source='direct')
@@ -240,67 +232,6 @@ class ArtworkFetcher:
         if image is None and hires != art_url:
             image = self._download_image(art_url, source='itunes')
         return image
-
-    def fetch_from_deezer(self, artist: str, album: str) -> ArtworkImage | None:
-        """Search Deezer catalog and download the largest available cover."""
-        term_parts = []
-        if artist.strip():
-            term_parts.append(f'artist:"{artist.strip()}"')
-        if album.strip():
-            term_parts.append(f'album:"{album.strip()}"')
-        if not term_parts:
-            return None
-        # Fallback plain search if structured query is too strict.
-        queries = [
-            ' '.join(term_parts),
-            ' '.join(p for p in (artist, album) if p).strip(),
-        ]
-
-        match: dict[str, Any] | None = None
-        for q in queries:
-            if not q:
-                continue
-            params = {'q': q, 'limit': '12'}
-            url = f'{DEEZER_SEARCH_ALBUM}?{urllib.parse.urlencode(params)}'
-            payload = self._get_json(url)
-            if not payload:
-                continue
-            results = payload.get('data') or []
-            if not results:
-                continue
-            match = _best_deezer_result(results, artist, album)
-            if match is not None:
-                break
-
-        if match is None:
-            return None
-
-        # Prefer cover_xl (typically 1000×1000); try CDN upscales next.
-        urls: list[str] = []
-        for key in ('cover_xl', 'cover_big', 'cover_medium', 'cover'):
-            u = match.get(key)
-            if u and isinstance(u, str):
-                urls.append(u)
-        # Deezer CDN paths often include 1000x1000 — try larger variants.
-        expanded: list[str] = []
-        for u in urls:
-            expanded.append(u)
-            for size in (1400, 1200, 1000):
-                rewritten = re.sub(
-                    r'/\d+x\d+(?:-[^/]*)?(\.(?:jpg|jpeg|png|webp))',
-                    f'/{size}x{size}\\1',
-                    u,
-                    count=1,
-                    flags=re.IGNORECASE,
-                )
-                if rewritten != u and rewritten not in expanded:
-                    expanded.append(rewritten)
-
-        for art_url in expanded:
-            image = self._download_image(art_url, source='deezer')
-            if image is not None:
-                return image
-        return None
 
     def resize(self, image: ArtworkImage, max_edge: int) -> ArtworkImage:
         """Scale so the longest edge is at most *max_edge* (0 = original)."""
@@ -478,37 +409,6 @@ def itunes_hires_url(url: str, size: int = 10000) -> str:
         flags=re.IGNORECASE,
     )
     return rewritten
-
-
-def _best_deezer_result(
-    results: list[dict[str, Any]],
-    artist: str,
-    album: str,
-) -> dict[str, Any] | None:
-    if not results:
-        return None
-
-    artist_l = artist.casefold().strip()
-    album_l = album.casefold().strip()
-
-    def score(item: dict[str, Any]) -> tuple[int, int, int]:
-        ia = ((item.get('artist') or {}).get('name') or '').casefold()
-        ic = (item.get('title') or '').casefold()
-        if artist_l and artist_l == ia:
-            artist_match = 2
-        elif artist_l and (artist_l in ia or ia in artist_l):
-            artist_match = 1
-        else:
-            artist_match = 0
-        if album_l and album_l == ic:
-            album_match = 2
-        elif album_l and (album_l in ic or ic in album_l):
-            album_match = 1
-        else:
-            album_match = 0
-        return (artist_match + album_match, album_match, artist_match)
-
-    return max(results, key=score)
 
 
 def _best_itunes_result(

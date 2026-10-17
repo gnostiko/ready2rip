@@ -14,7 +14,7 @@ from ready2rip.metadata.providers import AlbumMetadata
 
 
 class MetadataPickerDialog(Adw.Dialog):
-    """Let the user choose one album match from MusicBrainz / FreeDB."""
+    """Let the user choose one album match from MusicBrainz / gnudb."""
 
     def __init__(self, candidates: list[AlbumMetadata], **kwargs) -> None:
         super().__init__(**kwargs)
@@ -28,11 +28,13 @@ class MetadataPickerDialog(Adw.Dialog):
         toolbar = Adw.ToolbarView()
         header = Adw.HeaderBar()
         cancel = Gtk.Button(label='Cancel')
+        cancel.add_css_class('flat')
         cancel.connect('clicked', lambda *_: self.close())
         header.pack_start(cancel)
 
         apply_btn = Gtk.Button(label='Use selected')
         apply_btn.add_css_class('suggested-action')
+        apply_btn.add_css_class('pill')
         apply_btn.connect('clicked', self._on_apply)
         header.pack_end(apply_btn)
         toolbar.add_top_bar(header)
@@ -88,6 +90,8 @@ class MetadataPickerDialog(Adw.Dialog):
         bits = [album.artist or 'Unknown Artist']
         if album.date:
             bits.append(album.date[:4] if len(album.date) >= 4 else album.date)
+        if album.genre:
+            bits.append(album.genre)
         if album.country:
             bits.append(album.country)
         if album.tracks:

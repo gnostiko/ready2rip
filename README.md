@@ -5,9 +5,11 @@
 A CD ripper focused on careful archival extraction with full cdparanoia,
 AccurateRip verification, modern metadata, and various tag options, utilizing GNOME design.
 
-<img width="2100" height="1500" alt="Screenshot From 2026-08-21 19-06-05" src="https://github.com/user-attachments/assets/1dccf77b-a5dd-4658-a089-8e22287f96e1" />
-<img width="2100" height="1500" alt="Screenshot From 2026-08-11 19-33-01" src="https://github.com/user-attachments/assets/e98ef01c-eebc-4c1b-99ae-830bcf459eae" />
-<img width="1050" height="750" alt="Screenshot From 2026-09-25 23-49-10" src="https://github.com/user-attachments/assets/dffc0654-905e-45ef-9232-bb1e4bd4f147" />
+<img width="1024" height="731" alt="Main window with album art and playback" src="docs/screenshots/01-main-window.png" />
+<img width="1024" height="731" alt="Choose release dialog from MusicBrainz" src="docs/screenshots/02-choose-release.png" />
+<img width="1024" height="731" alt="Editable track list" src="docs/screenshots/03-tracks.png" />
+<img width="1024" height="731" alt="Metadata settings" src="docs/screenshots/06-metadata-settings.png" />
+<img width="1024" height="731" alt="Ripping in progress" src="docs/screenshots/04-ripping.png" />
 
 
 
@@ -18,9 +20,9 @@ AccurateRip verification, modern metadata, and various tag options, utilizing GN
 | Secure rip | Full cdparanoia, retries, optional test & copy |
 | AccurateRip | Online CRC database check after extraction |
 | Metadata | MusicBrainz + FreeDB-compatible (e.g. gnudb) |
-| Tags | mutagen - FLAC / MP3 / Opus / WAV |
+| Tags | mutagen - FLAC / MP3 / AAC (M4A) / Opus / WAV |
 | ReplayGain | Track + album loudness tags |
-| Artwork | Cover Art Archive, Deezer and iTunes, with optional embed sizes |
+| Artwork | Cover Art Archive and iTunes, with optional embed sizes |
 | Logs & CUE | Detailed rip log and multi-file / image CUE sheets |
 | Drive setup | Sample offset, Accurate Stream, cache probe |
 
@@ -32,7 +34,7 @@ AccurateRip verification, modern metadata, and various tag options, utilizing GN
 2. **Insert an audio CD.** ready2rip detects the disc, reads the TOC, and shows tracks.
 3. **Drive setup** (first run, or when you change drives): calibrate **sample offset**, measure Accurate Stream / cache support.
 4. **Metadata** (optional): auto-lookup when a disc is detected, or open **Lookup** → **By disc ID** and pick a release. If the wrong album is matched, use **Lookup** → **MusicBrainz link…** and paste a `musicbrainz.org/release/…` URL (or release UUID). Edit album/track fields if needed. Cover art can be fetched, chosen from disk, or cleared.
-5. **Rip options** (sidebar): choose encoder, test & copy, CUE/log, Copy Image, HTOA, etc. Defaults already match a secure archival setup.
+5. **Settings**: choose encoder, test & copy, CUE/log, Copy Image, HTOA, etc. Defaults already match a secure archival setup.
 6. Press **Rip CD**. Progress appears in the bottom panel (status line shows track detail).
 7. Files land under your **output folder** using the album/track templates. Open the folder to find audio, optional `cover`, **`.log`**, and **`.cue`**.
 
@@ -42,19 +44,19 @@ ready2rip aims for secure archival ripping on Linux via cdparanoia / libcdio-par
 
 | Step | Behaviour |
 |------|-----------|
-| Full paranoia | Overlap / jitter correction and multi-read repair (not burst mode by default) |
-| Never-skip + abort-on-skip | `--never-skip=200` and `-X` - keep re-reading imperfect data; don’t silently leave holes |
+| Full paranoia | Overlap / jitter correction and multi-read repair (secure mode; not burst by default) |
+| Never-skip + abort-on-skip | `--never-skip=500`, `-X`, and `-o 8` — keep re-reading imperfect data; force overlap search; don’t silently leave holes |
 | Sample offset | Applied at extract time (`-O`) when calibrated (read offset correction) |
-| Test and copy | Extract twice, compare CRC32; retry on mismatch; defeat drive audio cache between passes when needed |
+| Test and copy | Extract twice, compare CRC32; up to 3 secure retries on mismatch; defeat drive audio cache between passes; unmatched tracks fail the rip |
 | AccurateRip | Verifies the offset-corrected audio against the public AR database |
 | Error logging | Parses cdparanoia progress into quality / fixups / skips / suspicious positions |
-| Burst fallback | Only if secure extract fails and the option is on - paranoia off (`-Z`), noted in the log |
+| Burst fallback | Off by default. Optional insecure `-Z` recovery after secure retries fail — noted in the log |
 
 **Copy Image** mode rips one continuous disc image (FLAC/WAV) instead of per-track files; enable **Write .cue file** for a matching image CUE. Per-track rips use a multi-file CUE (“left-out gaps”) when that option is on.
 
 ---
 
-## Options (Rip options sidebar)
+## Options
 
 ### Paths and naming
 
@@ -69,10 +71,11 @@ ready2rip aims for secure archival ripping on Linux via cdparanoia / libcdio-par
 
 | Option | Notes |
 |--------|--------|
-| **Encoder** | FLAC, MP3, Opus, or WAV |
+| **Encoder** | FLAC, MP3, AAC (M4A), Opus, or WAV |
 | **FLAC compression** | 0 (fast) … 8 (smallest); default 5 |
-| **MP3 bitrate** | CBR (e.g. 320 kbps) |
-| **Opus bitrate** | kbps (typical 96–256) |
+| **MP3 quality** | LAME V0–V5 (VBR) or 128–320 kbps CBR |
+| **AAC quality** | FDK VBR 1–5 or 128–320 kbps CBR (libfdk_aac when available) |
+| **Opus bitrate** | VBR kbps (typical 96–256) |
 
 Copy Image forces a lossless container (FLAC or WAV; other formats fall back to FLAC).
 
@@ -80,11 +83,11 @@ Copy Image forces a lossless container (FLAC or WAV; other formats fall back to 
 
 | Option | Default | Notes |
 |--------|---------|--------|
-| **Test and copy** | On | Two secure passes; matching CRCs required |
+| **Test and copy** | On | Two secure passes; matching CRCs required (retries on mismatch) |
 | **Copy Image** | Off | One continuous image instead of separate tracks |
 | **Pregap / HTOA** | On | Ignore ≤2s track-1 pause; longer non-silent pregap → track `00`; track 1 starts at index 01 |
 | **AccurateRip** | On | Online CRC verification |
-| **Burst fallback** | On | Last resort if secure rip fails |
+| **Burst fallback** | Off | Optional insecure `-Z` recovery after secure retries fail |
 | **Write rip log** | On | Detailed status log in the album folder |
 | **Write .cue file** | On | Multi-file CUE, or image CUE when Copy Image is on |
 | **Auto-rip** | Off | Start rip shortly after a new disc is detected |
@@ -103,7 +106,7 @@ Copy Image forces a lossless container (FLAC or WAV; other formats fall back to 
 |--------|--------|
 | **Look up automatically** | Query when a disc is detected |
 | **MusicBrainz / FreeDB** | Sources for lookup |
-| **Download artwork** | iTunes, Cover Art Archive, Deezer |
+| **Download artwork** | iTunes, Cover Art Archive |
 | **Embed artwork** | Write cover into audio files; max embed edge size |
 | **ReplayGain** | Track + album tags after the rip set is complete |
 
@@ -113,19 +116,25 @@ Copy Image forces a lossless container (FLAC or WAV; other formats fall back to 
 
 ### End users (AppImage)
 
-For the **released AppImage**, the runtime is **self-contained** as far as packaging allows:
+Always required on the **host** (not shipped in the image):
 
-- Bundled **Python interpreter + stdlib** (does not use host Python)
-- Bundled **PyGObject**, **GTK 4 / libadwaita** (and linked libraries), typelibs, GSettings schemas
-- Bundled **cdparanoia**, **flac** / **lame** / **ffmpeg** / **opusenc** when present on the build host
-- Bundled **mutagen**
+| Requirement | Why |
+|-------------|-----|
+| **x86_64** Linux | AppImage architecture |
+| **glibc** new enough for the build | See [Portability](#appimage-portability); `GLIBC_2.xx not found` means the image is newer than your distro |
+| **Optical drive** + user in `cdrom` (or equivalent) | Read / eject the disc |
+| **FUSE** (`libfuse2` / `fuse`) | Mount the AppImage (preferred over `APPIMAGE_EXTRACT_AND_RUN=1`) |
+| **Graphics stack** (Mesa / Vulkan / libGL, Wayland or X11) | Display |
 
-You mainly need:
+What the AppImage **tries to ship** (so you usually need zero encode packages):
 
-- **x86_64** Linux desktop with a **glibc new enough for the build host** (see [Portability](#appimage-portability) below)
-- **Optical drive** access (user in `cdrom` / appropriate group)
-- **FUSE / libfuse2** recommended so the AppImage mounts quickly (avoid `APPIMAGE_EXTRACT_AND_RUN=1` for daily use)
-- Host **Mesa / Vulkan / libGL** (graphics drivers stay on the system - normal for AppImages)
+| Inside the image | Guaranteed? |
+|------------------|-------------|
+| Python, GTK 4, libadwaita, mutagen, Pillow | Yes (required at build) |
+| **cdparanoia** | Yes (build fails without it) |
+| **flac**, **lame**, **ffmpeg**, **opusenc** | **Only if present on the build host** — otherwise omitted |
+
+Optional: **GStreamer** CDDA plugins for in-app playback; ripping does not need them.
 
 ### Develop / run from source
 
@@ -133,33 +142,57 @@ You mainly need:
 |------------|------|
 | Python 3 + **PyGObject** (Gtk 4, Adw 1) | UI |
 | **cdparanoia** or **cd-paranoia** | TOC + secure extract |
-| **mutagen** | Tags / ReplayGain writing |
+| **mutagen** | Tags (FLAC / MP3 / AAC·M4A / Opus / WAV) + ReplayGain tag write |
 | **Pillow** | Cover-art JPEG conversion |
-| **flac**, **lame**, **ffmpeg** / **opusenc** | Encoding (and RG analysis where needed) |
-| Meson, Ninja, gcc | Build / AppImage packaging |
+| **flac** | FLAC encode |
+| **lame** | MP3 encode |
+| **ffmpeg** | AAC (M4A) encode, ReplayGain analysis (`ebur128`); Opus fallback |
+| **opusenc** | Opus encode (preferred over ffmpeg for Opus) |
+| **GStreamer** 1.x + `cdiocddasrc` or `cdparanoiasrc` | In-app CD playback (optional) |
+| Meson, Ninja, gcc | Install / AppImage packaging |
 
 ```bash
+# Python modules (Fedora: python3-mutagen python3-pillow)
 pip3 install --user mutagen pillow
 ```
 
-Optional: **libdiscid** (ctypes) for DiscID helpers; pure-Python TOC IDs are used if it is missing.
+Optional:
+
+| Dependency | Role |
+|------------|------|
+| **libfdk_aac** (in ffmpeg) | Higher-quality AAC with VBR + afterburner; native `aac` is used if missing |
+| **libdiscid** | DiscID helpers via ctypes; pure-Python TOC IDs are used if missing |
+
+Example system packages (names vary by distro):
+
+```bash
+# Fedora
+sudo dnf install python3-gobject gtk4 libadwaita python3-mutagen python3-pillow \
+  cdparanoia flac lame ffmpeg opus-tools gstreamer1-plugins-good
+
+# Debian / Ubuntu
+sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 python3-mutagen python3-pil \
+  cdparanoia flac lame ffmpeg opus-tools gstreamer1.0-plugins-good
+```
 
 ### Build host (AppImage packaging)
 
 | Required on build host | Why |
 |------------------------|-----|
 | `python3`, PyGObject, GTK 4, libadwaita | Bundled into the image (incl. Python stdlib) |
-| `cdparanoia` / `cd-paranoia` | Bundled - build fails if missing |
+| `cdparanoia` / `cd-paranoia` | Bundled — build fails if missing |
 | `meson`, `ninja`, `gcc`, `curl`, `pip` | Packaging |
-| `flac`, `lame`, `ffmpeg` | Bundled if present |
-| `zsync` / **zsyncmake** | Recommended - produces `.zsync` for Gear Lever delta updates |
+| `flac`, `lame`, `ffmpeg`, `opusenc` (`opus-tools`) | **Install these before building** so they are copied into the image; otherwise end users must install them |
+| `mutagen`, `Pillow` | Bundled into the image |
+| `zsync` / **zsyncmake** | Recommended — produces `.zsync` for Gear Lever delta updates |
 
 ```bash
+# Ensure encoders are on PATH, then:
 ./appimage/build-appimage.sh
 # → dist/ready2rip-VERSION-x86_64.AppImage
 ```
 
-The script runs an **isolated smoke-test** (no host Python modules) before packing. It also prints the **glibc symbol floor** of the bundled libraries.
+The script **warns** (does not fail) if `flac` / `lame` / `ffmpeg` / `opusenc` are missing. Smoke-test only requires Python/GTK/mutagen/cdparanoia. Check the build log for `warning: flac not on host` etc. before publishing.
 
 ### AppImage portability
 
@@ -168,9 +201,10 @@ What is portable:
 | Bundled | Independent of host? |
 |---------|----------------------|
 | Python + stdlib + PyGObject | Yes |
-| ready2rip package, mutagen | Yes |
+| ready2rip package, mutagen, Pillow | Yes |
 | GTK 4 / Adwaita + most deps | Yes (best-effort) |
-| cdparanoia + encoders | Yes (if present at build time) |
+| cdparanoia | Yes (required at build) |
+| flac, lame, ffmpeg, opusenc | Only if the **build host** had them |
 
 What is **not** fully portable:
 
@@ -213,19 +247,24 @@ Open the AppImage with Gear Lever (or add it from Gear Lever’s UI). ready2rip 
 
 ### Run without installing
 
+GSettings schemas compile into the user cache on first launch. From the repo:
+
 ```bash
-cd "/path/to/ready2rip"
-meson setup build
-cp data/org.ready2rip.Ready2Rip.gschema.xml build/data/
-glib-compile-schemas build/data
-PYTHONPATH=src GSETTINGS_SCHEMA_DIR=build/data python3 -m ready2rip.main
+./run
 ```
 
-### Install with Meson
+Equivalent:
+
+```bash
+PYTHONPATH=src python3 -m ready2rip.main
+```
+
+### Meson (install / packaging)
 
 ```bash
 meson setup build
 meson compile -C build
+meson compile -C build run          # optional: run via the build env
 meson setup build --prefix="$PWD/install" --reconfigure
 meson install -C build
 ./install/bin/ready2rip
@@ -235,9 +274,9 @@ meson install -C build
 
 ```text
 ready2rip/
+  run                   # source-tree launcher
   appimage/             # AppRun + build-appimage.sh
   data/                 # desktop, icons, AppStream, GSettings
-  po/
   src/ready2rip/
   meson.build
 ```

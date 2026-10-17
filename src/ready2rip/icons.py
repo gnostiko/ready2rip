@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Register the application icon without disturbing the system icon theme."""
+"""Register the application icon and resolve symbolic icon names safely."""
 
 from __future__ import annotations
 
@@ -12,6 +12,84 @@ from ready2rip import config
 
 log = logging.getLogger(__name__)
 
+# Preferred → fallback names for themes that rename Adwaita symbols.
+ICON_FALLBACKS: dict[str, tuple[str, ...]] = {
+    'open-menu-symbolic': (
+        'open-menu-symbolic',
+        'application-menu-symbolic',
+        'view-more-symbolic',
+    ),
+    'media-eject-symbolic': (
+        'media-eject-symbolic',
+        'media-optical-symbolic',
+    ),
+    'media-playback-start-symbolic': (
+        'media-playback-start-symbolic',
+        'media-playback-start',
+    ),
+    'media-playback-pause-symbolic': (
+        'media-playback-pause-symbolic',
+        'media-playback-pause',
+    ),
+    'media-skip-backward-symbolic': (
+        'media-skip-backward-symbolic',
+        'media-seek-backward-symbolic',
+        'go-previous-symbolic',
+    ),
+    'media-skip-forward-symbolic': (
+        'media-skip-forward-symbolic',
+        'media-seek-forward-symbolic',
+        'go-next-symbolic',
+    ),
+    'folder-music-symbolic': (
+        'folder-music-symbolic',
+        'audio-x-generic-symbolic',
+        'media-optical-symbolic',
+        'emblem-music-symbolic',
+    ),
+    'media-optical-symbolic': (
+        'media-optical-symbolic',
+        'drive-optical-symbolic',
+        'media-cdrom-symbolic',
+    ),
+    'drive-optical-symbolic': (
+        'drive-optical-symbolic',
+        'media-optical-symbolic',
+        'drive-removable-media-symbolic',
+    ),
+    'audio-x-generic-symbolic': (
+        'audio-x-generic-symbolic',
+        'audio-x-generic',
+        'folder-music-symbolic',
+    ),
+    'system-search-symbolic': (
+        'system-search-symbolic',
+        'edit-find-symbolic',
+    ),
+    'folder-symbolic': (
+        'folder-symbolic',
+        'folder',
+    ),
+    'folder-open-symbolic': (
+        'folder-open-symbolic',
+        'document-open-symbolic',
+        'folder-symbolic',
+    ),
+    'user-trash-symbolic': (
+        'user-trash-symbolic',
+        'edit-delete-symbolic',
+    ),
+    'emblem-ok-symbolic': (
+        'emblem-ok-symbolic',
+        'object-select-symbolic',
+        'emblem-default-symbolic',
+    ),
+    'dialog-warning-symbolic': (
+        'dialog-warning-symbolic',
+        'dialog-warning',
+    ),
+}
+
 
 def _project_icon_root() -> Path | None:
     """``<repo>/data/icons`` when running from a source checkout."""
@@ -23,13 +101,7 @@ def _project_icon_root() -> Path | None:
     return None
 
 
-def _app_icon_file() -> Path | None:
-    """Path to the default (scalable) app icon SVG."""
-    # Prefer scalable (already the symbolic artwork), then symbolic source.
-    names = (
-        f'hicolor/scalable/apps/{config.APPLICATION_ID}.svg',
-        f'hicolor/symbolic/apps/{config.APPLICATION_ID}-symbolic.svg',
-    )
+def _icon_search_roots() -> list[Path]:
     roots: list[Path] = []
     env = os.environ.get('READY2RIP_ICON_DIR')
     if env:
@@ -41,7 +113,19 @@ def _app_icon_file() -> Path | None:
         share = Path(config.PKGDATADIR).parent / 'icons'
         if share.is_dir():
             roots.append(share)
-    for root in roots:
+    return roots
+
+
+def _app_icon_file(*, symbolic: bool = False) -> Path | None:
+    """Path to the scalable or symbolic app icon."""
+    if symbolic:
+        names = (f'hicolor/symbolic/apps/{config.APPLICATION_ID}-symbolic.svg',)
+    else:
+        names = (
+            f'hicolor/scalable/apps/{config.APPLICATION_ID}.svg',
+            f'hicolor/symbolic/apps/{config.APPLICATION_ID}-symbolic.svg',
+        )
+    for root in _icon_search_roots():
         for rel in names:
             path = root / rel
             if path.is_file():
@@ -49,23 +133,35 @@ def _app_icon_file() -> Path | None:
     return None
 
 
-def _install_user_app_icon(src: Path) -> None:
+def _install_user_app_icon(src: Path, *, symbolic: bool = False) -> None:
     """Copy only our app icon into the user hicolor tree.
 
     Do **not** write ``index.theme`` — a partial user hicolor index shadows the
     system theme and breaks icons in this app and every other GTK/GNOME app.
     """
-    dest_dir = (
-        Path.home()
-        / '.local'
-        / 'share'
-        / 'icons'
-        / 'hicolor'
-        / 'scalable'
-        / 'apps'
-    )
+    if symbolic:
+        dest_dir = (
+            Path.home()
+            / '.local'
+            / 'share'
+            / 'icons'
+            / 'hicolor'
+            / 'symbolic'
+            / 'apps'
+        )
+        dest = dest_dir / f'{config.APPLICATION_ID}-symbolic.svg'
+    else:
+        dest_dir = (
+            Path.home()
+            / '.local'
+            / 'share'
+            / 'icons'
+            / 'hicolor'
+            / 'scalable'
+            / 'apps'
+        )
+        dest = dest_dir / f'{config.APPLICATION_ID}.svg'
     dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / f'{config.APPLICATION_ID}.svg'
     try:
         if not dest.is_file() or dest.stat().st_mtime < src.stat().st_mtime:
             shutil.copy2(src, dest)
@@ -83,11 +179,11 @@ def _ensure_user_desktop_file() -> None:
     project = _project_icon_root()
     if project is not None:
         root = project.parent.parent  # data/icons → repo
-        exec_line = (
-            f'env PYTHONPATH={root / "src"} '
-            f'GSETTINGS_SCHEMA_DIR={root / "build" / "data"} '
-            f'python3 -m ready2rip.main'
-        )
+        run = root / 'run'
+        if run.is_file():
+            exec_line = str(run)
+        else:
+            exec_line = f'env PYTHONPATH={root / "src"} python3 -m ready2rip.main'
     else:
         exec_line = 'ready2rip'
 
@@ -110,6 +206,39 @@ def _ensure_user_desktop_file() -> None:
         log.debug('Could not write desktop file: %s', exc)
 
 
+def resolve_icon_name(preferred: str, display=None) -> str:
+    """Return the first icon name available on *display*, else *preferred*."""
+    import gi
+
+    gi.require_version('Gtk', '4.0')
+    gi.require_version('Gdk', '4.0')
+    from gi.repository import Gdk, Gtk
+
+    if display is None:
+        display = Gdk.Display.get_default()
+    if display is None:
+        return preferred
+    theme = Gtk.IconTheme.get_for_display(display)
+    candidates = ICON_FALLBACKS.get(preferred, (preferred,))
+    for name in candidates:
+        try:
+            if theme.has_icon(name):
+                return name
+        except Exception:
+            continue
+    return preferred
+
+
+def apply_icon(widget, preferred: str, *, display=None) -> str:
+    """Set *widget*'s icon-name to a resolvable name; return the name used."""
+    name = resolve_icon_name(preferred, display=display)
+    if hasattr(widget, 'set_icon_name'):
+        widget.set_icon_name(name)
+    elif hasattr(widget, 'set_from_icon_name'):
+        widget.set_from_icon_name(name)
+    return name
+
+
 def register_application_icons() -> None:
     """Publish the app icon and set the default window icon name.
 
@@ -122,9 +251,12 @@ def register_application_icons() -> None:
     from gi.repository import Gdk, Gtk
 
     icon_name = config.APPLICATION_ID
-    icon_file = _app_icon_file()
-    if icon_file is not None:
-        _install_user_app_icon(icon_file)
+    scalable = _app_icon_file(symbolic=False)
+    if scalable is not None:
+        _install_user_app_icon(scalable, symbolic=False)
+    symbolic = _app_icon_file(symbolic=True)
+    if symbolic is not None:
+        _install_user_app_icon(symbolic, symbolic=True)
     _ensure_user_desktop_file()
 
     display = Gdk.Display.get_default()
@@ -133,8 +265,7 @@ def register_application_icons() -> None:
 
     theme = Gtk.IconTheme.get_for_display(display)
 
-    # Only add the *project* icon dir for development lookups — not the whole
-    # user icons tree (that is already part of the normal XDG theme search).
+    # Development: search the project icon tree (contains hicolor/).
     project = _project_icon_root()
     if project is not None:
         try:

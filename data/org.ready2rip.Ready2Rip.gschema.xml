@@ -34,11 +34,23 @@
       <choices>
         <choice value="flac"/>
         <choice value="mp3"/>
+        <choice value="aac"/>
         <choice value="opus"/>
         <choice value="wav"/>
       </choices>
       <default>'flac'</default>
-      <summary>Encoder / output format</summary>
+      <summary>Primary encoder / output format</summary>
+    </key>
+
+    <key name="extra-encode-targets" type="as">
+      <default>[]</default>
+      <summary>Additional encode targets (format|directory)</summary>
+      <description>
+        Extra formats beyond the primary encoder. Each entry is
+        ``format|directory`` (e.g. ``mp3|/home/user/Music/mp3``). An empty
+        directory uses the primary Output folder so two formats can share one
+        folder or use different ones.
+      </description>
     </key>
 
     <key name="flac-compression" type="i">
@@ -47,10 +59,50 @@
       <summary>FLAC compression level (0–8)</summary>
     </key>
 
+    <key name="mp3-quality" type="s">
+      <choices>
+        <choice value="v0"/>
+        <choice value="v1"/>
+        <choice value="v2"/>
+        <choice value="v3"/>
+        <choice value="v4"/>
+        <choice value="v5"/>
+        <choice value="cbr320"/>
+        <choice value="cbr256"/>
+        <choice value="cbr192"/>
+        <choice value="cbr128"/>
+      </choices>
+      <default>'v0'</default>
+      <summary>MP3 quality (LAME VBR -Vn or CBR)</summary>
+    </key>
+
+    <!-- Legacy; migrated to mp3-quality on read. -->
     <key name="mp3-bitrate" type="i">
       <range min="64" max="320"/>
       <default>320</default>
-      <summary>MP3 CBR bitrate (kbps)</summary>
+      <summary>Deprecated MP3 CBR bitrate (kbps)</summary>
+    </key>
+
+    <key name="aac-quality" type="s">
+      <choices>
+        <choice value="vbr5"/>
+        <choice value="vbr4"/>
+        <choice value="vbr3"/>
+        <choice value="vbr2"/>
+        <choice value="vbr1"/>
+        <choice value="cbr320"/>
+        <choice value="cbr256"/>
+        <choice value="cbr192"/>
+        <choice value="cbr128"/>
+      </choices>
+      <default>'cbr256'</default>
+      <summary>AAC quality preset (FDK VBR 1–5 or CBR)</summary>
+    </key>
+
+    <key name="aac-bitrate" type="i">
+      <range min="64" max="320"/>
+      <default>256</default>
+      <summary>Deprecated AAC CBR bitrate (kbps); prefer aac-quality</summary>
     </key>
 
     <key name="opus-bitrate" type="i">
@@ -79,11 +131,6 @@
       <summary>Use Cover Art Archive (MusicBrainz) for cover art</summary>
     </key>
 
-    <key name="artwork-source-deezer" type="b">
-      <default>true</default>
-      <summary>Use Deezer for cover art</summary>
-    </key>
-
     <key name="artwork-max-size" type="i">
       <range min="0" max="4000"/>
       <default>600</default>
@@ -107,7 +154,7 @@
 
     <key name="use-freedb" type="b">
       <default>true</default>
-      <summary>Look up metadata on FreeDB-compatible services (gnudb)</summary>
+      <summary>Look up metadata on gnudb (FreeDB-compatible)</summary>
     </key>
 
     <key name="auto-lookup-metadata" type="b">
@@ -161,13 +208,13 @@
     </key>
 
     <key name="burst-fallback" type="b">
-      <default>true</default>
+      <default>false</default>
       <summary>Burst mode fallback for scratched discs</summary>
       <description>
-        If secure cdparanoia extraction fails or produces incomplete audio,
-        re-rip that track with paranoia disabled (burst mode, -Z). If test
-        &amp; copy CRCs still mismatch after one secure retry, re-rip the
-        entire disc once in burst mode.
+        Off by default for maximum secure quality. When enabled, after secure
+        test &amp; copy retries are exhausted, that track (or image) may be
+        recovered once with paranoia disabled (burst mode, -Z). Burst audio
+        is not CRC-verified and should only be used for damaged discs.
       </description>
     </key>
 
@@ -196,7 +243,8 @@
       <summary>Test and copy each track</summary>
       <description>
         Extract every track twice (test then copy), compare CRC32 values, and
-        only accept a match. Matches whipper / cyanrip secure workflow.
+        only accept a match after up to three secure retries. Unmatched tracks
+        fail the rip unless Burst Fallback is enabled.
       </description>
     </key>
 

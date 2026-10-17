@@ -226,7 +226,9 @@ def cue_file_type_for_extension(ext: str) -> str:
         return 'FLAC'
     if e in ('aiff', 'aif'):
         return 'AIFF'
-    # Lossy formats are uncommon for CD images; still emit a type token.
+    if e == 'mp3':
+        return 'MP3'
+    # AAC/M4A and other lossy containers have no standard CUE FILE type.
     return 'WAVE'
 
 

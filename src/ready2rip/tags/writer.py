@@ -77,6 +77,19 @@ class TagWriter:
                 album_meta=album,
                 track_meta=track,
             )
+        elif suffix in {'.m4a', '.mp4', '.aac'}:
+            self._tag_mp4(
+                path,
+                title=title,
+                artist=artist,
+                album=album_title,
+                album_artist=album_artist,
+                date=date,
+                track_number=track_number,
+                total_tracks=total,
+                album_meta=album,
+                track_meta=track,
+            )
         elif suffix in {'.opus', '.ogg'}:
             self._tag_ogg(
                 path,
@@ -161,6 +174,25 @@ class TagWriter:
                     )
                 )
             audio.save()
+        elif suffix in {'.m4a', '.mp4', '.aac'}:
+            from mutagen.mp4 import MP4
+
+            audio = MP4(path)
+            audio['----:com.apple.iTunes:REPLAYGAIN_TRACK_GAIN'] = [
+                f'{values.track_gain_db:.2f} dB'.encode('utf-8')
+            ]
+            audio['----:com.apple.iTunes:REPLAYGAIN_TRACK_PEAK'] = [
+                f'{values.track_peak:.6f}'.encode('utf-8')
+            ]
+            if values.album_gain_db is not None:
+                audio['----:com.apple.iTunes:REPLAYGAIN_ALBUM_GAIN'] = [
+                    f'{values.album_gain_db:.2f} dB'.encode('utf-8')
+                ]
+            if values.album_peak is not None:
+                audio['----:com.apple.iTunes:REPLAYGAIN_ALBUM_PEAK'] = [
+                    f'{values.album_peak:.6f}'.encode('utf-8')
+                ]
+            audio.save()
         elif suffix in {'.opus', '.ogg'}:
             from mutagen.oggopus import OggOpus
 
@@ -219,6 +251,17 @@ class TagWriter:
                     data=image_bytes,
                 )
             )
+            audio.save()
+        elif suffix in {'.m4a', '.mp4', '.aac'}:
+            from mutagen.mp4 import MP4, MP4Cover
+
+            audio = MP4(path)
+            fmt = (
+                MP4Cover.FORMAT_PNG
+                if mime == 'image/png'
+                else MP4Cover.FORMAT_JPEG
+            )
+            audio['covr'] = [MP4Cover(image_bytes, imageformat=fmt)]
             audio.save()
         elif suffix in {'.opus', '.ogg'}:
             import base64
@@ -310,6 +353,8 @@ class TagWriter:
             audio['MUSICBRAINZ_TRACKID'] = [track_meta.musicbrainz_recording_id]
         if album_meta and album_meta.barcode:
             audio['BARCODE'] = [album_meta.barcode]
+        if album_meta and album_meta.genre:
+            audio['GENRE'] = [album_meta.genre]
         if album_meta and album_meta.label:
             audio['LABEL'] = [album_meta.label]
         if album_meta and album_meta.catalog_number:
@@ -318,6 +363,52 @@ class TagWriter:
             audio['RELEASECOUNTRY'] = [album_meta.country]
         if album_meta and album_meta.discid:
             audio['MUSICBRAINZ_DISCID'] = [album_meta.discid]
+
+    def _tag_mp4(
+        self,
+        path: Path,
+        *,
+        title: str,
+        artist: str,
+        album: str,
+        album_artist: str,
+        date: str,
+        track_number: int,
+        total_tracks: int | None,
+        album_meta: AlbumMetadata | None = None,
+        track_meta=None,
+    ) -> None:
+        from mutagen.mp4 import MP4
+
+        audio = MP4(path)
+        audio['\xa9nam'] = [title]
+        audio['\xa9ART'] = split_artists(artist) or [artist or 'Unknown Artist']
+        audio['\xa9alb'] = [album]
+        audio['aART'] = (
+            split_artists(album_artist) or [album_artist or 'Unknown Artist']
+        )
+        total = total_tracks if total_tracks and total_tracks > 0 else 0
+        audio['trkn'] = [(track_number, total)]
+        disc_num, disc_total = _disc_numbers(album_meta)
+        if disc_num is not None:
+            audio['disk'] = [(disc_num, disc_total if disc_total else 0)]
+        if date:
+            audio['\xa9day'] = [date]
+        if album_meta and album_meta.genre:
+            audio['\xa9gen'] = [album_meta.genre]
+        if album_meta and album_meta.label:
+            audio['\xa9pub'] = [album_meta.label]
+        if album_meta and album_meta.musicbrainz_release_id:
+            audio['----:com.apple.iTunes:MusicBrainz Album Id'] = [
+                album_meta.musicbrainz_release_id.encode('utf-8')
+            ]
+        if track_meta is not None and getattr(
+            track_meta, 'musicbrainz_recording_id', ''
+        ):
+            audio['----:com.apple.iTunes:MusicBrainz Track Id'] = [
+                track_meta.musicbrainz_recording_id.encode('utf-8')
+            ]
+        audio.save()
 
     def _tag_mp3(
         self,
@@ -336,6 +427,7 @@ class TagWriter:
         from mutagen.id3 import (
             ID3,
             TALB,
+            TCON,
             TDRC,
             TIT2,
             TPE1,
@@ -359,6 +451,7 @@ class TagWriter:
         tags.delall('TRCK')
         tags.delall('TPOS')
         tags.delall('TDRC')
+        tags.delall('TCON')
         tags.add(TIT2(encoding=3, text=title))
         # Multi-value TPE1 / TPE2 (ID3v2.4 multi-string / mutagen list).
         tags.add(TPE1(encoding=3, text=split_artists(artist) or [artist]))
@@ -383,6 +476,8 @@ class TagWriter:
                 tags.add(TDOR(encoding=3, text=date))
             except ImportError:
                 pass
+        if album_meta and album_meta.genre:
+            tags.add(TCON(encoding=3, text=album_meta.genre))
         if album_meta and album_meta.musicbrainz_release_id:
             tags.delall('TXXX:MusicBrainz Album Id')
             tags.add(

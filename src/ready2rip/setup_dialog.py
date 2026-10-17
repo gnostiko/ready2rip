@@ -17,6 +17,7 @@ from ready2rip.drive_setup import (
     calibrate_drive_offset,
     save_calibration,
 )
+from ready2rip.icons import apply_icon
 from ready2rip.settings import SettingsStore
 
 
@@ -53,7 +54,8 @@ class DriveSetupDialog(Adw.Dialog):
             margin_bottom=16,
             valign=Gtk.Align.CENTER,
         )
-        icon = Gtk.Image.new_from_icon_name('media-optical-symbolic')
+        icon = Gtk.Image()
+        apply_icon(icon, 'media-optical-symbolic')
         icon.set_pixel_size(48)
         icon.set_halign(Gtk.Align.CENTER)
         intro.append(icon)
@@ -134,7 +136,8 @@ class DriveSetupDialog(Adw.Dialog):
             margin_bottom=16,
             valign=Gtk.Align.CENTER,
         )
-        self._result_icon = Gtk.Image.new_from_icon_name('emblem-ok-symbolic')
+        self._result_icon = Gtk.Image()
+        apply_icon(self._result_icon, 'emblem-ok-symbolic')
         self._result_icon.set_pixel_size(40)
         self._result_icon.set_halign(Gtk.Align.CENTER)
         result.append(self._result_icon)
@@ -271,7 +274,7 @@ class DriveSetupDialog(Adw.Dialog):
         if result.success and result.offset is not None:
             _save_result(self._store, device, result, offset=result.offset)
             self._finished_ok = True
-            self._result_icon.set_from_icon_name('emblem-ok-symbolic')
+            apply_icon(self._result_icon, 'emblem-ok-symbolic')
             self._result_title.set_label('Drive calibrated')
             body = result.message
             if features:
@@ -299,7 +302,7 @@ class DriveSetupDialog(Adw.Dialog):
                     except Exception:
                         pass
 
-            self._result_icon.set_from_icon_name('dialog-warning-symbolic')
+            apply_icon(self._result_icon, 'dialog-warning-symbolic')
             self._result_title.set_label('Calibration incomplete')
             parts = [result.message or 'Calibration failed.']
             if features:
@@ -313,7 +316,7 @@ class DriveSetupDialog(Adw.Dialog):
         device = self._device_row.get_text().strip() or '/dev/sr0'
         save_calibration(self._store, device=device, offset=0)
         self._finished_ok = True
-        self._result_icon.set_from_icon_name('emblem-ok-symbolic')
+        apply_icon(self._result_icon, 'emblem-ok-symbolic')
         self._result_title.set_label('Setup skipped')
         self._result_desc.set_label(
             f'Saved offset 0 for {device}. Re-run setup later for AccurateRip accuracy.'
@@ -350,7 +353,7 @@ class DriveSetupDialog(Adw.Dialog):
             )
             features = ''
         self._finished_ok = True
-        self._result_icon.set_from_icon_name('emblem-ok-symbolic')
+        apply_icon(self._result_icon, 'emblem-ok-symbolic')
         self._result_title.set_label('Offset saved')
         body = f'Saved sample offset {offset} for {device}.'
         if features:

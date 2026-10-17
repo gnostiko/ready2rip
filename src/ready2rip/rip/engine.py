@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -30,6 +31,13 @@ from ready2rip.rip.cue import (
     write_cue_sheet,
     write_multi_file_cue_sheet,
 )
+from ready2rip.rip.encode import (
+    aac_encode_argv,
+    flac_encode_argv,
+    mp3_encode_argv,
+    opus_encode_argv,
+    opus_ffmpeg_argv,
+)
 from ready2rip.rip.paranoia_stats import ParanoiaStats, parse_paranoia_stderr
 from ready2rip.rip.riplog import (
     RipLog,
@@ -38,15 +46,16 @@ from ready2rip.rip.riplog import (
     title_for_track,
     wav_pcm_crc,
 )
+from ready2rip.rip.secure import (
+    SECURE_MIN_WAV_RATIO,
+    SECURE_TEST_COPY_RETRIES,
+    burst_paranoia_flags,
+    secure_paranoia_flags,
+)
 from ready2rip.tags.writer import TagWriter
 from ready2rip.util import find_cdparanoia, validate_device_path
 
 log = logging.getLogger(__name__)
-
-# Secure defaults for cdparanoia / libcdio-paranoia.
-# never-skip=N: keep re-reading imperfect data until N stuck retries.
-# -X: abort rather than silently accept a skip after never-skip is exhausted.
-SECURE_NEVER_SKIP = 200
 
 
 class RipState(Enum):
@@ -93,9 +102,13 @@ class RipJob:
     device: str
     track_numbers: list[int]
     output_directory: Path
-    encode_format: str = 'flac'  # flac | mp3 | opus | wav
+    encode_format: str = 'flac'  # flac | mp3 | aac | opus | wav
+    # Extra (format, base_dir) encodes after the primary; empty → primary only.
+    encode_targets: list[tuple[str, Path]] = field(default_factory=list)
     flac_compression: int = 5
-    mp3_bitrate: int = 320
+    mp3_quality: str = 'v0'  # LAME v0–v5 or cbr128/192/256/320
+    aac_quality: str = 'cbr256'  # FDK VBR 1–5 or cbr128/192/256/320
+    aac_bitrate: int = 256  # legacy; prefer aac_quality
     opus_bitrate: int = 160
     apply_replaygain: bool = True
     embed_artwork: bool = True
@@ -112,20 +125,20 @@ class RipJob:
     disc_info: DiscInfo | None = None
     # Total tracks on the disc (for AR first/last sample skip), not just selected.
     disc_track_count: int = 0
-    # If secure (paranoia) extraction fails, retry with cdparanoia -Z burst mode.
-    burst_fallback: bool = True
+    # Optional insecure -Z recovery after secure failure (off by default).
+    burst_fallback: bool = False
     # Expected minimum WAV size as a fraction of ideal CDDA size (near complete).
-    min_wav_size_ratio: float = 0.98
+    min_wav_size_ratio: float = SECURE_MIN_WAV_RATIO
     # Write a detailed status log next to the ripped files.
     write_rip_log: bool = True
     # Write multi-file (or image) CUE sheet after a secure rip.
     write_cue_file: bool = True
     # Double-rip each track and require matching CRCs (test & copy).
     test_and_copy: bool = True
-    # Extra secure test+copy cycles after a CRC mismatch (default: one retry).
+    # Extra secure test+copy cycles after a CRC mismatch.
     # After retries still fail, that track is recovered once in burst mode
-    # when burst_fallback is enabled — other tracks are left intact.
-    test_copy_max_retries: int = 1
+    # only when burst_fallback is enabled — otherwise the rip fails.
+    test_copy_max_retries: int = SECURE_TEST_COPY_RETRIES
     # Persisted from Drive setup (None = unknown / not measured).
     drive_caches_audio: bool | None = None
     drive_cache_message: str = ''
@@ -170,6 +183,20 @@ class _TrackExtract:
     expected_wav_bytes: int = 0
 
 
+@dataclass(frozen=True)
+class _EncodeDest:
+    """One encode destination resolved to album folder + output file."""
+
+    format: str
+    base_dir: Path
+    album_dir: Path
+    out_path: Path
+
+    @property
+    def extension(self) -> str:
+        return RipEngine.EXTENSIONS[self.format]
+
+
 class _CrcMismatch(Exception):
     """Secure test&copy failed after retries with no recovered copy WAV."""
 
@@ -196,6 +223,7 @@ class RipEngine:
     EXTENSIONS = {
         'flac': '.flac',
         'mp3': '.mp3',
+        'aac': '.m4a',
         'opus': '.opus',
         'wav': '.wav',
     }
@@ -231,25 +259,34 @@ class RipEngine:
         except ValueError as exc:
             return RipResult(success=False, error=str(exc))
 
-        fmt = (job.encode_format or 'flac').lower()
-        if fmt not in self.EXTENSIONS:
-            return RipResult(success=False, error=f'Unknown format: {fmt}')
+        targets = self._normalize_encode_targets(job)
+        if not targets:
+            return RipResult(success=False, error='No encode targets configured')
 
         # CD images + CUE need a lossless/container format (WAV/FLAC).
-        if job.copy_image and fmt not in ('flac', 'wav'):
-            log.info('Copy Image mode: using FLAC instead of %s', fmt)
-            fmt = 'flac'
-            job.encode_format = 'flac'
+        if job.copy_image:
+            fixed: list[tuple[str, Path]] = []
+            for enc_fmt, enc_base in targets:
+                if enc_fmt not in ('flac', 'wav'):
+                    log.info(
+                        'Copy Image mode: using FLAC instead of %s', enc_fmt
+                    )
+                    enc_fmt = 'flac'
+                fixed.append((enc_fmt, enc_base))
+            targets = self._dedupe_encode_targets(fixed)
+            job.encode_format = targets[0][0]
+            job.encode_targets = list(targets)
 
-        missing = self._missing_encoder(fmt)
-        if missing:
-            return RipResult(success=False, error=missing)
+        for enc_fmt, _enc_base in targets:
+            missing = self._missing_encoder(enc_fmt)
+            if missing:
+                return RipResult(success=False, error=missing)
 
-        base = job.output_directory.expanduser().resolve()
-        try:
-            base.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            return RipResult(success=False, error=f'Cannot create output folder: {exc}')
+        fmt = targets[0][0]
+        base = targets[0][1]
+        job.encode_format = fmt
+        job.output_directory = base
+        job.encode_targets = list(targets)
 
         if job.copy_image:
             return self._run_copy_image(job, base, fmt, on_progress)
@@ -261,11 +298,9 @@ class RipEngine:
         notes: list[str] = []
         burst_tracks: list[int] = []
         test_copy_mismatches: list[int] = []
-        album_dir: Path | None = None
         cover_path: Path | None = None
         htoa_ripped = False
         cache_result: DriveCacheResult | None = None
-        ext = self.EXTENSIONS[fmt]
         expected_sizes = _expected_wav_sizes(job.disc_info)
 
         rip_log: RipLog | None = None
@@ -273,17 +308,25 @@ class RipEngine:
             rip_log = RipLog()
             rip_log.configure_from_job(job)
 
-        # --- Album folder + artwork *before* any disc reads for tracks ---
+        # --- All destination album folders + artwork before disc reads ---
         first_for_paths = tracks[0] if tracks else 1
-        album_dir, _ = build_output_paths(
-            base_dir=base,
-            album_folder_template=job.album_folder_template,
-            filename_template=job.filename_template,
-            album=job.album,
-            track_number=first_for_paths,
-            extension=ext,
-        )
-        album_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            dests0 = self._destinations_for_track(job, first_for_paths)
+            self._ensure_destination_dirs(dests0)
+        except OSError as exc:
+            return RipResult(
+                success=False,
+                error=f'Cannot create output folder(s): {exc}',
+            )
+        album_dir = dests0[0].album_dir  # primary encode (log destination)
+        for dest in dests0:
+            notes.append(
+                f'Encode target: {dest.format.upper()} → {dest.album_dir}'
+            )
+            if rip_log is not None:
+                rip_log.notes.append(
+                    f'Encode target: {dest.format.upper()} → {dest.album_dir}'
+                )
 
         def report(
             track_number: int,
@@ -323,6 +366,13 @@ class RipEngine:
             job, album_dir
         )
         notes.extend(art_notes)
+        # Mirror cover into every secondary album folder before ripping.
+        for dest in dests0[1:]:
+            if job.save_cover_file and (
+                job.folder_artwork is not None or job.artwork is not None
+            ):
+                _ea, _fa, _cp, extra_art = _prepare_artwork(job, dest.album_dir)
+                notes.extend(extra_art)
         if cover_path is not None:
             notes.append(f'Cover art saved: {cover_path}')
             if rip_log is not None:
@@ -400,6 +450,7 @@ class RipEngine:
         total_units = float(len(tracks) + (1 if htoa_info else 0)) or 1.0
         unit_index = 0.0
         htoa_path: Path | None = None
+        htoa_paths: list[Path] = []
         # (track_number, path) for multi-file CUE generation after encode.
         track_output_pairs: list[tuple[int, Path]] = []
 
@@ -417,13 +468,10 @@ class RipEngine:
                         message=htoa_info.message,
                         total_units=total_units,
                     )
-                    htoa_ok, htoa_path, htoa_notes = self._rip_htoa_unit(
+                    htoa_ok, htoa_path, htoa_paths, htoa_notes = self._rip_htoa_unit(
                         job=job,
                         htoa_info=htoa_info,
                         tmp_path=tmp_path,
-                        album_dir=album_dir,
-                        fmt=fmt,
-                        ext=ext,
                         embed_art=embed_art,
                         defeat_cache=defeat_cache,
                         rip_log=rip_log,
@@ -438,9 +486,11 @@ class RipEngine:
                         ),
                     )
                     notes.extend(htoa_notes)
-                    if htoa_ok and htoa_path is not None:
-                        outputs.append(htoa_path)
+                    if htoa_ok and htoa_paths:
+                        outputs.extend(htoa_paths)
                         htoa_ripped = True
+                        if htoa_path is None:
+                            htoa_path = htoa_paths[0]
                     unit_index += 1.0
 
                 # --- Regular tracks ---
@@ -451,10 +501,7 @@ class RipEngine:
                         job=job,
                         tracks=tracks,
                         tmp_path=tmp_path,
-                        base=base,
                         album_dir=album_dir,
-                        fmt=fmt,
-                        ext=ext,
                         embed_art=embed_art,
                         defeat_cache=defeat_cache,
                         expected_sizes=expected_sizes,
@@ -506,39 +553,61 @@ class RipEngine:
                     audio_for_rg = [
                         p
                         for p in outputs
-                        if p.suffix.lower() in {'.flac', '.mp3', '.opus', '.wav'}
+                        if p.suffix.lower() in {
+                            '.flac',
+                            '.mp3',
+                            '.m4a',
+                            '.opus',
+                            '.wav',
+                        }
                     ]
                     rg_notes = apply_replaygain(audio_for_rg or outputs)
                     notes.extend(rg_notes)
                     if rip_log is not None:
                         rip_log.replaygain_notes.extend(rg_notes)
 
-                # Multi-file CUE for secure per-track rips.
+                # Multi-file CUE per (album folder, format) — keeps multi-encode
+                # same-folder rips from mixing FLAC+MP3 into one sheet.
                 if (
                     job.write_cue_file
                     and track_output_pairs
-                    and album_dir is not None
                     and not self._cancelled
                 ):
-                    try:
-                        cue_path = self._write_track_cue(
-                            job,
-                            album_dir=album_dir,
-                            track_files=track_output_pairs,
-                            htoa_path=htoa_path if htoa_ripped else None,
-                            ext=ext,
+                    by_group: dict[
+                        tuple[Path, str], list[tuple[int, Path]]
+                    ] = defaultdict(list)
+                    for track_no, path in track_output_pairs:
+                        by_group[(path.parent, path.suffix.lower())].append(
+                            (track_no, path)
                         )
-                        if cue_path is not None:
-                            outputs.append(cue_path)
-                            notes.append(f'CUE sheet: {cue_path.name}')
-                            if rip_log is not None:
-                                rip_log.notes.append(
-                                    f'CUE sheet (multi-file, left-out gaps): '
-                                    f'{cue_path.name}'
-                                )
-                    except Exception as cue_exc:
-                        log.warning('Failed to write multi-file CUE: %s', cue_exc)
-                        notes.append(f'CUE sheet warning: {cue_exc}')
+                    htoa_by_dir: dict[Path, Path] = {}
+                    if htoa_ripped:
+                        for hp in htoa_paths or (
+                            [htoa_path] if htoa_path is not None else []
+                        ):
+                            htoa_by_dir[hp.parent] = hp
+                    for (cue_album_dir, cue_ext), pairs in by_group.items():
+                        try:
+                            cue_path = self._write_track_cue(
+                                job,
+                                album_dir=cue_album_dir,
+                                track_files=pairs,
+                                htoa_path=htoa_by_dir.get(cue_album_dir),
+                                ext=cue_ext,
+                            )
+                            if cue_path is not None:
+                                outputs.append(cue_path)
+                                notes.append(f'CUE sheet: {cue_path.name}')
+                                if rip_log is not None:
+                                    rip_log.notes.append(
+                                        f'CUE sheet (multi-file, left-out gaps): '
+                                        f'{cue_path.name}'
+                                    )
+                        except Exception as cue_exc:
+                            log.warning(
+                                'Failed to write multi-file CUE: %s', cue_exc
+                            )
+                            notes.append(f'CUE sheet warning: {cue_exc}')
 
         except Exception as exc:
             log.exception('Rip failed')
@@ -630,15 +699,15 @@ class RipEngine:
         job: RipJob,
         htoa_info,
         tmp_path: Path,
-        album_dir: Path,
-        fmt: str,
-        ext: str,
         embed_art: ArtworkImage | None,
         defeat_cache: bool,
         rip_log: RipLog | None,
         report: Callable,
-    ) -> tuple[bool, Path | None, list[str]]:
-        """Test & copy HTOA; skip if digitally silent. Returns (ok, path, notes)."""
+    ) -> tuple[bool, Path | None, list[Path], list[str]]:
+        """Test & copy HTOA; skip if digitally silent.
+
+        Returns ``(ok, primary_path, all_paths, notes)``.
+        """
         notes: list[str] = []
         test_wav = tmp_path / 'htoa_test.wav'
         copy_wav = tmp_path / 'htoa_copy.wav'
@@ -679,13 +748,13 @@ class RipEngine:
                     if log_entry is not None:
                         log_entry.status = 'FAILED'
                         log_entry.notes.append(str(exc2))
-                    return False, None, notes
+                    return False, None, [], notes
             else:
                 notes.append(f'HTOA extract failed: {exc}')
                 if log_entry is not None:
                     log_entry.status = 'FAILED'
                     log_entry.notes.append(str(exc))
-                return False, None, notes
+                return False, None, [], notes
 
         if is_digitally_silent(test_wav):
             notes.append(
@@ -699,7 +768,7 @@ class RipEngine:
                 test_wav.unlink(missing_ok=True)
             except OSError:
                 pass
-            return False, None, notes
+            return False, None, [], notes
 
         notes.append(
             f'Non-silent HTOA detected ({htoa_info.duration_label}) — ripping'
@@ -742,23 +811,66 @@ class RipEngine:
                 copy_wav, htoa_info.length_sectors
             )
             if test_crc != copy_crc:
-                if defeat_cache:
-                    flush_drive_cache(job.device, job.disc_info)
-                extract_htoa(
-                    job.device,
-                    htoa_info,
-                    copy_wav,
-                    mode='secure',
-                    sample_offset=job.sample_offset,
-                )
-                copy_crc, peak, _ = analyze_wav_for_log(
-                    copy_wav, htoa_info.length_sectors
-                )
-                if test_crc != copy_crc:
-                    notes.append(
-                        f'HTOA test/copy CRC mismatch '
-                        f'(test={test_crc} copy={copy_crc}); keeping copy'
+                max_htoa_retries = max(0, int(job.test_copy_max_retries))
+                matched_htoa = False
+                for htoa_attempt in range(max_htoa_retries):
+                    if defeat_cache:
+                        flush_drive_cache(job.device, job.disc_info)
+                    # Re-run both passes so CRCs are from the same secure pair.
+                    extract_htoa(
+                        job.device,
+                        htoa_info,
+                        test_wav,
+                        mode='secure',
+                        sample_offset=job.sample_offset,
                     )
+                    test_crc = wav_pcm_crc(test_wav)
+                    self._unlink_quiet(test_wav)
+                    if defeat_cache:
+                        flush_drive_cache(job.device, job.disc_info)
+                    extract_htoa(
+                        job.device,
+                        htoa_info,
+                        copy_wav,
+                        mode='secure',
+                        sample_offset=job.sample_offset,
+                    )
+                    copy_crc, peak, _ = analyze_wav_for_log(
+                        copy_wav, htoa_info.length_sectors
+                    )
+                    if test_crc and copy_crc and test_crc == copy_crc:
+                        matched_htoa = True
+                        notes.append(
+                            f'HTOA test/copy CRC matched on retry '
+                            f'{htoa_attempt + 1}'
+                        )
+                        break
+                if not matched_htoa and test_crc != copy_crc:
+                    if job.burst_fallback:
+                        if defeat_cache:
+                            flush_drive_cache(job.device, job.disc_info)
+                        extract_htoa(
+                            job.device,
+                            htoa_info,
+                            copy_wav,
+                            mode='burst',
+                            sample_offset=job.sample_offset,
+                        )
+                        mode = 'burst'
+                        copy_crc, peak, _ = analyze_wav_for_log(
+                            copy_wav, htoa_info.length_sectors
+                        )
+                        notes.append(
+                            f'HTOA test/copy CRC mismatch '
+                            f'(test={test_crc} copy={copy_crc}); '
+                            f'recovered in burst'
+                        )
+                    else:
+                        raise RuntimeError(
+                            f'HTOA test/copy CRC mismatch '
+                            f'(test={test_crc} copy={copy_crc}); '
+                            f'secure retries exhausted'
+                        )
             wav_for_encode = copy_wav
         else:
             wav_for_encode = test_wav
@@ -767,33 +879,40 @@ class RipEngine:
             )
             test_crc = copy_crc
 
-        # Output path: track 00
-        out_path = album_dir / f'00 - {title}{ext if ext.startswith(".") else f".{ext}"}'
-        # Sanitize filename lightly
-        safe_name = ''.join(
-            c if c not in '<>:"/\\|?*' else '_' for c in out_path.name
+        safe_title = ''.join(c if c not in '<>:"/\\|?*' else '_' for c in title)
+        dests = self._destinations_for_track(
+            job, 1, filename=f'00 - {safe_title}'
         )
-        out_path = album_dir / safe_name
+        self._ensure_destination_dirs(dests)
+        n_targets = max(1, len(dests))
 
-        report(RipState.ENCODING, 0.7, f'Encoding HTOA to {fmt.upper()}…')
-        if fmt == 'wav':
-            shutil.copy2(wav_for_encode, out_path)
-        else:
-            self._encode(fmt, wav_for_encode, out_path, job)
-
-        report(RipState.TAGGING, 0.9, 'Tagging HTOA…', path=out_path)
-        if job.album is not None:
-            # Write as track 0 with HTOA title via temporary metadata override
-            self._tags.write_album_tags(
-                out_path,
-                job.album,
-                0,
-                total_tracks=job.disc_track_count or None,
+        def _htoa_progress(t_i: int, enc_fmt: str, out_path: Path) -> None:
+            enc_frac = 0.7 + (0.15 * (t_i / n_targets))
+            report(
+                RipState.ENCODING,
+                enc_frac,
+                f'Encoding HTOA to {enc_fmt.upper()}'
+                + (f' ({t_i + 1}/{n_targets})' if n_targets > 1 else '')
+                + '…',
+                path=out_path,
             )
-            # Fix title to HTOA (track 0 often not in MB list)
-            _retag_title(out_path, title, track_number=0)
-        if job.embed_artwork and embed_art is not None:
-            self._tags.embed_artwork(out_path, embed_art.data, embed_art.mime)
+
+        htoa_outputs = self._encode_wav_to_destinations(
+            wav_for_encode,
+            dests,
+            job,
+            track_number=0,
+            embed_art=embed_art,
+            disc_track_count=job.disc_track_count or 0,
+            retitle=title,
+            write_cover=True,
+            on_progress=_htoa_progress,
+        )
+        self._unlink_quiet(test_wav, copy_wav)
+        primary_out = htoa_outputs[0] if htoa_outputs else None
+
+        if primary_out is None:
+            return False, None, [], notes
 
         if log_entry is not None:
             if job.test_and_copy and test_crc and copy_crc:
@@ -807,8 +926,8 @@ class RipEngine:
                 log_entry.copy_crc = copy_crc or test_crc
                 log_entry.crc_verified = None
             log_entry.peak_percent = peak
-            log_entry.output_path = out_path
-            log_entry.filename = out_path.name
+            log_entry.output_path = primary_out
+            log_entry.filename = primary_out.name
             log_entry.status = 'OK'
             log_entry.notes.append('Hidden Track One Audio (non-silent pregap)')
             if job.test_and_copy and test_crc and copy_crc and test_crc != copy_crc:
@@ -818,15 +937,15 @@ class RipEngine:
                 )
                 log_entry.had_errors = True
 
-        for p in (test_wav, copy_wav):
-            try:
-                p.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-        notes.append(f'HTOA saved: {out_path.name}')
-        report(RipState.DONE, 1.0, f'Finished HTOA → {out_path.name}', path=out_path)
-        return True, out_path, notes
+        saved = ', '.join(p.name for p in htoa_outputs)
+        notes.append(f'HTOA saved: {saved}')
+        report(
+            RipState.DONE,
+            1.0,
+            f'Finished HTOA → {primary_out.name}',
+            path=primary_out,
+        )
+        return True, primary_out, htoa_outputs, notes
 
     def _write_track_cue(
         self,
@@ -843,7 +962,9 @@ class RipEngine:
             return None
 
         basename = multi_file_cue_basename(job.album, job.disc_info)
-        cue_path = album_dir / f'{basename}.cue'
+        # Include format so Encode Twice → same folder does not overwrite cues.
+        fmt = (ext or pairs[0][1].suffix).lstrip('.').lower() or 'audio'
+        cue_path = album_dir / f'{basename}.{fmt}.cue'
         write_multi_file_cue_sheet(
             cue_path,
             track_files=pairs,
@@ -859,9 +980,159 @@ class RipEngine:
             return 'flac encoder not found'
         if fmt == 'mp3' and not shutil.which('lame'):
             return 'lame encoder not found'
+        if fmt == 'aac' and not shutil.which('ffmpeg'):
+            return 'ffmpeg required for AAC'
         if fmt == 'opus' and not shutil.which('opusenc') and not shutil.which('ffmpeg'):
             return 'opusenc or ffmpeg required for Opus'
         return None
+
+    @staticmethod
+    def _normalize_encode_targets(job: RipJob) -> list[tuple[str, Path]]:
+        """Primary + extras as ``(format, resolved_base_dir)``."""
+        raw: list[tuple[str, Path]] = []
+        if job.encode_targets:
+            for enc_fmt, enc_base in job.encode_targets:
+                fmt = (enc_fmt or '').strip().lower()
+                if fmt not in RipEngine.EXTENSIONS:
+                    continue
+                raw.append((fmt, Path(enc_base).expanduser()))
+        if not raw:
+            fmt = (job.encode_format or 'flac').strip().lower()
+            if fmt not in RipEngine.EXTENSIONS:
+                fmt = 'flac'
+            raw.append((fmt, Path(job.output_directory).expanduser()))
+        return RipEngine._dedupe_encode_targets(
+            [(f, b.resolve()) for f, b in raw]
+        )
+
+    @staticmethod
+    def _dedupe_encode_targets(
+        targets: list[tuple[str, Path]],
+    ) -> list[tuple[str, Path]]:
+        out: list[tuple[str, Path]] = []
+        seen: set[tuple[str, str]] = set()
+        for fmt, base in targets:
+            key = (fmt, str(base))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((fmt, base))
+        return out
+
+    def _destinations_for_track(
+        self,
+        job: RipJob,
+        track_number: int,
+        *,
+        filename: str | None = None,
+    ) -> list[_EncodeDest]:
+        """Resolve every encode target to album folder + output path."""
+        dests: list[_EncodeDest] = []
+        for enc_fmt, enc_base in self._normalize_encode_targets(job):
+            enc_ext = self.EXTENSIONS[enc_fmt]
+            album_dir, templated = build_output_paths(
+                base_dir=enc_base,
+                album_folder_template=job.album_folder_template,
+                filename_template=job.filename_template,
+                album=job.album,
+                track_number=max(1, track_number),
+                extension=enc_ext,
+            )
+            if filename:
+                stem = Path(filename).name
+                if stem.lower().endswith(enc_ext.lower()):
+                    out_path = album_dir / stem
+                else:
+                    out_path = album_dir / f'{stem}{enc_ext}'
+            else:
+                out_path = templated
+            dests.append(
+                _EncodeDest(
+                    format=enc_fmt,
+                    base_dir=enc_base,
+                    album_dir=album_dir,
+                    out_path=out_path,
+                )
+            )
+        return dests
+
+    def _ensure_destination_dirs(self, dests: list[_EncodeDest]) -> None:
+        """Create every destination album folder (and its base) up front."""
+        for dest in dests:
+            dest.base_dir.mkdir(parents=True, exist_ok=True)
+            dest.album_dir.mkdir(parents=True, exist_ok=True)
+
+    def _encode_wav_to_destinations(
+        self,
+        wav_path: Path,
+        dests: list[_EncodeDest],
+        job: RipJob,
+        *,
+        track_number: int,
+        embed_art: ArtworkImage | None,
+        disc_track_count: int,
+        retitle: str | None = None,
+        write_cover: bool = True,
+        on_progress: Callable[[int, str, Path], None] | None = None,
+    ) -> list[Path]:
+        """Encode *wav_path* to every destination; return output paths in order.
+
+        Tags and optional embedded art are applied after each encode. Folder
+        cover is written once per album directory when missing.
+        """
+        outputs: list[Path] = []
+        n = max(1, len(dests))
+        covered: set[Path] = set()
+        for i, dest in enumerate(dests):
+            dest.album_dir.mkdir(parents=True, exist_ok=True)
+            if (
+                write_cover
+                and job.save_cover_file
+                and dest.album_dir not in covered
+                and (job.folder_artwork is not None or job.artwork is not None)
+                and not (dest.album_dir / 'cover.jpg').is_file()
+                and not (dest.album_dir / 'cover.png').is_file()
+            ):
+                _prepare_artwork(job, dest.album_dir)
+                covered.add(dest.album_dir)
+
+            if on_progress is not None:
+                on_progress(i, dest.format, dest.out_path)
+
+            if dest.format == 'wav':
+                if dest.out_path.exists():
+                    dest.out_path.unlink()
+                shutil.copy2(wav_path, dest.out_path)
+            else:
+                self._encode(dest.format, wav_path, dest.out_path, job)
+
+            if job.album is not None:
+                total_for_tags = (
+                    len(job.album.tracks) if job.album.tracks else disc_track_count
+                )
+                self._tags.write_album_tags(
+                    dest.out_path,
+                    job.album,
+                    track_number,
+                    total_tracks=total_for_tags or None,
+                )
+                if retitle:
+                    _retag_title(
+                        dest.out_path, retitle, track_number=track_number
+                    )
+            if job.embed_artwork and embed_art is not None:
+                self._tags.embed_artwork(
+                    dest.out_path, embed_art.data, embed_art.mime
+                )
+            outputs.append(dest.out_path)
+            log.info(
+                'Encoded %s → %s (%s/%s)',
+                dest.format,
+                dest.out_path,
+                i + 1,
+                n,
+            )
+        return outputs
 
     def _rip_tracks_phase(
         self,
@@ -869,10 +1140,7 @@ class RipEngine:
         job: RipJob,
         tracks: list[int],
         tmp_path: Path,
-        base: Path,
         album_dir: Path | None,
-        fmt: str,
-        ext: str,
         embed_art: ArtworkImage | None,
         defeat_cache: bool,
         expected_sizes: dict[int, int],
@@ -895,16 +1163,6 @@ class RipEngine:
                 return album_dir
 
             idx = unit_index + i
-            album_dir, out_path = build_output_paths(
-                base_dir=base,
-                album_folder_template=job.album_folder_template,
-                filename_template=job.filename_template,
-                album=job.album,
-                track_number=track_no,
-                extension=ext,
-            )
-            album_dir.mkdir(parents=True, exist_ok=True)
-
             toc_track = self._toc_track(job.disc_info, track_no)
             sectors = toc_track.length_sectors if toc_track else 0
 
@@ -940,11 +1198,22 @@ class RipEngine:
             if job.test_and_copy and not extracted.matched:
                 if track_no not in test_copy_mismatches:
                     test_copy_mismatches.append(track_no)
-                if not extracted.copy_wav.is_file():
+                # Never encode unmatched secure audio. Burst recovery is the
+                # only allowed insecure exception (when user enabled it).
+                accept_burst = (
+                    extracted.mode == 'burst'
+                    and job.burst_fallback
+                    and extracted.copy_wav.is_file()
+                )
+                if not accept_burst:
                     raise _CrcMismatch(
                         track_no,
                         extracted.error
-                        or f'Test & copy failed for track {track_no}',
+                        or (
+                            f'Test & copy CRC mismatch on track {track_no} '
+                            f'(secure retries exhausted; enable Burst Fallback '
+                            f'to allow insecure recovery)'
+                        ),
                         test_crc=extracted.test_crc,
                         copy_crc=extracted.copy_crc,
                         attempt_log=extracted.attempt_log,
@@ -983,57 +1252,55 @@ class RipEngine:
                     total_units=total_units,
                 )
 
-            report(
-                track_no,
-                RipState.ENCODING,
-                index=idx,
-                sub=0.62,
-                message=f'Encoding track {track_no} to {fmt.upper()}…',
-                total_units=total_units,
-            )
-            if fmt == 'wav':
-                shutil.copy2(extracted.copy_wav, out_path)
-            else:
-                self._encode(fmt, extracted.copy_wav, out_path, job)
-
             if self._cancelled:
                 return album_dir
 
-            report(
-                track_no,
-                RipState.TAGGING,
-                index=idx,
-                sub=0.88,
-                message=f'Tagging track {track_no}…',
-                path=out_path,
-                total_units=total_units,
-            )
-            if job.album is not None:
-                total_for_tags = (
-                    len(job.album.tracks)
-                    if job.album.tracks
-                    else disc_track_count
-                )
-                self._tags.write_album_tags(
-                    out_path,
-                    job.album,
+            dests = self._destinations_for_track(job, track_no)
+            self._ensure_destination_dirs(dests)
+            n_targets = max(1, len(dests))
+
+            def _enc_progress(t_i: int, enc_fmt: str, out_path: Path) -> None:
+                enc_frac = 0.62 + (0.24 * (t_i / n_targets))
+                report(
                     track_no,
-                    total_tracks=total_for_tags,
+                    RipState.ENCODING,
+                    index=idx,
+                    sub=enc_frac,
+                    message=(
+                        f'Encoding track {track_no} to {enc_fmt.upper()}'
+                        + (f' ({t_i + 1}/{n_targets})' if n_targets > 1 else '')
+                        + '…'
+                    ),
+                    path=out_path,
+                    total_units=total_units,
                 )
-            if job.embed_artwork and embed_art is not None:
-                self._tags.embed_artwork(
-                    out_path,
-                    embed_art.data,
-                    embed_art.mime,
-                )
+
+            written = self._encode_wav_to_destinations(
+                extracted.copy_wav,
+                dests,
+                job,
+                track_number=track_no,
+                embed_art=embed_art,
+                disc_track_count=disc_track_count,
+                write_cover=True,
+                on_progress=_enc_progress,
+            )
+            if self._cancelled:
+                return album_dir
+
+            primary_out: Path | None = None
+            for dest, out_path in zip(dests, written, strict=True):
+                outputs.append(out_path)
+                track_output_pairs.append((track_no, out_path))
+                if primary_out is None:
+                    primary_out = out_path
+                    album_dir = dest.album_dir
 
             self._unlink_quiet(extracted.test_wav, extracted.copy_wav)
 
-            outputs.append(out_path)
-            track_output_pairs.append((track_no, out_path))
-            if log_entry is not None:
-                log_entry.output_path = out_path
-                log_entry.filename = out_path.name
+            if log_entry is not None and primary_out is not None:
+                log_entry.output_path = primary_out
+                log_entry.filename = primary_out.name
                 if log_entry.status != 'finished with errors':
                     log_entry.status = 'OK'
 
@@ -1042,13 +1309,15 @@ class RipEngine:
                 done_extra = ' (burst)'
             elif job.test_and_copy and extracted.copy_crc:
                 done_extra = f' (test=copy CRC {extracted.copy_crc})'
+            if len(dests) > 1:
+                done_extra = f'{done_extra} · {len(dests)} encodes'
             report(
                 track_no,
                 RipState.DONE,
                 index=idx,
                 sub=1.0,
                 message=f'Finished track {track_no}{done_extra}',
-                path=out_path,
+                path=primary_out,
                 total_units=total_units,
             )
 
@@ -1481,8 +1750,8 @@ class RipEngine:
         wav_path: Path,
         *,
         expected_bytes: int | None = None,
-        min_ratio: float = 0.98,
-        burst_fallback: bool = True,
+        min_ratio: float = SECURE_MIN_WAV_RATIO,
+        burst_fallback: bool = False,
         force_mode: str | None = None,
         sample_offset: int = 0,
         on_burst: Callable[[], None] | None = None,
@@ -1557,8 +1826,9 @@ class RipEngine:
         wav_path: Path,
         *,
         expected_bytes: int | None = None,
-        min_ratio: float = 0.98,
-        burst_fallback: bool = True,
+        min_ratio: float = SECURE_MIN_WAV_RATIO,
+        burst_fallback: bool = False,
+        force_mode: str | None = None,
         sample_offset: int = 0,
         on_burst: Callable[[], None] | None = None,
         timeout_secure: int | None = None,
@@ -1594,12 +1864,30 @@ class RipEngine:
                 sample_offset=sample_offset,
             )
 
+        if force_mode == 'burst':
+            if on_burst is not None:
+                on_burst()
+            try:
+                if wav_path.exists():
+                    wav_path.unlink()
+            except OSError:
+                pass
+            burst_stats = run_burst()
+            self._assert_wav_ok(
+                wav_path,
+                0,
+                expected_bytes=expected_bytes,
+                min_ratio=max(0.5, min_ratio * 0.85),
+                label='burst',
+            )
+            return 'burst', burst_stats
+
         return self._extract_with_burst_fallback(
             wav_path,
             track_number=0,
             expected_bytes=expected_bytes,
             min_ratio=min_ratio,
-            burst_fallback=burst_fallback,
+            burst_fallback=burst_fallback and force_mode != 'secure',
             run_secure=run_secure,
             run_burst=run_burst,
             on_burst=on_burst,
@@ -1803,8 +2091,6 @@ class RipEngine:
         expected_bytes = 44 + total_sectors * 2352  # WAV header + CDDA
 
         basename = image_basename(job.album, disc)
-        out_path = album_dir / f'{basename}{ext}'
-        cue_path = album_dir / f'{basename}.cue'
 
         notes.append(
             f'Copy Image span: sectors [{file_start}, {end_sector}) '
@@ -1865,34 +2151,50 @@ class RipEngine:
 
                 use_wav = test_wav
                 if job.test_and_copy and not self._cancelled:
-                    test_crc = wav_pcm_crc(test_wav)
-                    if job.drive_caches_audio is not False and (
-                        job.defeat_audio_cache or job.drive_caches_audio
-                    ):
-                        report(RipState.RIPPING, 0.35, 'Defeating drive cache…')
-                        flush_drive_cache(job.device, disc)
-                    report(RipState.RIPPING, 0.40, 'Copy pass for disc image…')
-                    copy_mode, copy_stats = self._rip_span(
-                        job.device,
-                        file_start,
-                        end_sector,
-                        copy_wav,
-                        expected_bytes=expected_bytes,
-                        min_ratio=job.min_wav_size_ratio,
-                        burst_fallback=False,
-                        sample_offset=job.sample_offset,
-                        timeout_secure=span_timeout_secure,
-                        timeout_burst=span_timeout_burst,
-                    )
-                    img_stats.merge(copy_stats)
-                    copy_crc = wav_pcm_crc(copy_wav)
-                    if test_crc and copy_crc and test_crc != copy_crc:
-                        notes.append(
-                            f'Image test/copy CRC mismatch ({test_crc} ≠ {copy_crc}); '
-                            'retrying copy pass'
-                        )
-                        if job.drive_caches_audio is not False:
+                    max_img_retries = max(0, int(job.test_copy_max_retries))
+                    img_attempts = 1 + max_img_retries
+                    img_matched = False
+                    test_crc = ''
+                    copy_crc = ''
+                    copy_mode = mode
+                    for img_attempt in range(img_attempts):
+                        if self._cancelled:
+                            break
+                        if img_attempt > 0:
+                            report(
+                                RipState.RIPPING,
+                                0.30,
+                                f'Retrying disc image test & copy '
+                                f'(attempt {img_attempt + 1})…',
+                            )
+                            self._unlink_quiet(test_wav, copy_wav)
+                            if job.drive_caches_audio is not False:
+                                flush_drive_cache(job.device, disc)
+                            mode, retry_stats = self._rip_span(
+                                job.device,
+                                file_start,
+                                end_sector,
+                                test_wav,
+                                expected_bytes=expected_bytes,
+                                min_ratio=job.min_wav_size_ratio,
+                                burst_fallback=False,
+                                sample_offset=job.sample_offset,
+                                timeout_secure=span_timeout_secure,
+                                timeout_burst=span_timeout_burst,
+                            )
+                            img_stats.merge(retry_stats)
+
+                        test_crc = wav_pcm_crc(test_wav)
+                        if job.drive_caches_audio is not False and (
+                            job.defeat_audio_cache or job.drive_caches_audio
+                        ):
+                            report(
+                                RipState.RIPPING, 0.35, 'Defeating drive cache…'
+                            )
                             flush_drive_cache(job.device, disc)
+                        report(
+                            RipState.RIPPING, 0.40, 'Copy pass for disc image…'
+                        )
                         copy_mode, copy_stats = self._rip_span(
                             job.device,
                             file_start,
@@ -1907,14 +2209,61 @@ class RipEngine:
                         )
                         img_stats.merge(copy_stats)
                         copy_crc = wav_pcm_crc(copy_wav)
-                        if test_crc != copy_crc:
+                        if test_crc and copy_crc and test_crc == copy_crc:
+                            img_matched = True
+                            break
+                        notes.append(
+                            f'Image test/copy CRC mismatch '
+                            f'({test_crc} ≠ {copy_crc})'
+                            + (
+                                '; retrying'
+                                if img_attempt + 1 < img_attempts
+                                else ''
+                            )
+                        )
+
+                    if not img_matched:
+                        if job.burst_fallback and not self._cancelled:
+                            report(
+                                RipState.RIPPING,
+                                0.45,
+                                'Image test & copy failed — burst recovery…',
+                            )
+                            if job.drive_caches_audio is not False:
+                                flush_drive_cache(job.device, disc)
+                            copy_mode, burst_stats = self._rip_span(
+                                job.device,
+                                file_start,
+                                end_sector,
+                                copy_wav,
+                                expected_bytes=expected_bytes,
+                                min_ratio=job.min_wav_size_ratio,
+                                burst_fallback=False,
+                                force_mode='burst',
+                                sample_offset=job.sample_offset,
+                                timeout_secure=span_timeout_secure,
+                                timeout_burst=span_timeout_burst,
+                            )
+                            img_stats.merge(burst_stats)
+                            mode = 'burst'
                             notes.append(
-                                f'Image test/copy CRC still mismatch '
-                                f'({test_crc} ≠ {copy_crc}); keeping copy pass'
+                                f'Image test/copy CRC mismatch '
+                                f'({test_crc} ≠ {copy_crc}); recovered in burst'
+                            )
+                        else:
+                            return RipResult(
+                                success=False,
+                                error=(
+                                    f'Image test/copy CRC mismatch '
+                                    f'({test_crc} ≠ {copy_crc}); '
+                                    f'secure retries exhausted'
+                                ),
+                                notes=notes,
+                                album_dir=album_dir,
                             )
                     if copy_mode == 'burst':
                         mode = 'burst'
-                        notes.append('Disc image copy pass used burst mode')
+                        notes.append('Disc image used burst mode')
                     self._unlink_quiet(test_wav)
                     use_wav = copy_wav
 
@@ -1935,85 +2284,118 @@ class RipEngine:
                         success=False, cancelled=True, notes=notes, album_dir=album_dir
                     )
 
-                # Move/encode final audio into album folder
-                if fmt == 'wav':
-                    report(RipState.ENCODING, 0.75, 'Writing image WAV…', out_path)
-                    if out_path.exists():
-                        out_path.unlink()
-                    shutil.copy2(use_wav, out_path)
-                else:
+                # Encode once per target (same/different folders).
+                dests = self._destinations_for_track(
+                    job, 1, filename=basename
+                )
+                self._ensure_destination_dirs(dests)
+                for dest in dests:
+                    notes.append(
+                        f'Encode target: {dest.format.upper()} → {dest.album_dir}'
+                    )
+                n_targets = max(1, len(dests))
+
+                def _img_progress(t_i: int, enc_fmt: str, out_path: Path) -> None:
+                    enc_frac = 0.75 + (0.12 * (t_i / n_targets))
                     report(
                         RipState.ENCODING,
-                        0.75,
-                        f'Encoding disc image to {fmt.upper()}…',
+                        enc_frac,
+                        (
+                            'Writing image WAV…'
+                            if enc_fmt == 'wav'
+                            else f'Encoding disc image to {enc_fmt.upper()}'
+                            + (
+                                f' ({t_i + 1}/{n_targets})'
+                                if n_targets > 1
+                                else ''
+                            )
+                            + '…'
+                        ),
                         out_path,
                     )
-                    self._encode(fmt, use_wav, out_path, job)
 
-                if not out_path.is_file() or out_path.stat().st_size < 1000:
+                try:
+                    output_files = self._encode_wav_to_destinations(
+                        use_wav,
+                        dests,
+                        job,
+                        track_number=1,
+                        embed_art=embed_art,
+                        disc_track_count=disc.track_count,
+                        write_cover=True,
+                        on_progress=_img_progress,
+                    )
+                except Exception as enc_exc:
                     return RipResult(
                         success=False,
-                        error='Image encode produced no output',
+                        error=str(enc_exc),
                         notes=notes,
-                        album_dir=album_dir,
+                        album_dir=dests[0].album_dir if dests else album_dir,
                     )
 
-                # Optional album-level tags on the image (single album file).
-                if job.album is not None:
-                    report(RipState.TAGGING, 0.88, 'Tagging disc image…', out_path)
-                    try:
-                        self._tags.write_album_tags(
-                            out_path,
-                            album=job.album,
-                            track_number=1,
-                            total_tracks=disc.track_count,
+                for dest, this_out in zip(dests, output_files, strict=True):
+                    if not this_out.is_file() or this_out.stat().st_size < 1000:
+                        return RipResult(
+                            success=False,
+                            error='Image encode produced no output',
+                            notes=notes,
+                            album_dir=dest.album_dir,
                         )
-                        if job.embed_artwork and embed_art is not None:
-                            self._tags.embed_artwork(
-                                out_path, embed_art.data, embed_art.mime
+                    if job.write_cue_file:
+                        this_cue = dest.album_dir / f'{basename}.cue'
+                        report(
+                            RipState.ENCODING,
+                            0.95,
+                            'Writing CUE sheet…',
+                            this_cue,
+                        )
+                        write_cue_sheet(
+                            this_cue,
+                            image_filename=this_out.name,
+                            file_type=cue_file_type_for_extension(dest.extension),
+                            disc=disc,
+                            album=job.album,
+                            file_start_sector=file_start,
+                            htoa_index00=htoa_in_image,
+                        )
+                        notes.append(f'CUE sheet: {this_cue.name}')
+                        output_files.append(this_cue)
+                        if rip_log is not None:
+                            rip_log.notes.append(
+                                f'CUE sheet (image): {this_cue.name}'
                             )
-                    except Exception as exc:
-                        notes.append(f'Image tagging warning: {exc}')
 
-                output_files: list[Path] = [out_path]
-                if job.write_cue_file:
-                    report(RipState.ENCODING, 0.92, 'Writing CUE sheet…', cue_path)
-                    write_cue_sheet(
-                        cue_path,
-                        image_filename=out_path.name,
-                        file_type=cue_file_type_for_extension(ext),
-                        disc=disc,
-                        album=job.album,
-                        file_start_sector=file_start,
-                        htoa_index00=htoa_in_image,
-                    )
-                    notes.append(f'CUE sheet: {cue_path.name}')
-                    output_files.append(cue_path)
-                    if rip_log is not None:
-                        rip_log.notes.append(f'CUE sheet (image): {cue_path.name}')
-                else:
+                if not job.write_cue_file:
                     notes.append('CUE sheet skipped (Write .cue file is off)')
+
+                primary_album = dests[0].album_dir
+                primary_out = output_files[0] if output_files else None
+                album_dir = primary_album
 
                 log_path = None
                 if rip_log is not None:
                     try:
-                        log_path = rip_log.write(album_dir)
+                        # Always beside the first (primary) encode.
+                        log_path = rip_log.write(primary_album)
+                        notes.append(f'Rip log written to {log_path}')
                     except Exception as exc:
                         notes.append(f'Rip log warning: {exc}')
 
-                done_label = out_path.name
-                if job.write_cue_file:
-                    done_label = f'{out_path.name} + {cue_path.name}'
+                done_label = primary_out.name if primary_out else 'image'
+                if job.write_cue_file and primary_out is not None:
+                    done_label = f'{primary_out.name} + {basename}.cue'
+                if len(dests) > 1:
+                    done_label = f'{done_label} · {len(dests)} encodes'
                 report(
                     RipState.DONE,
                     1.0,
                     f'Copy Image complete → {done_label}',
-                    album_dir,
+                    primary_album,
                 )
                 return RipResult(
                     success=True,
                     output_files=output_files,
-                    album_dir=album_dir,
+                    album_dir=primary_album,
                     notes=notes,
                     log_path=log_path,
                     cover_path=cover_path,
@@ -2043,22 +2425,9 @@ class RipEngine:
             # Apply drive sample offset at read time (read offset correction).
             cmd.extend(['-O', str(int(sample_offset))])
         if mode == 'burst':
-            # Disable all paranoia / overlap repair (cdparanoia -Z).
-            # Keep -e so wrappers can still observe progress on long spans.
-            cmd.extend(['-Z', '-e'])
+            cmd.extend(burst_paranoia_flags())
         else:
-            # Full paranoia + never-skip persistence:
-            #  --never-skip=N  re-read imperfect data (do not soft-skip early)
-            #  -X              abort if a skip is still forced (no silent holes)
-            #  -e              progress/error-correction callbacks on stderr
-            # never-skip=N must be one argv token ("-z" "200" is misparsed as track 200).
-            cmd.extend(
-                [
-                    f'--never-skip={SECURE_NEVER_SKIP}',
-                    '-X',
-                    '-e',
-                ]
-            )
+            cmd.extend(secure_paranoia_flags())
         return cmd
 
     def _run_cdparanoia(
@@ -2156,57 +2525,39 @@ class RipEngine:
                 )
 
     def _encode(self, fmt: str, wav_path: Path, out_path: Path, job: RipJob) -> None:
+        """Encode with stock encoder presets; PCM is not pre-processed."""
         if out_path.exists():
             out_path.unlink()
 
         if fmt == 'flac':
-            level = max(0, min(8, int(job.flac_compression)))
-            cmd = [
-                'flac',
-                f'-{level}',
-                '--silent',
-                '-o',
-                str(out_path),
-                str(wav_path),
-            ]
-            self._run(cmd, what='flac')
+            self._run(
+                flac_encode_argv(wav_path, out_path, job.flac_compression),
+                what='flac',
+            )
         elif fmt == 'mp3':
-            bitrate = int(job.mp3_bitrate)
-            cmd = [
-                'lame',
-                '--silent',
-                '-b',
-                str(bitrate),
-                str(wav_path),
-                str(out_path),
-            ]
-            self._run(cmd, what='lame')
+            self._run(
+                mp3_encode_argv(wav_path, out_path, job.mp3_quality),
+                what='lame',
+            )
+        elif fmt == 'aac':
+            quality = job.aac_quality or (
+                f'cbr{int(job.aac_bitrate)}' if job.aac_bitrate else 'cbr256'
+            )
+            self._run(
+                aac_encode_argv(wav_path, out_path, quality),
+                what='ffmpeg aac',
+            )
         elif fmt == 'opus':
             if shutil.which('opusenc'):
-                cmd = [
-                    'opusenc',
-                    '--quiet',
-                    '--bitrate',
-                    str(int(job.opus_bitrate)),
-                    str(wav_path),
-                    str(out_path),
-                ]
-                self._run(cmd, what='opusenc')
+                self._run(
+                    opus_encode_argv(wav_path, out_path, job.opus_bitrate),
+                    what='opusenc',
+                )
             else:
-                cmd = [
-                    'ffmpeg',
-                    '-y',
-                    '-loglevel',
-                    'error',
-                    '-i',
-                    str(wav_path),
-                    '-c:a',
-                    'libopus',
-                    '-b:a',
-                    f'{int(job.opus_bitrate)}k',
-                    str(out_path),
-                ]
-                self._run(cmd, what='ffmpeg opus')
+                self._run(
+                    opus_ffmpeg_argv(wav_path, out_path, job.opus_bitrate),
+                    what='ffmpeg opus',
+                )
         else:
             raise RuntimeError(f'Unsupported encode format: {fmt}')
 
@@ -2410,6 +2761,13 @@ def _retag_title(path: Path, title: str, *, track_number: int = 0) -> None:
             tags.add(TIT2(encoding=3, text=title))
             tags.add(TRCK(encoding=3, text=str(track_number)))
             audio.save()
+        elif suffix in {'.m4a', '.mp4', '.aac'}:
+            from mutagen.mp4 import MP4
+
+            audio = MP4(path)
+            audio['\xa9nam'] = [title]
+            audio['trkn'] = [(track_number, 0)]
+            audio.save()
         elif suffix in {'.opus', '.ogg'}:
             from mutagen.oggopus import OggOpus
             from mutagen.oggvorbis import OggVorbis
@@ -2465,16 +2823,23 @@ def _finish_result(
     htoa_ripped: bool = False,
     cache_result: DriveCacheResult | None = None,
     test_copy_mismatches: list[int] | None = None,
+    log_dir: Path | None = None,
 ) -> RipResult:
+    """Build a RipResult; write the rip log beside the *first* encode only.
+
+    *log_dir* / *album_dir* should be the primary encode album folder. Falls
+    back to the first output's parent when needed.
+    """
     log_path: Path | None = None
     if rip_log is not None:
         rip_log.notes.extend(n for n in notes if n not in rip_log.notes)
         rip_log.finish(error=error, cancelled=cancelled)
-        dest = album_dir
+        dest = log_dir or album_dir
         if dest is None and outputs:
             dest = outputs[0].parent
         if dest is not None:
             try:
+                dest.mkdir(parents=True, exist_ok=True)
                 log_path = rip_log.write(dest)
                 notes.append(f'Rip log written to {log_path}')
             except OSError as exc:

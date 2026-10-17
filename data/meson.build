@@ -33,11 +33,13 @@ install_data(
   install_dir: datadir / 'icons/hicolor/symbolic/apps',
 )
 
-# GSettings schema
+# GSettings schema — compile into the build dir so devenv / ninja run work.
 install_data(
   'org.ready2rip.Ready2Rip.gschema.xml',
   install_dir: datadir / 'glib-2.0/schemas',
 )
+
+gnome.compile_schemas(depend_files: files('org.ready2rip.Ready2Rip.gschema.xml'))
 
 compile_schemas = find_program('glib-compile-schemas', required: false)
 if compile_schemas.found()

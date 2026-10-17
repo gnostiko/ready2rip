@@ -1,0 +1,14 @@
+/.cache/
+/build/
+/build-appimage/
+/dist/
+/.tools/
+/install/
+__pycache__/
+*.pyc
+*.pyo
+.mesonpy*
+*.egg-info/
+.ruff_cache/
+gschemas.compiled
+**/gschemas.compiled

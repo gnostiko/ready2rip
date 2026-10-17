@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Optical drive identification for the Drive sidebar panel."""
+"""Optical drive identification for the Drive settings panel."""
 
 from __future__ import annotations
 

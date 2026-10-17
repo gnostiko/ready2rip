@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Run ready2rip from this source tree. No Meson build directory required.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+export PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
+exec python3 -m ready2rip.main "$@"

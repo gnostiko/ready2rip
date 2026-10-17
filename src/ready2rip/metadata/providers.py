@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -13,19 +15,31 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
+from ready2rip import config
 from ready2rip.util import is_safe_http_url, normalize_release_date, read_limited
 
 log = logging.getLogger(__name__)
 
-USER_AGENT = 'ready2rip/0.4.1 ( https://github.com/gnostiko/ready2rip )'
+USER_AGENT = (
+    f'{config.APPLICATION_NAME}/{config.APPLICATION_VERSION} '
+    f'( https://github.com/gnostiko/ready2rip )'
+)
 MB_BASE = 'https://musicbrainz.org/ws/2'
-# gnudb CDDB HTTP gateway (port 80). HTTPS on gnudb.gnudb.org is often refused.
+# MusicBrainz asks for ≤1 request/second for anonymous clients.
+_MB_MIN_INTERVAL = 1.1
+_MB_LOCK = threading.Lock()
+_MB_LAST_REQUEST = 0.0
+
+# gnudb CGI (try HTTPS first; fall back to HTTP). Service outages show as
+# errno 111 / connection refused — we surface that clearly to the UI.
 GNUDB_CGI_URLS = (
+    'https://gnudb.gnudb.org/~cddb/cddb.cgi',
+    'https://gnudb.org/~cddb/cddb.cgi',
     'http://gnudb.gnudb.org/~cddb/cddb.cgi',
     'http://gnudb.org/~cddb/cddb.cgi',
 )
-# Last-resort FreeDB-style path used by some mirrors.
 GNUDB_REST_URLS = (
+    'https://gnudb.gnudb.org/gnudb',
     'http://gnudb.gnudb.org/gnudb',
 )
 GNUDB_BASE = GNUDB_REST_URLS[0]
@@ -55,6 +69,7 @@ class AlbumMetadata:
     title: str = ''
     artist: str = ''
     date: str = ''
+    genre: str = ''
     barcode: str = ''
     label: str = ''
     catalog_number: str = ''
@@ -63,7 +78,7 @@ class AlbumMetadata:
     discid: str = ''
     tracks: list[TrackMetadata] = field(default_factory=list)
     cover_url: str = ''
-    source: str = ''  # musicbrainz | freedb | manual
+    source: str = ''  # musicbrainz | gnudb | freedb | manual
     country: str = ''
     status: str = ''
     disambiguation: str = ''
@@ -76,6 +91,8 @@ class AlbumMetadata:
         extra = []
         if self.date:
             extra.append(self.date[:4] if len(self.date) >= 4 else self.date)
+        if self.genre:
+            extra.append(self.genre)
         if self.country:
             extra.append(self.country)
         if self.disambiguation:
@@ -99,15 +116,20 @@ class MusicBrainzProvider(MetadataProvider):
     def __init__(self, user_agent: str = USER_AGENT, timeout: float = 20.0) -> None:
         self.user_agent = user_agent
         self.timeout = timeout
+        self.last_error: str | None = None
 
     def lookup_by_discid(self, discid: str) -> list[AlbumMetadata]:
         if not discid:
             return []
+        self.last_error = None
         params = {
             'fmt': 'json',
             'inc': 'artists+recordings+release-groups+labels+artist-credits',
         }
-        url = f'{MB_BASE}/discid/{urllib.parse.quote(discid)}?{urllib.parse.urlencode(params)}'
+        url = (
+            f'{MB_BASE}/discid/{urllib.parse.quote(discid)}'
+            f'?{urllib.parse.urlencode(params)}'
+        )
         data = self._get_json(url)
         if not data:
             return []
@@ -175,43 +197,93 @@ class MusicBrainzProvider(MetadataProvider):
             preferred_track_count=preferred_track_count,
         )
 
+    def _throttle(self) -> None:
+        """Respect MusicBrainz anonymous rate limit (≈1 req/s)."""
+        global _MB_LAST_REQUEST
+        with _MB_LOCK:
+            now = time.monotonic()
+            wait = _MB_MIN_INTERVAL - (now - _MB_LAST_REQUEST)
+            if wait > 0:
+                time.sleep(wait)
+            _MB_LAST_REQUEST = time.monotonic()
+
     def _get_json(self, url: str) -> dict[str, Any] | None:
         if not is_safe_http_url(url):
             log.warning('Refusing non-http(s) metadata URL: %s', url)
+            self.last_error = 'invalid MusicBrainz URL'
             return None
-        request = urllib.request.Request(
-            url,
-            headers={
-                'User-Agent': self.user_agent,
-                'Accept': 'application/json',
-            },
-            method='GET',
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                final = response.geturl()
-                if final and not is_safe_http_url(final):
-                    log.warning('Refusing metadata redirect to unsafe URL: %s', final)
-                    return None
-                body = read_limited(response).decode('utf-8')
-                return json.loads(body)
-        except urllib.error.HTTPError as exc:
-            log.warning('MusicBrainz HTTP %s for %s', exc.code, url)
+
+        last_err: str | None = None
+        # Retry transient overload (503 / 429); MB is often briefly busy.
+        for attempt in range(5):
+            self._throttle()
+            request = urllib.request.Request(
+                url,
+                headers={
+                    'User-Agent': self.user_agent,
+                    'Accept': 'application/json',
+                },
+                method='GET',
+            )
             try:
-                exc.read()
-                exc.close()
-            except Exception:
-                pass
-            return None
-        except (
-            urllib.error.URLError,
-            TimeoutError,
-            json.JSONDecodeError,
-            OSError,
-            ValueError,
-        ) as exc:
-            log.warning('MusicBrainz request failed: %s', exc)
-            return None
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    final = response.geturl()
+                    if final and not is_safe_http_url(final):
+                        log.warning(
+                            'Refusing metadata redirect to unsafe URL: %s', final
+                        )
+                        self.last_error = 'unsafe MusicBrainz redirect'
+                        return None
+                    body = read_limited(response).decode('utf-8')
+                    self.last_error = None
+                    return json.loads(body)
+            except urllib.error.HTTPError as exc:
+                code = exc.code
+                retry_after = exc.headers.get('Retry-After') if exc.headers else None
+                try:
+                    exc.read()
+                    exc.close()
+                except Exception:
+                    pass
+                if code in (429, 503) and attempt + 1 < 5:
+                    delay = _retry_delay_seconds(retry_after, attempt)
+                    log.warning(
+                        'MusicBrainz HTTP %s — retry %s/%s in %.1fs',
+                        code,
+                        attempt + 1,
+                        4,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    last_err = f'HTTP {code} (service busy)'
+                    continue
+                last_err = f'HTTP {code}'
+                log.warning('MusicBrainz HTTP %s for %s', code, url)
+                break
+            except (
+                urllib.error.URLError,
+                TimeoutError,
+                json.JSONDecodeError,
+                OSError,
+                ValueError,
+            ) as exc:
+                last_err = _short_network_error(exc)
+                if attempt + 1 < 5 and _is_transient_network(exc):
+                    delay = _retry_delay_seconds(None, attempt)
+                    log.warning(
+                        'MusicBrainz %s — retry %s/%s in %.1fs',
+                        last_err,
+                        attempt + 1,
+                        4,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                log.warning('MusicBrainz request failed: %s', exc)
+                break
+
+        self.last_error = f'MusicBrainz: {last_err}' if last_err else 'MusicBrainz failed'
+        return None
 
     def _release_to_album(
         self,
@@ -357,11 +429,13 @@ class FreeDBProvider(MetadataProvider):
         self.track_count = track_count
         self._cgi_url: str | None = None
         self._network_dead = False
+        self.last_error: str | None = None
 
     def lookup_by_discid(self, discid: str) -> list[AlbumMetadata]:
         """Look up FreeDB ID. Also accepts ``category/id`` paths."""
         if not discid:
             return []
+        self.last_error = None
 
         if '/' in discid:
             return self._fetch_rest_entry(discid)
@@ -372,10 +446,12 @@ class FreeDBProvider(MetadataProvider):
         return self._lookup_id_only(discid)
 
     def _cddb_hello(self) -> str:
-        from ready2rip import config
-
+        # gnudb expects identifiable hello; email-shaped user reduces blocks.
         version = getattr(config, 'APPLICATION_VERSION', '0.4.1')
-        return f'anonymous localhost {config.APPLICATION_NAME} {version}'
+        return (
+            f'ready2rip@users.noreply.github.com localhost '
+            f'{config.APPLICATION_NAME} {version}'
+        )
 
     def _cddb_query_and_read(self, freedb_id: str) -> list[AlbumMetadata]:
         if len(self.offsets) < 2:
@@ -400,7 +476,9 @@ class FreeDBProvider(MetadataProvider):
         albums: list[AlbumMetadata] = []
         for category, disc_id in matches[:3]:
             body = self._cddb_request(f'cddb read {category} {disc_id}')
-            album = _parse_cddb_entry(body or '', source='freedb')
+            album = _parse_cddb_entry(
+                body or '', source='gnudb', category=category
+            )
             if album is not None:
                 albums.append(album)
         return albums
@@ -429,6 +507,7 @@ class FreeDBProvider(MetadataProvider):
                 continue
         if last_exc is not None:
             self._network_dead = _is_connection_refused(last_exc)
+            self.last_error = f'gnudb: {_short_network_error(last_exc)}'
             log.warning('gnudb request failed: %s', last_exc)
         return None
 
@@ -446,8 +525,10 @@ class FreeDBProvider(MetadataProvider):
     def _fetch_rest_entry(self, path: str) -> list[AlbumMetadata]:
         # Keep path relative; never allow scheme injection via FreeDB id.
         safe = path.lstrip('/')
-        if '..' in safe.split('/') or safe.startswith('http'):
+        parts = safe.split('/')
+        if '..' in parts or safe.startswith('http'):
             return []
+        category = parts[0] if len(parts) >= 2 else ''
         last_exc: Exception | None = None
         for base in GNUDB_REST_URLS:
             url = f'{base.rstrip("/")}/{safe}'
@@ -455,13 +536,16 @@ class FreeDBProvider(MetadataProvider):
                 continue
             text, exc = self._http_get_text(url)
             if text is not None:
-                album = _parse_cddb_entry(text, source='freedb')
+                album = _parse_cddb_entry(
+                    text, source='gnudb', category=category
+                )
                 return [album] if album else []
             last_exc = exc
             if _is_connection_refused(exc):
                 self._network_dead = True
                 break
         if last_exc is not None:
+            self.last_error = f'gnudb: {_short_network_error(last_exc)}'
             log.warning('gnudb request failed: %s', last_exc)
         return []
 
@@ -481,9 +565,50 @@ class FreeDBProvider(MetadataProvider):
         except urllib.error.HTTPError as exc:
             if exc.code != 404:
                 log.debug('gnudb HTTP %s for %s', exc.code, url)
+            try:
+                exc.read()
+                exc.close()
+            except Exception:
+                pass
             return None, exc
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             return None, exc
+
+
+def _retry_delay_seconds(retry_after: str | None, attempt: int) -> float:
+    if retry_after:
+        try:
+            return max(1.0, min(30.0, float(retry_after.strip())))
+        except ValueError:
+            pass
+    return min(16.0, 1.0 * (2**attempt))
+
+
+def _is_transient_network(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    text = str(exc).casefold()
+    return any(
+        s in text
+        for s in (
+            'timed out',
+            'temporary failure',
+            'network is unreachable',
+            'connection reset',
+            'broken pipe',
+        )
+    )
+
+
+def _short_network_error(exc: BaseException) -> str:
+    if isinstance(exc, Exception) and _is_connection_refused(exc):
+        return 'connection refused (server unreachable)'
+    reason = getattr(exc, 'reason', None)
+    if isinstance(reason, BaseException) and getattr(reason, 'errno', None) == 111:
+        return 'connection refused (server unreachable)'
+    if reason is not None:
+        return str(reason)
+    return str(exc)
 
 
 def _artist_credit(credit: Any) -> str:
@@ -557,7 +682,12 @@ def _parse_cddb_query_matches(
     return matches
 
 
-def _parse_cddb_entry(text: str, source: str = 'freedb') -> AlbumMetadata | None:
+def _parse_cddb_entry(
+    text: str,
+    source: str = 'gnudb',
+    *,
+    category: str = '',
+) -> AlbumMetadata | None:
     """Parse a classic CDDB/FreeDB entry body into AlbumMetadata."""
     if not text or 'DTITLE=' not in text:
         return None
@@ -595,13 +725,16 @@ def _parse_cddb_entry(text: str, source: str = 'freedb') -> AlbumMetadata | None
     if not title and not track_list:
         return None
 
+    # Prefer DGENRE; fall back to the CDDB category (rock, jazz, …).
+    genre = dgenre or (category.strip().title() if category else '')
+
     return AlbumMetadata(
         title=title.strip(),
         artist=artist.strip(),
         date=dyear,
+        genre=genre,
         tracks=track_list,
         source=source,
-        disambiguation=dgenre,
     )
 
 
@@ -647,13 +780,16 @@ def fetch_album_from_musicbrainz_link(
             'Not a MusicBrainz release link. '
             'Use musicbrainz.org/release/… (not release-group).'
         )
-    album = MusicBrainzProvider().get_release(
+    provider = MusicBrainzProvider()
+    album = provider.get_release(
         release_id,
         discid=discid,
         preferred_track_count=preferred_track_count,
     )
     if album is None:
-        raise ValueError('Could not load that MusicBrainz release')
+        raise ValueError(
+            provider.last_error or 'Could not load that MusicBrainz release'
+        )
     if discid and not album.discid:
         album.discid = discid
     return album
@@ -667,9 +803,14 @@ def lookup_metadata(
     use_freedb: bool = True,
     offsets: tuple[int, ...] = (),
     track_count: int = 0,
-) -> list[AlbumMetadata]:
-    """Query enabled providers and return combined candidates (MB first)."""
+) -> tuple[list[AlbumMetadata], list[str]]:
+    """Query enabled providers; return ``(candidates, provider_errors)``.
+
+    MusicBrainz is tried first. Provider failures are collected so the UI can
+    distinguish “no match” from “service busy / unreachable”.
+    """
     results: list[AlbumMetadata] = []
+    errors: list[str] = []
     seen_keys: set[str] = set()
 
     def _add(items: list[AlbumMetadata]) -> None:
@@ -685,19 +826,26 @@ def lookup_metadata(
 
     if use_musicbrainz and musicbrainz_discid:
         try:
-            _add(MusicBrainzProvider().lookup_by_discid(musicbrainz_discid))
-        except Exception:
+            mb = MusicBrainzProvider()
+            _add(mb.lookup_by_discid(musicbrainz_discid))
+            if not results and mb.last_error:
+                errors.append(mb.last_error)
+        except Exception as exc:
             log.exception('MusicBrainz lookup failed')
+            errors.append(f'MusicBrainz: {exc}')
 
     if use_freedb and freedb_id:
         try:
-            _add(
-                FreeDBProvider(
-                    offsets=offsets,
-                    track_count=track_count,
-                ).lookup_by_discid(freedb_id)
+            gnudb = FreeDBProvider(
+                offsets=offsets,
+                track_count=track_count,
             )
-        except Exception:
-            log.exception('FreeDB lookup failed')
+            before = len(results)
+            _add(gnudb.lookup_by_discid(freedb_id))
+            if len(results) == before and gnudb.last_error:
+                errors.append(gnudb.last_error)
+        except Exception as exc:
+            log.exception('gnudb lookup failed')
+            errors.append(f'gnudb: {exc}')
 
-    return results
+    return results, errors

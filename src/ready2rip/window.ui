@@ -14,58 +14,32 @@
         <child type="top">
           <object class="AdwHeaderBar" id="header_bar">
             <property name="title-widget">
-              <object class="AdwWindowTitle">
+              <object class="AdwWindowTitle" id="window_title">
                 <property name="title">ready2rip</property>
               </object>
             </property>
+            <!-- Primary menu on the start (left), opposite the action cluster. -->
             <child type="start">
-              <object class="GtkToggleButton" id="sidebar_button">
-                <property name="icon-name">sidebar-show-symbolic</property>
-                <property name="tooltip-text" translatable="yes">Toggle sidebar</property>
-                <property name="active">true</property>
-                <signal name="toggled" handler="_on_sidebar_toggled"/>
-              </object>
-            </child>
-            <child type="start">
-              <object class="GtkButton" id="about_button">
-                <property name="icon-name">help-about-symbolic</property>
-                <property name="tooltip-text" translatable="yes">About ready2rip</property>
-                <property name="action-name">app.about</property>
-              </object>
-            </child>
-            <child type="start">
-              <object class="GtkButton" id="theme_button">
-                <property name="icon-name">display-brightness-symbolic</property>
-                <property name="tooltip-text" translatable="yes">Appearance (system / light / dark)</property>
+              <object class="GtkMenuButton" id="menu_button">
+                <property name="icon-name">open-menu-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Main Menu</property>
+                <property name="primary">true</property>
                 <style>
                   <class name="flat"/>
-                  <class name="circular"/>
                 </style>
-                <signal name="clicked" handler="_on_theme_clicked"/>
               </object>
             </child>
             <!-- type=end packs right-to-left: first child is outermost (right). -->
-            <child type="end">
-              <object class="GtkButton" id="eject_button">
-                <property name="label" translatable="yes">Eject</property>
-                <property name="tooltip-text" translatable="yes">Eject the disc</property>
-                <style>
-                  <class name="destructive-action"/>
-                  <class name="pill"/>
-                </style>
-                <signal name="clicked" handler="_on_eject_clicked"/>
-              </object>
-            </child>
             <child type="end">
               <object class="GtkButton" id="rip_button">
                 <property name="label" translatable="yes">Rip</property>
                 <property name="sensitive">false</property>
                 <property name="tooltip-text" translatable="yes">Rip the inserted CD</property>
+                <property name="action-name">win.rip</property>
                 <style>
                   <class name="suggested-action"/>
                   <class name="pill"/>
                 </style>
-                <signal name="clicked" handler="_on_rip_clicked"/>
               </object>
             </child>
             <child type="end">
@@ -73,7 +47,17 @@
                 <property name="label" translatable="yes">Lookup</property>
                 <property name="sensitive">false</property>
                 <property name="always-show-arrow">true</property>
-                <property name="tooltip-text" translatable="yes">Look up metadata by disc or MusicBrainz link</property>
+                <property name="tooltip-text" translatable="yes">Look up metadata by disc ID, gnudb, or MusicBrainz link</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkButton" id="eject_button">
+                <property name="icon-name">media-eject-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Eject the disc</property>
+                <property name="action-name">win.eject</property>
                 <style>
                   <class name="flat"/>
                 </style>
@@ -84,67 +68,10 @@
         <child>
           <object class="AdwToastOverlay" id="toast_overlay">
             <child>
-              <!-- Collapsible GNOME sidebar: rip options + disc info -->
-              <object class="AdwBreakpointBin" id="breakpoint_bin">
-                <property name="width-request">360</property>
-                <property name="height-request">200</property>
-                <child>
-                  <object class="AdwOverlaySplitView" id="split_view">
-                    <property name="vexpand">true</property>
-                    <property name="hexpand">true</property>
-                    <property name="sidebar-position">start</property>
-                    <property name="show-sidebar">true</property>
-                    <property name="collapsed">false</property>
-                    <property name="min-sidebar-width">280</property>
-                    <property name="max-sidebar-width">340</property>
-                    <property name="enable-hide-gesture">true</property>
-                    <property name="enable-show-gesture">true</property>
-                    <child type="sidebar">
-                      <object class="GtkScrolledWindow" id="sidebar_scroll">
-                        <property name="hscrollbar-policy">never</property>
-                        <property name="vexpand">true</property>
-                        <property name="hexpand">true</property>
-                        <style>
-                          <class name="background"/>
-                        </style>
-                        <child>
-                          <object class="GtkBox" id="sidebar_box">
-                            <property name="orientation">vertical</property>
-                            <property name="spacing">24</property>
-                            <property name="margin-top">12</property>
-                            <property name="margin-bottom">24</property>
-                            <property name="margin-start">12</property>
-                            <property name="margin-end">12</property>
-                            <!-- Group titles alone — no extra section headers (HIG). -->
-                            <child>
-                              <object class="AdwPreferencesGroup" id="options_group">
-                                <property name="title" translatable="yes">Ripping</property>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="AdwPreferencesGroup" id="metadata_group">
-                                <property name="title" translatable="yes">Metadata</property>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="AdwPreferencesGroup" id="disc_group">
-                                <property name="title" translatable="yes">Disc</property>
-                              </object>
-                            </child>
-                            <child>
-                              <object class="AdwPreferencesGroup" id="drive_group">
-                                <property name="title" translatable="yes">Drive</property>
-                              </object>
-                            </child>
-                          </object>
-                        </child>
-                      </object>
-                    </child>
-                    <child>
-                      <object class="GtkStack" id="stack">
-                        <property name="vexpand">true</property>
-                        <property name="hexpand">true</property>
-                        <property name="transition-type">crossfade</property>
+              <object class="GtkStack" id="stack">
+                <property name="vexpand">true</property>
+                <property name="hexpand">true</property>
+                <property name="transition-type">crossfade</property>
                         <child>
                           <object class="GtkStackPage">
                             <property name="name">empty</property>
@@ -170,94 +97,73 @@
                                 <property name="propagate-natural-height">false</property>
                                 <child>
                                   <object class="AdwClamp">
+                                    <!-- Preferences-page content width (Adwaita). -->
                                     <property name="maximum-size">700</property>
                                     <property name="tightening-threshold">400</property>
                                     <property name="unit">sp</property>
                                     <child>
                                       <object class="GtkBox" id="content_box">
                                         <property name="orientation">vertical</property>
-                                        <property name="spacing">18</property>
-                                        <property name="margin-top">12</property>
+                                        <!-- AdwPreferencesPage group rhythm. -->
+                                        <property name="spacing">24</property>
+                                        <property name="margin-top">24</property>
                                         <property name="margin-bottom">24</property>
                                         <property name="margin-start">12</property>
                                         <property name="margin-end">12</property>
                                         <property name="halign">fill</property>
                                         <property name="hexpand">true</property>
 
-                                        <!-- Source banner, then Art | Album, then Tracks -->
                                         <child>
-                                          <object class="GtkBox" id="album_box">
-                                            <property name="orientation">vertical</property>
-                                            <property name="spacing">12</property>
+                                          <object class="GtkProgressBar" id="lookup_progress">
+                                            <property name="visible">false</property>
+                                            <property name="pulse-step">0.2</property>
                                             <property name="halign">fill</property>
                                             <property name="hexpand">true</property>
-                                            <property name="valign">start</property>
+                                          </object>
+                                        </child>
+
+                                        <!-- Art left + transport bubbles right. -->
+                                        <child>
+                                          <object class="AdwPreferencesGroup" id="art_group">
+                                            <property name="title" translatable="yes">Art</property>
+                                            <property name="halign">fill</property>
+                                            <property name="hexpand">true</property>
+                                            <style>
+                                              <class name="ready2rip-art-group"/>
+                                            </style>
                                             <child>
-                                              <object class="GtkLabel" id="metadata_origin_label">
-                                                <property name="label" translatable="yes">No metadata</property>
-                                                <property name="halign">center</property>
-                                                <property name="hexpand">true</property>
-                                                <property name="xalign">0.5</property>
-                                                <property name="justify">center</property>
-                                                <property name="wrap">false</property>
-                                                <property name="ellipsize">end</property>
-                                                <property name="single-line-mode">true</property>
+                                              <object class="GtkListBoxRow" id="art_row">
+                                                <property name="activatable">false</property>
                                                 <property name="selectable">false</property>
                                                 <style>
-                                                  <class name="caption"/>
-                                                  <class name="dim-label"/>
-                                                  <class name="ready2rip-art-info"/>
-                                                </style>
-                                              </object>
-                                            </child>
-                                            <!-- Metadata lookup pulse — above Art | Album -->
-                                            <child>
-                                              <object class="GtkProgressBar" id="lookup_progress">
-                                                <property name="visible">false</property>
-                                                <property name="pulse-step">0.2</property>
-                                                <property name="halign">fill</property>
-                                                <property name="hexpand">true</property>
-                                              </object>
-                                            </child>
-                                            <child>
-                                              <object class="GtkBox" id="cover_hero">
-                                                <property name="orientation">horizontal</property>
-                                                <property name="spacing">18</property>
-                                                <property name="halign">fill</property>
-                                                <property name="hexpand">true</property>
-                                                <property name="valign">start</property>
-                                                <property name="homogeneous">false</property>
-                                            <child>
-                                              <object class="AdwPreferencesGroup" id="art_group">
-                                                <property name="title" translatable="yes">Art</property>
-                                                <property name="halign">fill</property>
-                                                <property name="valign">start</property>
-                                                <property name="hexpand">false</property>
-                                                <style>
-                                                  <class name="ready2rip-art-group"/>
+                                                  <class name="ready2rip-art-row"/>
                                                 </style>
                                                 <child>
-                                                  <object class="GtkListBoxRow" id="art_row">
-                                                    <property name="activatable">false</property>
-                                                    <property name="selectable">false</property>
-                                                    <style>
-                                                      <class name="ready2rip-art-row"/>
-                                                    </style>
+                                                  <object class="GtkBox" id="art_hero">
+                                                    <property name="orientation">horizontal</property>
+                                                    <property name="spacing">24</property>
+                                                    <property name="halign">fill</property>
+                                                    <property name="hexpand">true</property>
+                                                    <property name="valign">center</property>
+                                                    <property name="margin-top">12</property>
+                                                    <property name="margin-bottom">12</property>
+                                                    <property name="margin-start">12</property>
+                                                    <property name="margin-end">12</property>
                                                     <child>
-                                                      <object class="GtkBox" id="art_row_box">
+                                                      <object class="GtkBox" id="art_column">
                                                         <property name="orientation">vertical</property>
-                                                        <property name="halign">fill</property>
-                                                        <property name="hexpand">true</property>
+                                                        <property name="spacing">6</property>
+                                                        <property name="halign">start</property>
+                                                        <property name="valign">center</property>
+                                                        <property name="hexpand">false</property>
                                                         <child>
                                                           <object class="GtkBox" id="cover_frame">
                                                             <property name="orientation">vertical</property>
-                                                            <property name="halign">fill</property>
-                                                            <property name="valign">fill</property>
-                                                            <property name="hexpand">true</property>
-                                                            <property name="vexpand">true</property>
+                                                            <property name="halign">center</property>
+                                                            <property name="valign">center</property>
                                                             <property name="width-request">240</property>
                                                             <property name="height-request">240</property>
-                                                            <property name="overflow">hidden</property>
+                                                            <!-- overflow stays on overlay so box-shadow is not clipped -->
                                                             <style>
                                                               <class name="ready2rip-cover-frame"/>
                                                             </style>
@@ -285,11 +191,10 @@
                                                                 <child type="overlay">
                                                                   <object class="GtkImage" id="cover_placeholder">
                                                                     <property name="icon-name">folder-music-symbolic</property>
-                                                                    <property name="pixel-size">72</property>
+                                                                    <property name="pixel-size">56</property>
                                                                     <property name="halign">center</property>
                                                                     <property name="valign">center</property>
                                                                     <property name="can-target">false</property>
-                                                                    <property name="tooltip-text" translatable="yes">Album artwork</property>
                                                                     <style>
                                                                       <class name="ready2rip-cover-placeholder"/>
                                                                     </style>
@@ -298,15 +203,13 @@
                                                                 <child type="overlay">
                                                                   <object class="GtkBox" id="cover_actions">
                                                                     <property name="orientation">horizontal</property>
-                                                                    <property name="spacing">8</property>
+                                                                    <property name="spacing">6</property>
                                                                     <property name="halign">center</property>
                                                                     <property name="valign">center</property>
                                                                     <property name="opacity">0</property>
                                                                     <child>
                                                                       <object class="GtkButton" id="search_art_button">
                                                                         <property name="icon-name">system-search-symbolic</property>
-                                                                        <property name="valign">center</property>
-                                                                        <property name="can-focus">true</property>
                                                                         <property name="tooltip-text" translatable="yes">Search for artwork</property>
                                                                         <style>
                                                                           <class name="circular"/>
@@ -319,8 +222,6 @@
                                                                     <child>
                                                                       <object class="GtkButton" id="choose_art_button">
                                                                         <property name="icon-name">folder-symbolic</property>
-                                                                        <property name="valign">center</property>
-                                                                        <property name="can-focus">true</property>
                                                                         <property name="tooltip-text" translatable="yes">Choose image from file</property>
                                                                         <style>
                                                                           <class name="circular"/>
@@ -333,8 +234,6 @@
                                                                     <child>
                                                                       <object class="GtkButton" id="clear_art_button">
                                                                         <property name="icon-name">user-trash-symbolic</property>
-                                                                        <property name="valign">center</property>
-                                                                        <property name="can-focus">true</property>
                                                                         <property name="tooltip-text" translatable="yes">Remove artwork</property>
                                                                         <style>
                                                                           <class name="circular"/>
@@ -352,39 +251,16 @@
                                                             </child>
                                                           </object>
                                                         </child>
-                                                      </object>
-                                                    </child>
-                                                  </object>
-                                                </child>
-                                                <child>
-                                                  <object class="GtkListBoxRow" id="art_info_row">
-                                                    <property name="activatable">false</property>
-                                                    <property name="selectable">false</property>
-                                                    <child>
-                                                      <object class="GtkBox">
-                                                        <property name="orientation">vertical</property>
-                                                        <property name="spacing">2</property>
-                                                        <property name="halign">center</property>
-                                                        <property name="hexpand">true</property>
-                                                        <property name="margin-top">8</property>
-                                                        <property name="margin-bottom">8</property>
-                                                        <property name="margin-start">10</property>
-                                                        <property name="margin-end">10</property>
                                                         <child>
                                                           <object class="GtkLabel" id="art_size_label">
                                                             <property name="label" translatable="yes">No artwork</property>
                                                             <property name="halign">center</property>
-                                                            <property name="hexpand">true</property>
                                                             <property name="xalign">0.5</property>
-                                                            <property name="justify">center</property>
-                                                            <property name="wrap">false</property>
                                                             <property name="ellipsize">end</property>
                                                             <property name="single-line-mode">true</property>
-                                                            <property name="selectable">false</property>
                                                             <style>
                                                               <class name="caption"/>
                                                               <class name="dim-label"/>
-                                                              <class name="ready2rip-art-info"/>
                                                             </style>
                                                           </object>
                                                         </child>
@@ -392,18 +268,144 @@
                                                           <object class="GtkLabel" id="art_origin_label">
                                                             <property name="label"></property>
                                                             <property name="halign">center</property>
-                                                            <property name="hexpand">true</property>
                                                             <property name="xalign">0.5</property>
-                                                            <property name="justify">center</property>
-                                                            <property name="wrap">false</property>
                                                             <property name="ellipsize">end</property>
                                                             <property name="single-line-mode">true</property>
-                                                            <property name="selectable">false</property>
                                                             <style>
                                                               <class name="caption"/>
                                                               <class name="dim-label"/>
-                                                              <class name="ready2rip-art-info"/>
                                                             </style>
+                                                          </object>
+                                                        </child>
+                                                      </object>
+                                                    </child>
+                                                    <child>
+                                                      <object class="GtkBox" id="player_box">
+                                                        <property name="orientation">vertical</property>
+                                                        <property name="spacing">16</property>
+                                                        <property name="halign">center</property>
+                                                        <property name="valign">center</property>
+                                                        <property name="hexpand">true</property>
+                                                        <child>
+                                                          <object class="GtkLabel" id="player_track_label">
+                                                            <property name="label" translatable="yes">Play CD</property>
+                                                            <property name="halign">center</property>
+                                                            <property name="xalign">0.5</property>
+                                                            <property name="ellipsize">end</property>
+                                                            <property name="wrap">true</property>
+                                                            <property name="max-width-chars">28</property>
+                                                            <property name="justify">center</property>
+                                                            <style>
+                                                              <class name="heading"/>
+                                                            </style>
+                                                          </object>
+                                                        </child>
+                                                        <child>
+                                                          <object class="GtkBox" id="transport_box">
+                                                            <property name="orientation">horizontal</property>
+                                                            <property name="spacing">16</property>
+                                                            <property name="halign">center</property>
+                                                            <property name="valign">center</property>
+                                                            <child>
+                                                              <object class="GtkButton" id="prev_button">
+                                                                <property name="icon-name">media-skip-backward-symbolic</property>
+                                                                <property name="tooltip-text" translatable="yes">Previous track</property>
+                                                                <property name="action-name">win.play-previous</property>
+                                                                <property name="sensitive">false</property>
+                                                                <style>
+                                                                  <class name="circular"/>
+                                                                  <class name="ready2rip-transport"/>
+                                                                </style>
+                                                              </object>
+                                                            </child>
+                                                            <child>
+                                                              <object class="GtkButton" id="play_button">
+                                                                <property name="icon-name">media-playback-start-symbolic</property>
+                                                                <property name="tooltip-text" translatable="yes">Play</property>
+                                                                <property name="action-name">win.play-toggle</property>
+                                                                <property name="sensitive">false</property>
+                                                                <style>
+                                                                  <class name="circular"/>
+                                                                  <class name="suggested-action"/>
+                                                                  <class name="ready2rip-transport"/>
+                                                                  <class name="ready2rip-transport-play"/>
+                                                                </style>
+                                                              </object>
+                                                            </child>
+                                                            <child>
+                                                              <object class="GtkButton" id="next_button">
+                                                                <property name="icon-name">media-skip-forward-symbolic</property>
+                                                                <property name="tooltip-text" translatable="yes">Next track</property>
+                                                                <property name="action-name">win.play-next</property>
+                                                                <property name="sensitive">false</property>
+                                                                <style>
+                                                                  <class name="circular"/>
+                                                                  <class name="ready2rip-transport"/>
+                                                                </style>
+                                                              </object>
+                                                            </child>
+                                                          </object>
+                                                        </child>
+                                                        <child>
+                                                          <object class="GtkBox" id="seek_box">
+                                                            <property name="orientation">horizontal</property>
+                                                            <property name="spacing">8</property>
+                                                            <property name="halign">fill</property>
+                                                            <property name="hexpand">true</property>
+                                                            <property name="valign">center</property>
+                                                            <property name="margin-start">8</property>
+                                                            <property name="margin-end">8</property>
+                                                            <child>
+                                                              <object class="GtkLabel" id="player_position_label">
+                                                                <property name="label">0:00</property>
+                                                                <property name="halign">start</property>
+                                                                <property name="valign">center</property>
+                                                                <property name="width-chars">5</property>
+                                                                <property name="xalign">0</property>
+                                                                <style>
+                                                                  <class name="caption"/>
+                                                                  <class name="dim-label"/>
+                                                                  <class name="numeric"/>
+                                                                </style>
+                                                              </object>
+                                                            </child>
+                                                            <child>
+                                                              <object class="GtkScale" id="player_seek">
+                                                                <property name="orientation">horizontal</property>
+                                                                <property name="draw-value">false</property>
+                                                                <property name="hexpand">true</property>
+                                                                <property name="halign">fill</property>
+                                                                <property name="valign">center</property>
+                                                                <property name="sensitive">false</property>
+                                                                <property name="restrict-to-fill-level">false</property>
+                                                                <property name="adjustment">
+                                                                  <object class="GtkAdjustment">
+                                                                    <property name="lower">0</property>
+                                                                    <property name="upper">1</property>
+                                                                    <property name="value">0</property>
+                                                                    <property name="step-increment">1</property>
+                                                                    <property name="page-increment">10</property>
+                                                                  </object>
+                                                                </property>
+                                                                <style>
+                                                                  <class name="ready2rip-seek"/>
+                                                                </style>
+                                                              </object>
+                                                            </child>
+                                                            <child>
+                                                              <object class="GtkLabel" id="player_duration_label">
+                                                                <property name="label">0:00</property>
+                                                                <property name="halign">end</property>
+                                                                <property name="valign">center</property>
+                                                                <property name="width-chars">5</property>
+                                                                <property name="xalign">1</property>
+                                                                <style>
+                                                                  <class name="caption"/>
+                                                                  <class name="dim-label"/>
+                                                                  <class name="numeric"/>
+                                                                </style>
+                                                              </object>
+                                                            </child>
                                                           </object>
                                                         </child>
                                                       </object>
@@ -412,31 +414,35 @@
                                                 </child>
                                               </object>
                                             </child>
-                                            <child>
-                                              <object class="GtkBox" id="album_fields_box">
-                                                <property name="orientation">vertical</property>
-                                                <property name="spacing">8</property>
-                                                <property name="halign">fill</property>
-                                                <property name="valign">start</property>
-                                                <property name="hexpand">true</property>
-                                                <child>
-                                                  <object class="AdwPreferencesGroup" id="album_edit_group">
-                                                    <property name="title" translatable="yes">Album</property>
-                                                    <property name="halign">fill</property>
-                                                    <property name="hexpand">true</property>
-                                                    <property name="valign">start</property>
-                                                  </object>
-                                                </child>
-                                              </object>
-                                            </child>
-                                              </object>
-                                            </child>
+                                          </object>
+                                        </child>
+
+                                        <child>
+                                          <object class="GtkLabel" id="metadata_origin_label">
+                                            <property name="label" translatable="yes">No metadata</property>
+                                            <property name="halign">center</property>
+                                            <property name="hexpand">true</property>
+                                            <property name="xalign">0.5</property>
+                                            <property name="ellipsize">end</property>
+                                            <property name="single-line-mode">true</property>
+                                            <style>
+                                              <class name="caption"/>
+                                              <class name="dim-label"/>
+                                            </style>
+                                          </object>
+                                        </child>
+
+                                        <child>
+                                          <object class="AdwPreferencesGroup" id="album_edit_group">
+                                            <property name="halign">fill</property>
+                                            <property name="hexpand">true</property>
                                           </object>
                                         </child>
 
                                         <child>
                                           <object class="AdwPreferencesGroup" id="track_edit_group">
-                                            <property name="title" translatable="yes">Tracks</property>
+                                            <property name="halign">fill</property>
+                                            <property name="hexpand">true</property>
                                           </object>
                                         </child>
 
@@ -448,10 +454,6 @@
                             </property>
                           </object>
                         </child>
-                      </object>
-                    </child>
-                  </object>
-                </child>
               </object>
             </child>
           </object>
@@ -466,10 +468,10 @@
               <object class="GtkBox" id="rip_banner">
                 <property name="orientation">vertical</property>
                 <property name="spacing">8</property>
-                <property name="margin-start">18</property>
-                <property name="margin-end">18</property>
+                <property name="margin-start">24</property>
+                <property name="margin-end">24</property>
                 <property name="margin-top">12</property>
-                <property name="margin-bottom">14</property>
+                <property name="margin-bottom">12</property>
                 <style>
                   <class name="ready2rip-rip-bar"/>
                 </style>

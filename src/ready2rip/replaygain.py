@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""ReplayGain analysis via ffmpeg ebur128 (works for FLAC/MP3/Opus/WAV)."""
+"""ReplayGain analysis via ffmpeg ebur128 (FLAC/MP3/AAC/Opus/WAV)."""
 
 from __future__ import annotations
 

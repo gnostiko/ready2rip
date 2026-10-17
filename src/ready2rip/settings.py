@@ -3,19 +3,213 @@
 
 from __future__ import annotations
 
+import logging
+import shutil
+import subprocess
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 
 from gi.repository import Gio, GLib
 
+log = logging.getLogger(__name__)
+
 SCHEMA_ID = 'org.ready2rip.Ready2Rip'
+_SCHEMA_XML = 'org.ready2rip.Ready2Rip.gschema.xml'
 
 ENCODERS = (
     ('flac', 'FLAC (lossless)'),
     ('mp3', 'MP3'),
+    ('aac', 'AAC (M4A)'),
     ('opus', 'Opus'),
     ('wav', 'WAV (uncompressed)'),
 )
+
+ENCODER_IDS = frozenset(e[0] for e in ENCODERS)
+
+# FLAC compression levels shown in the Encoding panel.
+FLAC_LEVELS = (
+    (0, 'Fastest'),
+    (1, '1'),
+    (2, '2'),
+    (3, '3'),
+    (4, '4'),
+    (5, 'Default'),
+    (6, '6'),
+    (7, '7'),
+    (8, 'Smallest'),
+)
+
+# LAME presets: VBR (-V n) and CBR (-b n). Default V0 matches common archival rips.
+MP3_QUALITIES = (
+    ('v0', 'V0 (VBR)'),
+    ('v1', 'V1 (VBR)'),
+    ('v2', 'V2 (VBR)'),
+    ('v3', 'V3 (VBR)'),
+    ('v4', 'V4 (VBR)'),
+    ('v5', 'V5 (VBR)'),
+    ('cbr320', '320 kbps CBR'),
+    ('cbr256', '256 kbps CBR'),
+    ('cbr192', '192 kbps CBR'),
+    ('cbr128', '128 kbps CBR'),
+)
+
+MP3_QUALITY_IDS = frozenset(q[0] for q in MP3_QUALITIES)
+
+# Opus VBR target bitrates (kbps) — compact preset list.
+OPUS_BITRATES = (96, 128, 160, 192, 256)
+
+# Fraunhofer FDK AAC presets (VBR 1–5) + CBR — same style as MP3_QUALITIES.
+# Native ffmpeg ``aac`` maps VBR presets to approximate CBR when FDK is absent.
+AAC_QUALITIES = (
+    ('vbr5', 'VBR 5 (highest)'),
+    ('vbr4', 'VBR 4'),
+    ('vbr3', 'VBR 3'),
+    ('vbr2', 'VBR 2'),
+    ('vbr1', 'VBR 1'),
+    ('cbr320', '320 kbps CBR'),
+    ('cbr256', '256 kbps CBR'),
+    ('cbr192', '192 kbps CBR'),
+    ('cbr128', '128 kbps CBR'),
+)
+
+AAC_QUALITY_IDS = frozenset(q[0] for q in AAC_QUALITIES)
+
+# Deprecated int list kept for migration / older UI call sites.
+AAC_BITRATES = (96, 128, 160, 192, 256, 320)
+
+
+def normalize_mp3_quality(value: str | None) -> str:
+    raw = (value or '').strip().lower()
+    if raw in MP3_QUALITY_IDS:
+        return raw
+    return 'v0'
+
+
+def mp3_quality_from_bitrate(bitrate: int) -> str:
+    """Map a legacy CBR bitrate setting to an mp3-quality id."""
+    mapping = {
+        320: 'cbr320',
+        256: 'cbr256',
+        192: 'cbr192',
+        128: 'cbr128',
+    }
+    return mapping.get(int(bitrate), 'cbr320')
+
+
+def mp3_quality_label(quality: str) -> str:
+    q = normalize_mp3_quality(quality)
+    for qid, label in MP3_QUALITIES:
+        if qid == q:
+            return label
+    return q.upper()
+
+
+def lame_args_for_mp3_quality(quality: str) -> list[str]:
+    """LAME flags for a stored mp3-quality id (without input/output paths)."""
+    q = normalize_mp3_quality(quality)
+    if q.startswith('v') and q[1:].isdigit():
+        return ['-V', q[1:]]
+    if q.startswith('cbr'):
+        br = q[3:]
+        if br.isdigit():
+            return ['-b', br]
+    return ['-V', '0']
+
+
+def rip_log_mp3_quality(quality: str) -> str:
+    """Human-readable MP3 setting for the rip log."""
+    q = normalize_mp3_quality(quality)
+    if q.startswith('v') and q[1:].isdigit():
+        return f'LAME -V{q[1:]} (VBR)'
+    if q.startswith('cbr') and q[3:].isdigit():
+        return f'{q[3:]} kBit/s CBR'
+    return q.upper()
+
+
+def normalize_aac_quality(value: str | None) -> str:
+    raw = (value or '').strip().lower()
+    if raw in AAC_QUALITY_IDS:
+        return raw
+    return 'cbr256'
+
+
+def aac_quality_from_bitrate(bitrate: int) -> str:
+    """Map a legacy AAC CBR bitrate to an aac-quality id."""
+    mapping = {
+        320: 'cbr320',
+        256: 'cbr256',
+        192: 'cbr192',
+        128: 'cbr128',
+        160: 'cbr192',
+        96: 'cbr128',
+    }
+    return mapping.get(int(bitrate), 'cbr256')
+
+
+def aac_quality_label(quality: str) -> str:
+    q = normalize_aac_quality(quality)
+    for qid, label in AAC_QUALITIES:
+        if qid == q:
+            return label
+    return q.upper()
+
+
+def rip_log_aac_quality(quality: str) -> str:
+    """Human-readable AAC setting for the rip log."""
+    q = normalize_aac_quality(quality)
+    if q.startswith('vbr') and q[3:].isdigit():
+        return f'FDK AAC VBR {q[3:]}'
+    if q.startswith('cbr') and q[3:].isdigit():
+        return f'{q[3:]} kBit/s CBR AAC'
+    return q.upper()
+
+
+def opus_bitrate_label(bitrate: int) -> str:
+    return f'{int(bitrate)} kbps VBR'
+
+
+@dataclass(frozen=True)
+class EncodeTarget:
+    """One encode destination: format plus optional output folder.
+
+    Empty *directory* means “use the primary Output folder”.
+    """
+
+    format: str
+    directory: str = ''
+
+
+def encode_target_to_spec(target: EncodeTarget) -> str:
+    return f'{target.format}|{target.directory}'
+
+
+def encode_target_from_spec(spec: str) -> EncodeTarget | None:
+    raw = (spec or '').strip()
+    if not raw:
+        return None
+    if '|' in raw:
+        fmt, _, directory = raw.partition('|')
+    else:
+        fmt, directory = raw, ''
+    fmt = fmt.strip().lower()
+    if fmt not in ENCODER_IDS:
+        return None
+    return EncodeTarget(format=fmt, directory=directory.strip())
+
+
+def encode_targets_from_specs(specs: list[str] | tuple[str, ...]) -> tuple[EncodeTarget, ...]:
+    out: list[EncodeTarget] = []
+    seen: set[tuple[str, str]] = set()
+    for spec in specs:
+        target = encode_target_from_spec(spec)
+        if target is None:
+            continue
+        key = (target.format, target.directory)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(target)
+    return tuple(out)
 
 # 0 = keep full downloaded resolution when embedding
 ARTWORK_SIZES = (
@@ -64,6 +258,61 @@ def _get_string(settings: Gio.Settings, key: str, default: str) -> str:
         return default
 
 
+def _get_int(settings: Gio.Settings, key: str, default: int) -> int:
+    try:
+        return int(settings.get_int(key))
+    except Exception:
+        return default
+
+
+def _get_strv(settings: Gio.Settings, key: str) -> list[str]:
+    try:
+        return list(settings.get_strv(key) or [])
+    except Exception:
+        return []
+
+
+def _load_mp3_quality(settings: Gio.Settings) -> str:
+    """Read mp3-quality; migrate legacy mp3-bitrate only when explicitly set."""
+    try:
+        user_q = settings.get_user_value('mp3-quality')
+        if user_q is not None:
+            return normalize_mp3_quality(user_q.get_string())
+    except Exception:
+        pass
+    try:
+        user_br = settings.get_user_value('mp3-bitrate')
+        if user_br is not None:
+            return mp3_quality_from_bitrate(int(user_br.get_int32()))
+    except Exception:
+        pass
+    try:
+        # Older compiled schema without mp3-quality — use bitrate as-is.
+        return mp3_quality_from_bitrate(settings.get_int('mp3-bitrate'))
+    except Exception:
+        return 'v0'
+
+
+def _load_aac_quality(settings: Gio.Settings) -> str:
+    """Read aac-quality; migrate legacy aac-bitrate when needed."""
+    try:
+        user_q = settings.get_user_value('aac-quality')
+        if user_q is not None:
+            return normalize_aac_quality(user_q.get_string())
+    except Exception:
+        pass
+    try:
+        user_br = settings.get_user_value('aac-bitrate')
+        if user_br is not None:
+            return aac_quality_from_bitrate(int(user_br.get_int32()))
+    except Exception:
+        pass
+    try:
+        return aac_quality_from_bitrate(settings.get_int('aac-bitrate'))
+    except Exception:
+        return 'cbr256'
+
+
 def default_music_directory() -> Path:
     """XDG Music folder, or ``~/Music`` if unset."""
     music = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_MUSIC)
@@ -89,15 +338,20 @@ class AppSettings:
     color_scheme: str = 'default'
     output_directory: str = ''  # empty → default_output_directory() (Music)
     encode_format: str = 'flac'
+    # Extra formats beyond encode_format; empty directory → primary Output.
+    extra_encode_targets: tuple[EncodeTarget, ...] = ()
     flac_compression: int = 5
-    mp3_bitrate: int = 320
+    # LAME preset id: v0–v5 or cbr128/192/256/320.
+    mp3_quality: str = 'v0'
+    aac_quality: str = 'cbr256'
+    # Legacy mirror of CBR aac_quality for older code paths; prefer aac_quality.
+    aac_bitrate: int = 256
     opus_bitrate: int = 160
     apply_replaygain: bool = True
     embed_artwork: bool = True
     fetch_artwork: bool = True
     artwork_source_itunes: bool = True
     artwork_source_caa: bool = True
-    artwork_source_deezer: bool = True
     artwork_max_size: int = 600
     use_musicbrainz: bool = True
     use_freedb: bool = True
@@ -109,7 +363,7 @@ class AppSettings:
     drive_sample_offset: int = 0
     drive_offset_configured: bool = False
     drive_offset_device: str = ''
-    burst_fallback: bool = True
+    burst_fallback: bool = False
     write_rip_log: bool = True
     # Multi-file .cue sheet for secure/accurate rips.
     write_cue_file: bool = True
@@ -134,6 +388,95 @@ class AppSettings:
             return Path(raw).expanduser()
         return default_music_directory()
 
+    def resolved_encode_targets(self) -> list[tuple[str, Path]]:
+        """``(format, base_dir)`` list: primary first, then extras (no dupes)."""
+        primary_fmt = (self.encode_format or 'flac').strip().lower()
+        if primary_fmt not in ENCODER_IDS:
+            primary_fmt = 'flac'
+        primary_dir = self.resolved_output_directory()
+        targets: list[tuple[str, Path]] = [(primary_fmt, primary_dir)]
+        seen = {(primary_fmt, str(primary_dir))}
+        for extra in self.extra_encode_targets:
+            fmt = (extra.format or '').strip().lower()
+            if fmt not in ENCODER_IDS:
+                continue
+            raw = (extra.directory or '').strip()
+            base = Path(raw).expanduser() if raw else primary_dir
+            key = (fmt, str(base))
+            if key in seen:
+                continue
+            seen.add(key)
+            targets.append((fmt, base))
+        return targets
+
+
+def _checkout_schema_xml() -> Path | None:
+    """``data/*.gschema.xml`` when running from a source checkout."""
+    # src/ready2rip/settings.py → repo root is parents[2]
+    data = Path(__file__).resolve().parents[2] / 'data' / _SCHEMA_XML
+    return data if data.is_file() else None
+
+
+def _schema_cache_dirs() -> list[Path]:
+    """Writable places to put a compiled checkout schema."""
+    dirs = [Path(GLib.get_user_cache_dir()) / 'ready2rip' / 'gschemas']
+    repo_cache = Path(__file__).resolve().parents[2] / '.cache' / 'gschemas'
+    if repo_cache not in dirs:
+        dirs.append(repo_cache)
+    return dirs
+
+
+def _compile_checkout_schemas() -> Path | None:
+    """Compile the checkout schema (no Meson required)."""
+    xml = _checkout_schema_xml()
+    if xml is None:
+        return None
+    compiler = shutil.which('glib-compile-schemas')
+    if compiler is None:
+        return None
+    last_exc: Exception | None = None
+    for cache in _schema_cache_dirs():
+        compiled = cache / 'gschemas.compiled'
+        dest_xml = cache / _SCHEMA_XML
+        try:
+            stale = (
+                not compiled.is_file()
+                or not dest_xml.is_file()
+                or dest_xml.stat().st_mtime < xml.stat().st_mtime
+                or compiled.stat().st_mtime < xml.stat().st_mtime
+            )
+            if stale:
+                cache.mkdir(parents=True, exist_ok=True)
+                dest_xml.write_bytes(xml.read_bytes())
+                subprocess.run(
+                    [compiler, str(cache)],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            if compiled.is_file():
+                return cache
+        except (OSError, subprocess.CalledProcessError) as exc:
+            last_exc = exc
+            continue
+    if last_exc is not None:
+        log.debug('Could not compile checkout GSettings schema: %s', last_exc)
+    return None
+
+
+def _schema_source() -> Gio.SettingsSchemaSource | None:
+    """Prefer a checkout-compiled schema, then the process default source."""
+    default = Gio.SettingsSchemaSource.get_default()
+    cache = _compile_checkout_schemas()
+    if cache is not None:
+        try:
+            return Gio.SettingsSchemaSource.new_from_directory(
+                str(cache), default, True
+            )
+        except GLib.Error as exc:
+            log.debug('Could not load checkout schema source: %s', exc)
+    return default
+
 
 class SettingsStore:
     """Read/write GSettings when the schema is available; else memory defaults."""
@@ -144,7 +487,7 @@ class SettingsStore:
 
     @staticmethod
     def _open_settings() -> Gio.Settings | None:
-        source = Gio.SettingsSchemaSource.get_default()
+        source = _schema_source()
         if source is None:
             return None
         schema = source.lookup(SCHEMA_ID, True)
@@ -169,15 +512,23 @@ class SettingsStore:
                 color_scheme=scheme,
                 output_directory=s.get_string('output-directory') or '',
                 encode_format=s.get_string('encode-format') or 'flac',
+                extra_encode_targets=encode_targets_from_specs(
+                    _get_strv(s, 'extra-encode-targets')
+                ),
                 flac_compression=s.get_int('flac-compression'),
-                mp3_bitrate=s.get_int('mp3-bitrate'),
+                mp3_quality=_load_mp3_quality(s),
+                aac_quality=(aq := _load_aac_quality(s)),
+                aac_bitrate=(
+                    int(aq[3:])
+                    if aq.startswith('cbr') and aq[3:].isdigit()
+                    else _get_int(s, 'aac-bitrate', 256)
+                ),
                 opus_bitrate=s.get_int('opus-bitrate'),
                 apply_replaygain=s.get_boolean('apply-replaygain'),
                 embed_artwork=s.get_boolean('embed-artwork'),
                 fetch_artwork=s.get_boolean('fetch-artwork'),
                 artwork_source_itunes=_get_bool(s, 'artwork-source-itunes', True),
                 artwork_source_caa=_get_bool(s, 'artwork-source-caa', True),
-                artwork_source_deezer=_get_bool(s, 'artwork-source-deezer', True),
                 artwork_max_size=s.get_int('artwork-max-size'),
                 use_musicbrainz=s.get_boolean('use-musicbrainz'),
                 use_freedb=s.get_boolean('use-freedb'),
@@ -245,15 +596,17 @@ class SettingsStore:
             'color_scheme': ('color-scheme', 'string'),
             'output_directory': ('output-directory', 'string'),
             'encode_format': ('encode-format', 'string'),
+            'extra_encode_targets': ('extra-encode-targets', 'strv'),
             'flac_compression': ('flac-compression', 'int'),
-            'mp3_bitrate': ('mp3-bitrate', 'int'),
+            'mp3_quality': ('mp3-quality', 'string'),
+            'aac_quality': ('aac-quality', 'string'),
+            'aac_bitrate': ('aac-bitrate', 'int'),
             'opus_bitrate': ('opus-bitrate', 'int'),
             'apply_replaygain': ('apply-replaygain', 'bool'),
             'embed_artwork': ('embed-artwork', 'bool'),
             'fetch_artwork': ('fetch-artwork', 'bool'),
             'artwork_source_itunes': ('artwork-source-itunes', 'bool'),
             'artwork_source_caa': ('artwork-source-caa', 'bool'),
-            'artwork_source_deezer': ('artwork-source-deezer', 'bool'),
             'artwork_max_size': ('artwork-max-size', 'int'),
             'use_musicbrainz': ('use-musicbrainz', 'bool'),
             'use_freedb': ('use-freedb', 'bool'),
@@ -295,9 +648,31 @@ class SettingsStore:
             gkey, kind = key_map[attr]
             value = getattr(current, attr)
             if kind == 'string':
+                if attr == 'mp3_quality':
+                    value = normalize_mp3_quality(str(value))
+                    current = replace(current, mp3_quality=value)
+                elif attr == 'aac_quality':
+                    value = normalize_aac_quality(str(value))
+                    current = replace(current, aac_quality=value)
+                    # Keep legacy int in sync for CBR presets.
+                    if value.startswith('cbr') and value[3:].isdigit():
+                        current = replace(current, aac_bitrate=int(value[3:]))
+                        try:
+                            s.set_int('aac-bitrate', int(value[3:]))
+                        except Exception:
+                            pass
                 s.set_string(gkey, str(value))
             elif kind == 'int':
                 s.set_int(gkey, int(value))
             elif kind == 'bool':
                 s.set_boolean(gkey, bool(value))
+            elif kind == 'strv':
+                if attr == 'extra_encode_targets':
+                    specs = [
+                        encode_target_to_spec(t)
+                        for t in (value or ())
+                    ]
+                    s.set_strv(gkey, specs)
+                else:
+                    s.set_strv(gkey, list(value or []))
         return current

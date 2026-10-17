@@ -164,17 +164,14 @@ class ChromeStyleController:
 
     def sync(self) -> None:
         display = self._window.get_display()
-        if self._provider is not None:
-            Gtk.StyleContext.remove_provider_for_display(
-                display, self._provider
-            )
-            self._provider = None
         base, raised, shade, dark = chrome_palette()
-        provider = Gtk.CssProvider()
-        provider.load_from_string(
-            chrome_css(base, raised, shade, dark=dark)
-        )
-        Gtk.StyleContext.add_provider_for_display(
-            display, provider, Gtk.STYLE_PROVIDER_PRIORITY_USER
-        )
-        self._provider = provider
+        css = chrome_css(base, raised, shade, dark=dark)
+        if self._provider is None:
+            provider = Gtk.CssProvider()
+            provider.load_from_string(css)
+            Gtk.StyleContext.add_provider_for_display(
+                display, provider, Gtk.STYLE_PROVIDER_PRIORITY_USER
+            )
+            self._provider = provider
+            return
+        self._provider.load_from_string(css)

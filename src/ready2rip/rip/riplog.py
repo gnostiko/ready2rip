@@ -17,6 +17,8 @@ from ready2rip.accuraterip import AccurateRipConfidence, AccurateRipResult
 from ready2rip.disc.probe import DiscInfo
 from ready2rip.metadata.providers import AlbumMetadata
 from ready2rip.paths import sanitize_component, track_meta_for
+from ready2rip.rip.encode import encode_command_summary
+from ready2rip.settings import rip_log_aac_quality, rip_log_mp3_quality
 
 
 @dataclass
@@ -64,9 +66,11 @@ class RipLog:
         self.sample_offset: int = 0
         self.encode_format: str = 'flac'
         self.flac_compression: int = 5
-        self.mp3_bitrate: int = 320
+        self.mp3_quality: str = 'v0'
+        self.aac_quality: str = 'cbr256'
+        self.aac_bitrate: int = 256
         self.opus_bitrate: int = 160
-        self.burst_fallback: bool = True
+        self.burst_fallback: bool = False
         self.verify_accuraterip: bool = True
         self.apply_replaygain: bool = True
         self.embed_artwork: bool = True
@@ -91,14 +95,18 @@ class RipLog:
         self.replaygain_notes: list[str] = []
         self.log_path: Path | None = None
         # Max secure test&copy retries configured for this job.
-        self.test_copy_max_retries: int = 1
+        self.test_copy_max_retries: int = 3
 
     def configure_from_job(self, job) -> None:
         self.device = job.device
         self.sample_offset = job.sample_offset
         self.encode_format = job.encode_format
         self.flac_compression = job.flac_compression
-        self.mp3_bitrate = job.mp3_bitrate
+        self.mp3_quality = job.mp3_quality or 'v0'
+        self.aac_quality = getattr(job, 'aac_quality', '') or (
+            f'cbr{int(job.aac_bitrate)}' if getattr(job, 'aac_bitrate', 0) else 'cbr256'
+        )
+        self.aac_bitrate = job.aac_bitrate
         self.opus_bitrate = job.opus_bitrate
         self.burst_fallback = job.burst_fallback
         self.verify_accuraterip = job.verify_accuraterip
@@ -117,7 +125,7 @@ class RipLog:
         self.album = job.album
         self.disc = job.disc_info
         self.test_copy_max_retries = int(
-            getattr(job, 'test_copy_max_retries', 1) or 0
+            getattr(job, 'test_copy_max_retries', 3) or 0
         )
 
     def begin_track(
@@ -186,15 +194,17 @@ class RipLog:
                 'Secure with burst fallback (some tracks re-read with -Z)'
             )
             read_cmd = (
-                'cdparanoia -w --never-skip=200 -X  (burst: -Z) '
+                'cdparanoia -w --never-skip=500 -X -o 8  (burst: -Z) '
                 '(-O offset when calibrated)'
             )
         else:
             read_mode = (
-                'Secure (cdparanoia full paranoia, never-skip + abort-on-skip)'
+                'Secure (cdparanoia full paranoia, never-skip + abort-on-skip '
+                '+ forced overlap)'
             )
             read_cmd = (
-                'cdparanoia -w --never-skip=200 -X (-O offset when calibrated)'
+                'cdparanoia -w --never-skip=500 -X -o 8 '
+                '(-O offset when calibrated)'
             )
         lines.append(f'Read mode               : {read_mode}')
         lines.append(f'Read command            : {read_cmd}')
@@ -258,8 +268,10 @@ class RipLog:
         )
         lines.append(
             'Error recovery                              : '
-            'Full paranoia re-read + jitter fixup; never-skip=200; abort on skip (-X); '
-            'CRC mismatch → 1 secure retry then full-disc burst when enabled'
+            'Full paranoia re-read + jitter fixup; never-skip=500; '
+            'force overlap (-o 8); abort on skip (-X); '
+            'CRC mismatch → up to 3 secure retries; unmatched tracks fail '
+            'unless Burst Fallback (-Z) is enabled'
         )
         lines.append(
             'CRC algorithm                               : '
@@ -272,11 +284,35 @@ class RipLog:
             lines.append(f'FLAC compression level          : {self.flac_compression}')
             lines.append('Selected bitrate                : lossless')
         elif self.encode_format == 'mp3':
-            lines.append(f'Selected bitrate                : {self.mp3_bitrate} kBit/s CBR')
+            lines.append(
+                f'Selected bitrate                : '
+                f'{rip_log_mp3_quality(self.mp3_quality)}'
+            )
+        elif self.encode_format == 'aac':
+            lines.append(
+                f'Selected bitrate                : '
+                f'{rip_log_aac_quality(self.aac_quality)}'
+            )
         elif self.encode_format == 'opus':
-            lines.append(f'Selected bitrate                : {self.opus_bitrate} kBit/s')
+            lines.append(
+                f'Selected bitrate                : {self.opus_bitrate} kBit/s VBR'
+            )
         else:
             lines.append('Selected bitrate                : uncompressed PCM')
+        lines.append(
+            'Encoder command                 : '
+            + encode_command_summary(
+                self.encode_format,
+                flac_compression=self.flac_compression,
+                mp3_quality=self.mp3_quality,
+                aac_quality=self.aac_quality,
+                opus_bitrate=self.opus_bitrate,
+            )
+        )
+        lines.append(
+            'Audio pre-process               : None '
+            '(no gain, EQ, fade, remix, or forced resample before encode)'
+        )
         lines.append('Add tags                        : Yes')
         lines.append(f'Embed artwork                   : {"Yes" if self.embed_artwork else "No"}')
         lines.append(f'ReplayGain                      : {"Yes" if self.apply_replaygain else "No"}')
