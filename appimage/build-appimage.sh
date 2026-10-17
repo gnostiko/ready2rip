@@ -326,21 +326,29 @@ bundle_ldd_deps() {
 
 # Bundle host Python stdlib so the AppImage does not need host Python X.Y.
 bundle_python_stdlib() {
-  local pyver
+  local pyver platlib
   pyver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  # Fedora/RHEL use lib64; Debian/Ubuntu use lib. Match the interpreter.
+  platlib="$(python3 -c 'import sys; print(sys.platlibdir)')"
   local src=""
-  for cand in "/usr/lib/python${pyver}" "/usr/lib64/python${pyver}"; do
-    if [ -d "$cand" ]; then
+  # Prefer a tree that actually contains the stdlib (empty /usr/lib/pythonX.Y
+  # stubs exist on some Fedora layouts while real modules live under lib64).
+  for cand in \
+    "/usr/${platlib}/python${pyver}" \
+    "/usr/lib64/python${pyver}" \
+    "/usr/lib/python${pyver}"
+  do
+    if [ -f "${cand}/encodings/__init__.py" ] || [ -f "${cand}/os.py" ]; then
       src="$cand"
       break
     fi
   done
   if [ -z "$src" ]; then
-    echo "error: Python stdlib not found at /usr/lib/python${pyver}" >&2
+    echo "error: Python stdlib not found under /usr/{lib,lib64}/python${pyver}" >&2
     return 1
   fi
-  local dest="${APPDIR}/usr/lib/python${pyver}"
-  echo "==> bundling Python ${pyver} stdlib from ${src}"
+  local dest="${APPDIR}/usr/${platlib}/python${pyver}"
+  echo "==> bundling Python ${pyver} stdlib from ${src} → usr/${platlib}/python${pyver}"
   rm -rf "$dest"
   mkdir -p "$dest"
   # Copy with exclusions to keep size reasonable (no tests / idle / bytecode).
@@ -393,6 +401,14 @@ shutil.copytree(src, dst, dirs_exist_ok=True, ignore=ignore, symlinks=True)
 (dst / "site-packages").mkdir(parents=True, exist_ok=True)
 print(f"    python stdlib → {dst} (host site-packages excluded)")
 PY
+  # Mirror under the other lib dir so either PYTHONHOME layout resolves.
+  if [ "$platlib" = "lib64" ]; then
+    mkdir -p "${APPDIR}/usr/lib"
+    ln -sfn "../lib64/python${pyver}" "${APPDIR}/usr/lib/python${pyver}"
+  else
+    mkdir -p "${APPDIR}/usr/lib64"
+    ln -sfn "../lib/python${pyver}" "${APPDIR}/usr/lib64/python${pyver}"
+  fi
   # Ensure lib-dynload extension modules' deps are bundled
   if [ -d "${dest}/lib-dynload" ]; then
     find "${dest}/lib-dynload" -name '*.so' 2>/dev/null | while read -r so; do
@@ -690,12 +706,17 @@ from pathlib import Path
 print("python", sys.version.split()[0], file=sys.stderr)
 print("prefix", sys.prefix, file=sys.stderr)
 
-# Stdlib must come from the AppDir, not the host.
-stdlib = Path(sys.prefix) / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
+# Stdlib must come from the AppDir, not the host (lib vs lib64).
+stdlib = (
+    Path(sys.prefix)
+    / sys.platlibdir
+    / f"python{sys.version_info.major}.{sys.version_info.minor}"
+)
 assert "build-appimage" in str(stdlib.resolve()) or "AppDir" in str(stdlib), (
     f"stdlib not from AppDir: {stdlib} (prefix={sys.prefix})"
 )
 assert stdlib.is_dir(), f"bundled stdlib missing: {stdlib}"
+assert (stdlib / "encodings").is_dir(), f"encodings missing under {stdlib}"
 
 import gi
 gi.require_version("Gtk", "4.0")
