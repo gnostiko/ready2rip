@@ -11,7 +11,7 @@ import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 
-from gi.repository import Adw, Gio, GLib, Gtk, Pango
+from gi.repository import Adw, Gio, GLib, GObject, Gtk, Pango
 
 from ready2rip import config
 from ready2rip.artwork.fetch import (
@@ -62,6 +62,42 @@ from ready2rip.util import normalize_release_date, parse_disc_field
 from ready2rip.window_styles import install_window_styles
 
 _WINDOW_UI = str(Path(__file__).with_name('window.ui'))
+
+_ADW_TEMPLATE_TYPES = (
+    'ApplicationWindow',
+    'ToolbarView',
+    'HeaderBar',
+    'WindowTitle',
+    'ToastOverlay',
+    'StatusPage',
+    'Clamp',
+    'PreferencesGroup',
+    'ActionRow',
+    'ButtonRow',
+    'ComboRow',
+    'EntryRow',
+    'SpinRow',
+    'SwitchRow',
+)
+_adw_types_ensured = False
+
+
+def ensure_adw_template_types() -> None:
+    """Register Adw widgets used by window.ui for GtkBuilder.
+
+    AppImage / some PyGObject builds skip this until type_ensure runs;
+    without it, templates fail with "Invalid object type 'AdwToolbarView'".
+    Call after Adw.Application startup — not at import time.
+    """
+    global _adw_types_ensured
+    if _adw_types_ensured:
+        return
+    Adw.init()
+    for name in _ADW_TEMPLATE_TYPES:
+        typ = getattr(Adw, name, None)
+        if typ is not None:
+            GObject.type_ensure(typ)
+    _adw_types_ensured = True
 
 
 @Gtk.Template(filename=_WINDOW_UI)

@@ -22,23 +22,41 @@ from ready2rip.theme import (
     apply_color_scheme,
     normalize_color_scheme,
 )
-from ready2rip.window import Ready2RipWindow
 
 
 class Application(Adw.Application):
-    """Main application object."""
+    """Main application object.
+
+    Use ``startup`` / ``activate`` signal handlers instead of ``do_startup`` /
+    ``do_activate`` vfuncs. Overriding those vfuncs segfaults during
+    ``g_object_new`` on some AppImage PyGObject + bundled GLib stacks.
+    """
 
     def __init__(self) -> None:
+        self._store: SettingsStore | None = None
+        self._setup_shown = False
+        self._startup_complete = False
+        self._color_action: Gio.SimpleAction | None = None
         super().__init__(
             application_id=config.APPLICATION_ID,
             flags=Gio.ApplicationFlags.DEFAULT_FLAGS,
         )
-        self.store = SettingsStore()
-        self._setup_shown = False
-        self._color_action: Gio.SimpleAction | None = None
+        # After default Adw/Gtk Application startup has run.
+        self.connect_after('startup', self._on_startup)
+        self.connect('activate', self._on_activate)
 
-    def do_startup(self) -> None:
-        Adw.Application.do_startup(self)
+    @property
+    def store(self) -> SettingsStore:
+        if self._store is None:
+            self._store = SettingsStore()
+        return self._store
+
+    def _on_startup(self, *_args) -> None:
+        # Register Adw widgets for Gtk.Template before any window is built.
+        from ready2rip.window import ensure_adw_template_types
+
+        ensure_adw_template_types()
+        self._startup_complete = True
         GLib.set_application_name(config.APPLICATION_NAME)
         GLib.set_prgname(config.APPLICATION_ID)
         apply_color_scheme(self.store.get().color_scheme)
@@ -49,7 +67,11 @@ class Application(Adw.Application):
         self._setup_actions()
         self.set_menubar(None)
 
-    def do_activate(self) -> None:
+    def _on_activate(self, *_args) -> None:
+        if not self._startup_complete:
+            return
+        from ready2rip.window import Ready2RipWindow
+
         win = self.props.active_window
         if not win:
             win = Ready2RipWindow(application=self, store=self.store)
@@ -140,6 +162,8 @@ class Application(Adw.Application):
         about.present(self.props.active_window)
 
     def _present_drive_setup(self) -> None:
+        from ready2rip.window import Ready2RipWindow
+
         dialog = DriveSetupDialog(self.store)
 
         def on_closed(*_a) -> None:
