@@ -91,8 +91,26 @@ ICON_FALLBACKS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _running_from_appimage() -> bool:
+    return bool(os.environ.get('APPIMAGE') or os.environ.get('APPDIR'))
+
+
+def _appdir_icon_root() -> Path | None:
+    """``$APPDIR/usr/share/icons`` when running from an AppImage / AppDir."""
+    appdir = os.environ.get('APPDIR')
+    if not appdir:
+        return None
+    root = Path(appdir) / 'usr' / 'share' / 'icons'
+    if (root / 'hicolor').is_dir():
+        return root
+    return None
+
+
 def _project_icon_root() -> Path | None:
     """``<repo>/data/icons`` when running from a source checkout."""
+    # AppImage mounts live under /tmp/.mount_* — never walk into a host checkout.
+    if _running_from_appimage():
+        return None
     here = Path(__file__).resolve()
     for parent in here.parents:
         candidate = parent / 'data' / 'icons'
@@ -101,18 +119,39 @@ def _project_icon_root() -> Path | None:
     return None
 
 
+def _pkg_icon_root() -> Path | None:
+    """Installed prefix icons (``$prefix/share/icons``), when present on disk."""
+    if not config.PKGDATADIR:
+        return None
+    # Meson sets PKGDATADIR=/usr/share/ready2rip even inside AppImages; that
+    # host path does not contain our icon. Prefer the AppDir copy instead.
+    if _running_from_appimage():
+        return None
+    share = Path(config.PKGDATADIR).parent / 'icons'
+    if (share / 'hicolor').is_dir():
+        return share
+    return None
+
+
 def _icon_search_roots() -> list[Path]:
     roots: list[Path] = []
+    seen: set[Path] = set()
+
+    def add(path: Path | None) -> None:
+        if path is None:
+            return
+        resolved = path.resolve()
+        if resolved in seen or not path.is_dir():
+            return
+        seen.add(resolved)
+        roots.append(path)
+
     env = os.environ.get('READY2RIP_ICON_DIR')
     if env:
-        roots.append(Path(env))
-    project = _project_icon_root()
-    if project is not None:
-        roots.append(project)
-    if config.PKGDATADIR:
-        share = Path(config.PKGDATADIR).parent / 'icons'
-        if share.is_dir():
-            roots.append(share)
+        add(Path(env))
+    add(_appdir_icon_root())
+    add(_project_icon_root())
+    add(_pkg_icon_root())
     return roots
 
 
@@ -123,6 +162,8 @@ def _app_icon_file(*, symbolic: bool = False) -> Path | None:
     else:
         names = (
             f'hicolor/scalable/apps/{config.APPLICATION_ID}.svg',
+            f'hicolor/128x128/apps/{config.APPLICATION_ID}.png',
+            f'hicolor/256x256/apps/{config.APPLICATION_ID}.png',
             f'hicolor/symbolic/apps/{config.APPLICATION_ID}-symbolic.svg',
         )
     for root in _icon_search_roots():
@@ -130,15 +171,17 @@ def _app_icon_file(*, symbolic: bool = False) -> Path | None:
             path = root / rel
             if path.is_file():
                 return path
+    # AppImage root symlink (linuxdeploy places <id>.svg next to AppRun).
+    appdir = os.environ.get('APPDIR')
+    if appdir and not symbolic:
+        top = Path(appdir) / f'{config.APPLICATION_ID}.svg'
+        if top.is_file():
+            return top
     return None
 
 
 def _install_user_app_icon(src: Path, *, symbolic: bool = False) -> None:
-    """Copy only our app icon into the user hicolor tree.
-
-    Do **not** write ``index.theme`` — a partial user hicolor index shadows the
-    system theme and breaks icons in this app and every other GTK/GNOME app.
-    """
+    """Copy one app icon file into the user hicolor tree."""
     if symbolic:
         dest_dir = (
             Path.home()
@@ -150,6 +193,18 @@ def _install_user_app_icon(src: Path, *, symbolic: bool = False) -> None:
             / 'apps'
         )
         dest = dest_dir / f'{config.APPLICATION_ID}-symbolic.svg'
+    elif src.suffix.lower() == '.png':
+        # Keep raster installs under a common size so the shell finds them.
+        dest_dir = (
+            Path.home()
+            / '.local'
+            / 'share'
+            / 'icons'
+            / 'hicolor'
+            / '128x128'
+            / 'apps'
+        )
+        dest = dest_dir / f'{config.APPLICATION_ID}.png'
     else:
         dest_dir = (
             Path.home()
@@ -170,22 +225,65 @@ def _install_user_app_icon(src: Path, *, symbolic: bool = False) -> None:
         log.debug('Could not install user app icon: %s', exc)
 
 
-def _ensure_user_desktop_file() -> None:
-    """Install a ``.desktop`` so GNOME can map the running app id to an icon."""
-    apps = Path.home() / '.local' / 'share' / 'applications'
-    apps.mkdir(parents=True, exist_ok=True)
-    desktop = apps / f'{config.APPLICATION_ID}.desktop'
+def _install_user_hicolor_from_root(src_root: Path) -> None:
+    """Copy all packaged ``org.ready2rip.Ready2Rip*`` icons into ~/.local.
+
+    GNOME Shell resolves the taskbar icon from the *user/system* icon theme,
+    not from the AppImage's private ``XDG_DATA_DIRS``. Publishing into
+    ``~/.local/share/icons/hicolor`` is what makes the open-app icon appear.
+    """
+    hicolor = src_root / 'hicolor'
+    if not hicolor.is_dir():
+        return
+    dest_root = Path.home() / '.local' / 'share' / 'icons' / 'hicolor'
+    prefix = config.APPLICATION_ID
+    for path in hicolor.rglob('*'):
+        if not path.is_file():
+            continue
+        stem_ok = path.stem == prefix or path.stem.startswith(f'{prefix}-')
+        name_ok = path.name == prefix or path.name.startswith(f'{prefix}-')
+        if not (stem_ok or name_ok):
+            continue
+        rel = path.relative_to(hicolor)
+        dest = dest_root / rel
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if not dest.is_file() or dest.stat().st_mtime < path.stat().st_mtime:
+                shutil.copy2(path, dest)
+        except OSError as exc:
+            log.debug('Could not install %s: %s', dest, exc)
+
+
+def _desktop_exec_line() -> str:
+    """Command for the user ``.desktop`` file."""
+    appimage = os.environ.get('APPIMAGE')
+    if appimage and Path(appimage).is_file():
+        return f'"{appimage}"' if any(c in appimage for c in ' \t') else appimage
+
+    appdir = os.environ.get('APPDIR')
+    if appdir:
+        apprun = Path(appdir) / 'AppRun'
+        if apprun.is_file():
+            text = str(apprun)
+            return f'"{text}"' if any(c in text for c in ' \t') else text
 
     project = _project_icon_root()
     if project is not None:
         root = project.parent.parent  # data/icons → repo
         run = root / 'run'
         if run.is_file():
-            exec_line = str(run)
-        else:
-            exec_line = f'env PYTHONPATH={root / "src"} python3 -m ready2rip.main'
-    else:
-        exec_line = 'ready2rip'
+            return str(run)
+        return f'env PYTHONPATH={root / "src"} python3 -m ready2rip.main'
+
+    return 'ready2rip'
+
+
+def _ensure_user_desktop_file() -> None:
+    """Install a ``.desktop`` so GNOME can map the running app id to an icon."""
+    apps = Path.home() / '.local' / 'share' / 'applications'
+    apps.mkdir(parents=True, exist_ok=True)
+    desktop = apps / f'{config.APPLICATION_ID}.desktop'
+    exec_line = _desktop_exec_line()
 
     body = (
         '[Desktop Entry]\n'
@@ -198,6 +296,7 @@ def _ensure_user_desktop_file() -> None:
         'Categories=AudioVideo;Audio;Music;\n'
         'StartupNotify=true\n'
         f'StartupWMClass={config.APPLICATION_ID}\n'
+        f'X-GNOME-UsesNotifications=false\n'
     )
     try:
         if not desktop.is_file() or desktop.read_text(encoding='utf-8') != body:
@@ -251,6 +350,13 @@ def register_application_icons() -> None:
     from gi.repository import Gdk, Gtk
 
     icon_name = config.APPLICATION_ID
+    roots = _icon_search_roots()
+
+    # Publish every packaged size into ~/.local so the shell/taskbar can see it.
+    for root in roots:
+        _install_user_hicolor_from_root(root)
+
+    # Belt-and-suspenders for scalable / symbolic singles.
     scalable = _app_icon_file(symbolic=False)
     if scalable is not None:
         _install_user_app_icon(scalable, symbolic=False)
@@ -264,14 +370,18 @@ def register_application_icons() -> None:
         return
 
     theme = Gtk.IconTheme.get_for_display(display)
-
-    # Development: search the project icon tree (contains hicolor/).
-    project = _project_icon_root()
-    if project is not None:
+    for root in roots:
         try:
-            theme.add_search_path(str(project))
+            theme.add_search_path(str(root))
         except Exception as exc:
-            log.debug('Could not add icon path %s: %s', project, exc)
+            log.debug('Could not add icon path %s: %s', root, exc)
+
+    user_icons = Path.home() / '.local' / 'share' / 'icons'
+    if user_icons.is_dir():
+        try:
+            theme.add_search_path(str(user_icons))
+        except Exception as exc:
+            log.debug('Could not add user icon path: %s', exc)
 
     try:
         theme.rescan_if_needed()
