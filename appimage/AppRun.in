@@ -93,5 +93,25 @@ if [ -d "$HERE/usr/lib/gdk-pixbuf-2.0" ]; then
   done
 fi
 
+# GStreamer: prefer bundled CDDA/audio plugins; fall back to host for sinks.
+if [ -d "$HERE/usr/lib/gstreamer-1.0" ]; then
+  GST_PLUGIN_PATH="$HERE/usr/lib/gstreamer-1.0"
+  for d in \
+    /usr/lib64/gstreamer-1.0 \
+    /usr/lib/x86_64-linux-gnu/gstreamer-1.0 \
+    /usr/lib/gstreamer-1.0
+  do
+    [ -d "$d" ] || continue
+    GST_PLUGIN_PATH="$GST_PLUGIN_PATH:$d"
+  done
+  export GST_PLUGIN_PATH
+  # Keep scanner registry inside a writable user dir (AppImage root is read-only).
+  export GST_REGISTRY="${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/ready2rip/gstreamer-registry.bin"
+  mkdir -p "$(dirname "$GST_REGISTRY")" 2>/dev/null || true
+  if [ -x "$HERE/usr/libexec/gstreamer-1.0/gst-plugin-scanner" ]; then
+    export GST_PLUGIN_SCANNER="$HERE/usr/libexec/gstreamer-1.0/gst-plugin-scanner"
+  fi
+fi
+
 # -B: do not write .pyc into a read-only AppImage mount
 exec "$PYTHON" -B -m ready2rip.main "$@"

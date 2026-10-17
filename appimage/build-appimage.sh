@@ -193,11 +193,14 @@ REQUIRED_TYPELIBS=(
   cairo-1.0 freetype2-2.0 fontconfig-2.0
   xlib-2.0
   GIRepository-2.0 GIRepository-3.0
+  # In-app CD playback (DiscPlayer)
+  Gst-1.0 GstBase-1.0 GstAudio-1.0
 )
 # Optional but useful on Wayland/X11 hosts
 OPTIONAL_TYPELIBS=(
   GdkWayland-4.0 GdkX11-4.0
   Soup-3.0 Soup-2.4 Json-1.0
+  GstPbutils-1.0 GstTag-1.0 GstApp-1.0
 )
 
 copy_typelib() {
@@ -228,6 +231,28 @@ done
 for t in "${OPTIONAL_TYPELIBS[@]}"; do
   copy_typelib "$t" 0 || true
 done
+
+# ---------------------------------------------------------------------------
+# GStreamer CD playback plugins (cdio / cdparanoia + audio sink chain)
+# ---------------------------------------------------------------------------
+# Defined before helpers so we can call copy_lib / bundle_ldd_deps once they
+# exist — the actual copy runs after those functions are declared below.
+GST_PLUGIN_NAMES=(
+  # Required for DiscPlayer pipeline
+  libgstcoreelements
+  libgstaudioconvert
+  libgstaudioresample
+  libgstautodetect
+  libgstcdparanoia
+  libgstcdio
+  # Audio sinks (autoaudiosink picks among these)
+  libgstpulseaudio
+  libgstalsa
+  libgstpipewire
+  # Useful helpers
+  libgstvolume
+  libgstplayback
+)
 
 # ---------------------------------------------------------------------------
 # Helpers: copy shared libraries and binaries (via ldd)
@@ -434,6 +459,87 @@ echo "==> bundling helper binaries + libraries"
 find "${APPDIR}/usr/lib/python3/site-packages/gi" -name '*.so' 2>/dev/null | while read -r so; do
   bundle_ldd_deps "$so" || true
 done
+
+# GStreamer shared libraries used by GI + plugins
+echo "==> bundling GStreamer libraries + CD playback plugins"
+for soname in \
+  libgstreamer-1.0.so.0 \
+  libgstbase-1.0.so.0 \
+  libgstcontroller-1.0.so.0 \
+  libgstnet-1.0.so.0 \
+  libgstaudio-1.0.so.0 \
+  libgsttag-1.0.so.0 \
+  libgstpbutils-1.0.so.0 \
+  libgstapp-1.0.so.0
+do
+  path="$(resolve_soname "$soname" || true)"
+  if [ -n "$path" ] && [ -f "$path" ]; then
+    echo "    lib $path"
+    copy_lib "$path"
+    bundle_ldd_deps "$path"
+  else
+    echo "    warning: $soname not found on host"
+  fi
+done
+
+GST_PLUGIN_DIR="${APPDIR}/usr/lib/gstreamer-1.0"
+mkdir -p "$GST_PLUGIN_DIR"
+GST_HOST_PLUGIN_DIRS=()
+for d in \
+  /usr/lib64/gstreamer-1.0 \
+  /usr/lib/gstreamer-1.0 \
+  /usr/lib/x86_64-linux-gnu/gstreamer-1.0
+do
+  [ -d "$d" ] && GST_HOST_PLUGIN_DIRS+=("$d")
+done
+
+bundle_gst_plugin() {
+  local base="$1"
+  local found=""
+  local dir
+  for dir in "${GST_HOST_PLUGIN_DIRS[@]}"; do
+    if [ -f "${dir}/${base}.so" ]; then
+      found="${dir}/${base}.so"
+      break
+    fi
+  done
+  if [ -z "$found" ]; then
+    echo "    warning: GStreamer plugin ${base}.so not on host"
+    return 1
+  fi
+  echo "    plugin $found"
+  install -D -m755 "$found" "${GST_PLUGIN_DIR}/${base}.so"
+  bundle_ldd_deps "$found"
+  return 0
+}
+
+HAVE_CDDA_PLUGIN=0
+for plug in "${GST_PLUGIN_NAMES[@]}"; do
+  if bundle_gst_plugin "$plug"; then
+    case "$plug" in
+      libgstcdparanoia|libgstcdio) HAVE_CDDA_PLUGIN=1 ;;
+    esac
+  fi
+done
+if [ "$HAVE_CDDA_PLUGIN" -eq 0 ]; then
+  echo "warning: no GStreamer CDDA plugin (cdparanoia/cdio) on host — AppImage playback will be unavailable" >&2
+  echo "         install gstreamer1-plugins-base (cdparanoia) and/or gstreamer1-plugins-ugly (cdio)" >&2
+fi
+# Plugin scanner helper (avoids "External plugin loader failed" warnings).
+for scanner in \
+  /usr/libexec/gstreamer-1.0/gst-plugin-scanner \
+  /usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner \
+  /usr/lib64/gstreamer-1.0/gst-plugin-scanner
+do
+  if [ -x "$scanner" ]; then
+    echo "    scanner $scanner"
+    install -D -m755 "$scanner" \
+      "${APPDIR}/usr/libexec/gstreamer-1.0/gst-plugin-scanner"
+    bundle_ldd_deps "$scanner"
+    break
+  fi
+done
+ensure_soname_links
 
 HOST_PYTHON="$(readlink -f "$(command -v python3)")"
 PY_VER="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
@@ -698,6 +804,8 @@ set +e
     LD_LIBRARY_PATH="${APPDIR}/usr/lib" \
     GI_TYPELIB_PATH="${APPDIR}/usr/lib/girepository-1.0" \
     GSETTINGS_SCHEMA_DIR="${APPDIR}/usr/share/glib-2.0/schemas" \
+    GST_PLUGIN_PATH="${APPDIR}/usr/lib/gstreamer-1.0" \
+    GST_REGISTRY="${APPDIR}/../gst-registry-smoke.bin" \
     GDK_PIXBUF_MODULE_FILE="$(echo "${APPDIR}/usr/lib"/gdk-pixbuf-2.0/*/loaders.cache 2>/dev/null | awk '{print $1; exit}')" \
     "$PY" -B - <<'PY'
 import sys
@@ -725,6 +833,7 @@ from gi.repository import Gtk, Adw, GLib  # noqa: F401
 import mutagen  # noqa: F401
 import ready2rip.main  # noqa: F401
 from ready2rip.util import find_cdparanoia
+from ready2rip.playback import gstreamer_available, _pick_cdda_factory
 
 cp = find_cdparanoia()
 assert cp, "cdparanoia not found on PATH inside AppDir"
@@ -732,6 +841,12 @@ assert cp, "cdparanoia not found on PATH inside AppDir"
 assert "AppDir" in cp or "build-appimage" in cp or cp.startswith("/tmp"), cp
 print("ok: Gtk/Adw/mutagen/ready2rip/cdparanoia", cp, file=sys.stderr)
 print("ok: stdlib", stdlib, file=sys.stderr)
+if not gstreamer_available():
+    raise SystemExit(
+        "GStreamer CDDA plugins missing in AppDir "
+        "(need cdparanoiasrc or cdiocddasrc)"
+    )
+print("ok: gstreamer cdda", _pick_cdda_factory(), file=sys.stderr)
 PY
 )
 SMOKE=$?
