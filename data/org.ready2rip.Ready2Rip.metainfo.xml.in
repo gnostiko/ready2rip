@@ -26,10 +26,19 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-08-21">
+    <release version="@APPLICATION_VERSION@" date="2026-10-17">
       <description>
         <p>
-          0.4.1: Theme consistency fixes; updated app icons (PNG + SVG);
+          0.4.2: Secure archival rip and stock FLAC/MP3/Opus/AAC encode;
+          in-app CD playback with seek and next-track wrap; MusicBrainz
+          retry / clearer FreeDB errors; README screenshot refresh.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.1" date="2026-08-21">
+      <description>
+        <p>
+          Theme consistency fixes; updated app icons (PNG + SVG);
           dark-mode polish; README screenshot refresh.
         </p>
       </description>
