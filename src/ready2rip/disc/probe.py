@@ -35,7 +35,6 @@ class DiscInfo:
     device: str
     tracks: list[TrackInfo] = field(default_factory=list)
     freedb_id: str | None = None
-    raw_output: str = ''
 
     @property
     def track_count(self) -> int:
@@ -99,7 +98,6 @@ def probe_disc(device: str = '/dev/sr0') -> DiscInfo | None:
         device=device,
         tracks=tracks,
         freedb_id=freedb,
-        raw_output=output,
     )
 
 

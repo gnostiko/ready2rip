@@ -24,7 +24,6 @@ class DiscIdentifiers:
 
     musicbrainz_discid: str | None = None
     freedb_id: str | None = None
-    first_track: int = 1
     last_track: int = 0
     # MB-style offsets: [leadout, track1_start, track2_start, ...] in frames
     offsets: tuple[int, ...] = ()
@@ -41,7 +40,6 @@ def identifiers_from_disc(info: DiscInfo) -> DiscIdentifiers:
         return DiscIdentifiers(
             musicbrainz_discid=None,
             freedb_id=info.freedb_id,
-            first_track=1,
             last_track=0,
             offsets=(),
         )
@@ -52,7 +50,6 @@ def identifiers_from_disc(info: DiscInfo) -> DiscIdentifiers:
     return DiscIdentifiers(
         musicbrainz_discid=mb_id,
         freedb_id=freedb,
-        first_track=1,
         last_track=info.track_count,
         offsets=offsets,
     )

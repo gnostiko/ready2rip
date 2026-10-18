@@ -36,7 +36,6 @@ class Application(Adw.Application):
         self._store: SettingsStore | None = None
         self._setup_shown = False
         self._startup_complete = False
-        self._color_action: Gio.SimpleAction | None = None
         super().__init__(
             application_id=config.APPLICATION_ID,
             flags=Gio.ApplicationFlags.DEFAULT_FLAGS,
@@ -102,7 +101,6 @@ class Application(Adw.Application):
         )
         color.connect('activate', self.on_color_scheme)
         self.add_action(color)
-        self._color_action = color
 
         self.set_accels_for_action('win.close', ['<primary>w'])
         self.set_accels_for_action('win.rip', ['<primary>r'])

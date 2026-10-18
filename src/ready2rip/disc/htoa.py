@@ -35,7 +35,6 @@ class HtoaInfo:
 
     start_sector: int  # always 0 for absolute disc start
     length_sectors: int
-    is_silent: bool | None = None  # None until audio is analyzed
     message: str = ''
 
     @property

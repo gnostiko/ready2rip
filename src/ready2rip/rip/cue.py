@@ -235,7 +235,3 @@ def cue_file_type_for_extension(ext: str) -> str:
 def _cue_quote(value: str) -> str:
     cleaned = (value or '').replace('"', "'")
     return f'"{cleaned}"'
-
-
-def _cue_escape(value: str) -> str:
-    return (value or '').replace('\n', ' ').strip()

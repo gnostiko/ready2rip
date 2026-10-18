@@ -40,9 +40,3 @@ def join_artists(artists: list[str] | tuple[str, ...] | str | None) -> str:
 def normalize_artists(value: str | None) -> str:
     """Canonical multi-artist form: ``Name; Name`` (no empty segments)."""
     return join_artists(split_artists(value))
-
-
-def first_artist(value: str | None, *, fallback: str = 'Unknown Artist') -> str:
-    """First name only (useful for short path components)."""
-    names = split_artists(value)
-    return names[0] if names else fallback

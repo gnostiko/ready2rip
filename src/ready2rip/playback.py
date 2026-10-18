@@ -147,17 +147,28 @@ class DiscPlayer:
             return self.pause()
         return self.play(self._track)
 
-    def stop(self) -> None:
+    def stop(self, *, wait: bool = True) -> None:
+        """Stop playback and optionally wait until the CDDA device is released.
+
+        GStreamer state changes to NULL are asynchronous. Starting a rip
+        before the pipeline finishes shutting down races cdparanoia for
+        ``/dev/srN`` and produces truncated WAVs / failed secure extracts.
+        """
         self._stop_tick()
         self._disconnect_bus()
         if self._pipeline is not None:
+            pipeline = self._pipeline
+            self._pipeline = None
             try:
                 from gi.repository import Gst
 
-                self._pipeline.set_state(Gst.State.NULL)
+                pipeline.set_state(Gst.State.NULL)
+                if wait:
+                    # Block until NULL (or timeout) so the optical device
+                    # is free for cdparanoia.
+                    pipeline.get_state(5 * Gst.SECOND)
             except Exception:
                 pass
-            self._pipeline = None
         was = self._state
         self._state = PlayState.STOPPED
         if was is not PlayState.STOPPED and self.on_state:

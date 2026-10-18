@@ -74,9 +74,6 @@ AAC_QUALITIES = (
 
 AAC_QUALITY_IDS = frozenset(q[0] for q in AAC_QUALITIES)
 
-# Deprecated int list kept for migration / older UI call sites.
-AAC_BITRATES = (96, 128, 160, 192, 256, 320)
-
 
 def normalize_mp3_quality(value: str | None) -> str:
     raw = (value or '').strip().lower()
@@ -94,14 +91,6 @@ def mp3_quality_from_bitrate(bitrate: int) -> str:
         128: 'cbr128',
     }
     return mapping.get(int(bitrate), 'cbr320')
-
-
-def mp3_quality_label(quality: str) -> str:
-    q = normalize_mp3_quality(quality)
-    for qid, label in MP3_QUALITIES:
-        if qid == q:
-            return label
-    return q.upper()
 
 
 def lame_args_for_mp3_quality(quality: str) -> list[str]:
@@ -144,14 +133,6 @@ def aac_quality_from_bitrate(bitrate: int) -> str:
         96: 'cbr128',
     }
     return mapping.get(int(bitrate), 'cbr256')
-
-
-def aac_quality_label(quality: str) -> str:
-    q = normalize_aac_quality(quality)
-    for qid, label in AAC_QUALITIES:
-        if qid == q:
-            return label
-    return q.upper()
 
 
 def rip_log_aac_quality(quality: str) -> str:
@@ -494,10 +475,6 @@ class SettingsStore:
         if schema is None:
             return None
         return Gio.Settings.new_full(schema, None, None)
-
-    @property
-    def gsettings(self) -> Gio.Settings | None:
-        return self._settings
 
     def get(self) -> AppSettings:
         s = self._settings

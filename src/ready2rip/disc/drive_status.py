@@ -36,7 +36,6 @@ class DriveTrayState(Enum):
 class DriveStatus:
     device: str
     state: DriveTrayState
-    raw_code: int | None = None
     message: str = ''
 
     @property
@@ -105,7 +104,7 @@ def query_drive_status(device: str = '/dev/sr0') -> DriveStatus:
         _CDS_DISC_OK: DriveTrayState.DISC_OK,
     }.get(code, DriveTrayState.UNKNOWN)
 
-    return DriveStatus(device=device, state=state, raw_code=code, message=state.value)
+    return DriveStatus(device=device, state=state, message=state.value)
 
 
 def eject_drive(device: str = '/dev/sr0') -> tuple[bool, str]:

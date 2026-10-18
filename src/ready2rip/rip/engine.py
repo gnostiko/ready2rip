@@ -75,7 +75,6 @@ class RipProgress:
     state: RipState
     fraction: float = 0.0  # overall 0..1
     message: str = ''
-    current_path: Path | None = None
 
 
 @dataclass
@@ -244,6 +243,8 @@ class RipEngine:
 
     def run(self, job: RipJob, on_progress: ProgressCallback | None = None) -> RipResult:
         self._cancelled = False
+        # Settle after in-app playback: GStreamer may still be releasing /dev/srN.
+        time.sleep(0.35)
         tracks = sorted(n for n in job.track_numbers if n > 0)
         if not tracks and not job.rip_htoa and not job.copy_image:
             return RipResult(success=False, error='No tracks selected')
@@ -335,7 +336,6 @@ class RipEngine:
             index: float = 0.0,
             sub: float = 0.0,
             message: str = '',
-            path: Path | None = None,
             total_units: float | None = None,
         ) -> None:
             if on_progress is None:
@@ -349,7 +349,6 @@ class RipEngine:
                     state=state,
                     fraction=max(0.0, min(1.0, overall)),
                     message=message,
-                    current_path=path,
                 )
             )
 
@@ -359,7 +358,6 @@ class RipEngine:
             index=0.0,
             sub=0.0,
             message='Preparing album folder and artwork…',
-            path=album_dir,
         )
 
         embed_art, _folder_art, cover_path, art_notes = _prepare_artwork(
@@ -475,13 +473,12 @@ class RipEngine:
                         embed_art=embed_art,
                         defeat_cache=defeat_cache,
                         rip_log=rip_log,
-                        report=lambda state, sub, msg, path=None: report(
+                        report=lambda state, sub, msg: report(
                             0,
                             state,
                             index=unit_index,
                             sub=sub,
                             message=msg,
-                            path=path,
                             total_units=total_units,
                         ),
                     )
@@ -688,7 +685,6 @@ class RipEngine:
                     state=RipState.DONE,
                     fraction=1.0,
                     message=done_msg,
-                    current_path=album_dir,
                 )
             )
         return result
@@ -773,7 +769,6 @@ class RipEngine:
         notes.append(
             f'Non-silent HTOA detected ({htoa_info.duration_label}) — ripping'
         )
-        htoa_info.is_silent = False
 
         test_crc = ''
         copy_crc = ''
@@ -886,7 +881,7 @@ class RipEngine:
         self._ensure_destination_dirs(dests)
         n_targets = max(1, len(dests))
 
-        def _htoa_progress(t_i: int, enc_fmt: str, out_path: Path) -> None:
+        def _htoa_progress(t_i: int, enc_fmt: str, _out_path: Path) -> None:
             enc_frac = 0.7 + (0.15 * (t_i / n_targets))
             report(
                 RipState.ENCODING,
@@ -894,7 +889,6 @@ class RipEngine:
                 f'Encoding HTOA to {enc_fmt.upper()}'
                 + (f' ({t_i + 1}/{n_targets})' if n_targets > 1 else '')
                 + '…',
-                path=out_path,
             )
 
         htoa_outputs = self._encode_wav_to_destinations(
@@ -943,7 +937,6 @@ class RipEngine:
             RipState.DONE,
             1.0,
             f'Finished HTOA → {primary_out.name}',
-            path=primary_out,
         )
         return True, primary_out, htoa_outputs, notes
 
@@ -1259,7 +1252,7 @@ class RipEngine:
             self._ensure_destination_dirs(dests)
             n_targets = max(1, len(dests))
 
-            def _enc_progress(t_i: int, enc_fmt: str, out_path: Path) -> None:
+            def _enc_progress(t_i: int, enc_fmt: str, _out_path: Path) -> None:
                 enc_frac = 0.62 + (0.24 * (t_i / n_targets))
                 report(
                     track_no,
@@ -1271,7 +1264,6 @@ class RipEngine:
                         + (f' ({t_i + 1}/{n_targets})' if n_targets > 1 else '')
                         + '…'
                     ),
-                    path=out_path,
                     total_units=total_units,
                 )
 
@@ -1317,7 +1309,6 @@ class RipEngine:
                 index=idx,
                 sub=1.0,
                 message=f'Finished track {track_no}{done_extra}',
-                path=primary_out,
                 total_units=total_units,
             )
 
@@ -2037,7 +2028,6 @@ class RipEngine:
             state: RipState,
             frac: float,
             message: str,
-            path: Path | None = None,
         ) -> None:
             if on_progress is None:
                 return
@@ -2047,7 +2037,6 @@ class RipEngine:
                     state=state,
                     fraction=max(0.0, min(1.0, frac)),
                     message=message,
-                    current_path=path,
                 )
             )
 
@@ -2066,7 +2055,7 @@ class RipEngine:
         except OSError as exc:
             return RipResult(success=False, error=f'Cannot create album folder: {exc}')
 
-        report(RipState.PREPARING, 0.02, 'Preparing album folder (Copy Image)…', album_dir)
+        report(RipState.PREPARING, 0.02, 'Preparing album folder (Copy Image)…')
         embed_art, _folder_art, cover_path, art_notes = _prepare_artwork(job, album_dir)
         notes.extend(art_notes)
 
@@ -2295,7 +2284,7 @@ class RipEngine:
                     )
                 n_targets = max(1, len(dests))
 
-                def _img_progress(t_i: int, enc_fmt: str, out_path: Path) -> None:
+                def _img_progress(t_i: int, enc_fmt: str, _out_path: Path) -> None:
                     enc_frac = 0.75 + (0.12 * (t_i / n_targets))
                     report(
                         RipState.ENCODING,
@@ -2311,7 +2300,6 @@ class RipEngine:
                             )
                             + '…'
                         ),
-                        out_path,
                     )
 
                 try:
@@ -2347,7 +2335,6 @@ class RipEngine:
                             RipState.ENCODING,
                             0.95,
                             'Writing CUE sheet…',
-                            this_cue,
                         )
                         write_cue_sheet(
                             this_cue,
@@ -2390,7 +2377,6 @@ class RipEngine:
                     RipState.DONE,
                     1.0,
                     f'Copy Image complete → {done_label}',
-                    primary_album,
                 )
                 return RipResult(
                     success=True,
@@ -2518,10 +2504,12 @@ class RipEngine:
         if expected_bytes and expected_bytes > 0:
             minimum = int(expected_bytes * min_ratio)
             if size < minimum:
+                got_pct = (100.0 * size / expected_bytes) if expected_bytes else 0.0
                 raise RuntimeError(
                     f'{label} extraction incomplete for track {track_number}: '
-                    f'{size} bytes < {minimum} expected '
-                    f'({min_ratio:.0%} of ~{expected_bytes} CDDA bytes)'
+                    f'{size} bytes < {minimum} required '
+                    f'(got {got_pct:.1f}% of {expected_bytes} CDDA bytes; '
+                    f'need ≥{min_ratio:.1%})'
                 )
 
     def _encode(self, fmt: str, wav_path: Path, out_path: Path, job: RipJob) -> None:

@@ -15,11 +15,6 @@ from gi.repository import Adw, Gtk
 ColorSchemeName = Literal['default', 'light', 'dark']
 COLOR_SCHEMES: tuple[ColorSchemeName, ...] = ('default', 'light', 'dark')
 
-COLOR_SCHEME_ICONS: dict[str, str] = {
-    'default': 'display-brightness-symbolic',
-    'light': 'weather-clear-symbolic',
-    'dark': 'weather-clear-night-symbolic',
-}
 COLOR_SCHEME_LABELS: dict[str, str] = {
     'default': 'System',
     'light': 'Light',
@@ -66,12 +61,6 @@ def apply_color_scheme(scheme: str) -> ColorSchemeName:
         color = Adw.ColorScheme.DEFAULT
     Adw.StyleManager.get_default().set_color_scheme(color)
     return scheme
-
-
-def next_color_scheme(scheme: str) -> ColorSchemeName:
-    current = normalize_color_scheme(scheme)
-    idx = COLOR_SCHEMES.index(current)
-    return COLOR_SCHEMES[(idx + 1) % len(COLOR_SCHEMES)]
 
 
 def parse_hex_rgb(color: str) -> tuple[int, int, int]:

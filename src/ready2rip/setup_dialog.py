@@ -31,7 +31,6 @@ class DriveSetupDialog(Adw.Dialog):
         self.set_content_width(420)
         self.set_content_height(380)
         self._store = store
-        self._finished_ok = False
         self._busy = False
         self._last_result: CalibrationResult | None = None
 
@@ -223,10 +222,6 @@ class DriveSetupDialog(Adw.Dialog):
         self.set_child(toolbar)
         self._stack.set_visible_child_name('intro')
 
-    @property
-    def finished_ok(self) -> bool:
-        return self._finished_ok
-
     def _on_start(self, *_args) -> None:
         if self._busy:
             return
@@ -273,7 +268,6 @@ class DriveSetupDialog(Adw.Dialog):
 
         if result.success and result.offset is not None:
             _save_result(self._store, device, result, offset=result.offset)
-            self._finished_ok = True
             apply_icon(self._result_icon, 'emblem-ok-symbolic')
             self._result_title.set_label('Drive calibrated')
             body = result.message
@@ -315,7 +309,6 @@ class DriveSetupDialog(Adw.Dialog):
     def _on_skip(self, *_args) -> None:
         device = self._device_row.get_text().strip() or '/dev/sr0'
         save_calibration(self._store, device=device, offset=0)
-        self._finished_ok = True
         apply_icon(self._result_icon, 'emblem-ok-symbolic')
         self._result_title.set_label('Setup skipped')
         self._result_desc.set_label(
@@ -352,7 +345,6 @@ class DriveSetupDialog(Adw.Dialog):
                 accurate_stream_message=s.drive_accurate_stream_message,
             )
             features = ''
-        self._finished_ok = True
         apply_icon(self._result_icon, 'emblem-ok-symbolic')
         self._result_title.set_label('Offset saved')
         body = f'Saved sample offset {offset} for {device}.'

@@ -106,7 +106,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
     toast_overlay = Gtk.Template.Child()
     toolbar_view = Gtk.Template.Child()
-    header_bar = Gtk.Template.Child()
     window_title = Gtk.Template.Child()
     menu_button = Gtk.Template.Child()
     status_page = Gtk.Template.Child()
@@ -127,18 +126,15 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     search_art_button = Gtk.Template.Child()
     choose_art_button = Gtk.Template.Child()
     clear_art_button = Gtk.Template.Child()
-    player_box = Gtk.Template.Child()
     player_track_label = Gtk.Template.Child()
     prev_button = Gtk.Template.Child()
     play_button = Gtk.Template.Child()
     next_button = Gtk.Template.Child()
-    seek_box = Gtk.Template.Child()
     player_seek = Gtk.Template.Child()
     player_position_label = Gtk.Template.Child()
     player_duration_label = Gtk.Template.Child()
     lookup_progress = Gtk.Template.Child()
     rip_revealer = Gtk.Template.Child()
-    rip_banner = Gtk.Template.Child()
     rip_title_label = Gtk.Template.Child()
     rip_status_label = Gtk.Template.Child()
     rip_progress = Gtk.Template.Child()
@@ -410,6 +406,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
     def _on_close_request(self, *_args) -> bool:
         self._stop_playback()
+        # Closing mid-rip used to kill the daemon thread abruptly and leave
+        # a half-written log that looked like a crash. Cancel cleanly first.
+        if self._ripping and self._rip_engine is not None:
+            self._rip_engine.cancel()
         return False
 
     def _on_play_toggle(self, *_args) -> None:
@@ -1881,6 +1881,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             copy_image=settings.copy_image,
             artwork_max_size=settings.artwork_max_size,
         )
+
+        # Stop in-app CD playback and wait for GStreamer to release /dev/srN
+        # *before* starting the rip thread — otherwise the first secure pass
+        # often ends truncated ("extraction incomplete").
+        self._stop_playback()
 
         self._ripping = True
         self._rip_engine = RipEngine()

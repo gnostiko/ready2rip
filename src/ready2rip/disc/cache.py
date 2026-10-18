@@ -23,10 +23,6 @@ class DriveCacheResult:
 
     caches: bool | None  # True / False / None (unknown / skipped)
     message: str
-    first_ms: float = 0.0
-    second_ms: float = 0.0
-    third_ms: float = 0.0
-    crc_match: bool | None = None
 
 
 def detect_drive_cache(
@@ -153,10 +149,6 @@ def detect_drive_cache(
     return DriveCacheResult(
         caches=caches,
         message=message,
-        first_ms=first_ms,
-        second_ms=second_ms,
-        third_ms=third_ms,
-        crc_match=match,
     )
 
 

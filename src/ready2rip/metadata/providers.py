@@ -58,7 +58,6 @@ class TrackMetadata:
     number: int
     title: str = ''
     artist: str = ''
-    duration_ms: int | None = None
     musicbrainz_recording_id: str = ''
 
 
@@ -351,9 +350,6 @@ class MusicBrainzProvider(MetadataProvider):
                     number = int(re.sub(r'\D', '', str(number_raw)) or track.get('position') or 0)
                 except (TypeError, ValueError):
                     number = int(track.get('position') or 0)
-                length = recording.get('length')
-                if length is None:
-                    length = track.get('length')
                 tracks.append(
                     TrackMetadata(
                         number=number,
@@ -362,7 +358,6 @@ class MusicBrainzProvider(MetadataProvider):
                             track.get('artist-credit') or recording.get('artist-credit')
                         )
                         or artist,
-                        duration_ms=int(length) if length is not None else None,
                         musicbrainz_recording_id=recording.get('id') or '',
                     )
                 )
@@ -447,7 +442,7 @@ class FreeDBProvider(MetadataProvider):
 
     def _cddb_hello(self) -> str:
         # gnudb expects identifiable hello; email-shaped user reduces blocks.
-        version = getattr(config, 'APPLICATION_VERSION', '0.4.2')
+        version = getattr(config, 'APPLICATION_VERSION', '0.4.3')
         return (
             f'ready2rip@users.noreply.github.com localhost '
             f'{config.APPLICATION_NAME} {version}'

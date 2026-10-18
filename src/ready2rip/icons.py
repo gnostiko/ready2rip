@@ -278,13 +278,60 @@ def _desktop_exec_line() -> str:
     return 'ready2rip'
 
 
+def _foreign_ready2rip_desktops(apps: Path) -> list[Path]:
+    """Launchers installed by AppImage / Gear Lever (not our app-id file)."""
+    ours = f'{config.APPLICATION_ID}.desktop'
+    found: list[Path] = []
+    try:
+        candidates = list(apps.glob('*.desktop'))
+    except OSError:
+        return found
+    for path in candidates:
+        if path.name == ours:
+            continue
+        try:
+            text = path.read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            continue
+        # AppImage desktop integration, Gear Lever, appimaged, etc.
+        if (
+            f'StartupWMClass={config.APPLICATION_ID}' in text
+            or 'X-AppImage-Name=ready2rip' in text
+            or 'DESKTOPINTEGRATION=' in text
+            or path.stem.lower() == 'ready2rip'
+        ):
+            found.append(path)
+    return found
+
+
 def _ensure_user_desktop_file() -> None:
-    """Install a ``.desktop`` so GNOME can map the running app id to an icon."""
+    """Install a ``.desktop`` only when no AppImage/Gear Lever launcher exists.
+
+    Writing ``org.ready2rip.Ready2Rip.desktop`` *and* keeping AppImage's
+    ``ready2rip.desktop`` produces two identical entries in GNOME's app grid.
+    Prefer the external integrator's launcher; fall back to our own for
+    source / unpackaged runs.
+    """
     apps = Path.home() / '.local' / 'share' / 'applications'
     apps.mkdir(parents=True, exist_ok=True)
     desktop = apps / f'{config.APPLICATION_ID}.desktop'
-    exec_line = _desktop_exec_line()
 
+    foreign = _foreign_ready2rip_desktops(apps)
+    if foreign:
+        # Drop our duplicate so only one ready2rip appears in the overview.
+        if desktop.is_file():
+            try:
+                desktop.unlink()
+                log.debug(
+                    'Removed duplicate desktop file %s (using %s)',
+                    desktop,
+                    foreign[0].name,
+                )
+            except OSError as exc:
+                log.debug('Could not remove duplicate desktop file: %s', exc)
+        return
+
+    exec_line = _desktop_exec_line()
     body = (
         '[Desktop Entry]\n'
         f'Name={config.APPLICATION_NAME}\n'
@@ -296,7 +343,7 @@ def _ensure_user_desktop_file() -> None:
         'Categories=AudioVideo;Audio;Music;\n'
         'StartupNotify=true\n'
         f'StartupWMClass={config.APPLICATION_ID}\n'
-        f'X-GNOME-UsesNotifications=false\n'
+        'X-GNOME-UsesNotifications=false\n'
     )
     try:
         if not desktop.is_file() or desktop.read_text(encoding='utf-8') != body:

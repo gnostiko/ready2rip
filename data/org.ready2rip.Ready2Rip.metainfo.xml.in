@@ -26,10 +26,20 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-10-17">
+    <release version="@APPLICATION_VERSION@" date="2026-10-18">
       <description>
         <p>
-          0.4.2: Secure archival rip and stock FLAC/MP3/Opus/AAC encode;
+          0.4.3: Fix truncated rips after in-app playback (wait for
+          GStreamer to release the drive); avoid duplicate GNOME icons
+          with AppImage/Gear Lever; bundle CDDA plugins for AppImage
+          playback; remove unused code.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.2" date="2026-10-17">
+      <description>
+        <p>
+          Secure archival rip and stock FLAC/MP3/Opus/AAC encode;
           in-app CD playback with seek and next-track wrap; MusicBrainz
           retry / clearer FreeDB errors; README screenshot refresh.
         </p>
