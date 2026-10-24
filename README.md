@@ -274,13 +274,67 @@ meson install -C build
 
 ```text
 ready2rip/
-  run                   # source-tree launcher
+  run                   # source-tree launcher (CD ripper)
+  run-transcode         # Melton video_transcoding local web UI
   appimage/             # AppRun + build-appimage.sh
   data/                 # desktop, icons, AppStream, GSettings
   src/ready2rip/
+  vendor/video_transcoding/  # Lisa Melton scripts (MIT; pinned)
   meson.build
 ```
 
+---
+
+## Melton video transcoding GUI
+
+ready2rip also ships a **lightweight local web UI** that wraps
+[Lisa Melton’s `video_transcoding`](https://github.com/lisamelton/video_transcoding)
+scripts (`transcode-video.rb`, `detect-crop.rb`, `convert-video.rb`). It does not
+invent flags — options come from the real script `--help` / docs. Melton’s sane
+defaults stay in place unless you override them in the UI.
+
+### System requirements (Fedora example)
+
+| Tool | Role |
+|------|------|
+| Ruby | Runs the Melton scripts |
+| `HandBrakeCLI` | Transcode + crop detection (`dnf install HandBrake-cli`) |
+| `ffprobe` / `ffmpeg` | Media scan + `convert-video.rb` (`dnf install ffmpeg`) |
+
+Optional: `mkvpropedit` was used by the **legacy RubyGems** packaging; the 2025
+standalone scripts do **not** require it.
+
+Check this machine:
+
+```bash
+./run-transcode --check
+```
+
+### Run the GUI
+
+```bash
+./run-transcode
+# or: python3 -m ready2rip.transcode   # with PYTHONPATH=src
+```
+
+Opens `http://127.0.0.1:8765/` (override with `--host` / `--port`; `--no-open`
+skips the browser). Paste an absolute media path (or drop a `file://` URI),
+**Probe** tracks, adjust dropdowns, **Preview command** or **Run**.
+
+Wired controls (Melton defaults unless changed):
+
+- Tool: `transcode-video` / `detect-crop` / `convert-video`
+- Video mode: `h264` (default), `hevc`, `nvenc-hevc`, `av1`, `nvenc-av1`, `none`
+- Audio mode: Melton default (`aac`, or `opus` for AV1 modes), plus explicit `aac` / `opus` / `eac3` / `none`
+- Audio track / language (`--add-audio`; default remains track **1**)
+- AAC encoder, `--ac3-surround`, bitrate / quality / encoder preset, `--no-bframe-refs`
+- Burn subtitle (automatic / none / track) or include subtitle track/language
+- Container via `-x format=…` (`mkv` default, `av_mp4`, `av_webm`, `av_mkv`)
+- detect-crop mode (`conservative` default / `auto`)
+- Output directory (Melton writes into process cwd), dry-run, debug, free-form `-x` extras
+
+Vendored scripts live under `vendor/video_transcoding/` (see that tree’s `LICENSE`
+and `VERSION`).
 
 ---
 
@@ -289,6 +343,7 @@ ready2rip/
 - [Exact Audio Copy](https://www.exactaudiocopy.de/)
 - [dBpoweramp](https://www.dbpoweramp.com/)
 - [cyanrip](https://github.com/cyanreg/cyanrip)
+- [Lisa Melton — video_transcoding](https://github.com/lisamelton/video_transcoding)
 
 
 ## License

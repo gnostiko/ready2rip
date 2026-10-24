@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ready2rip · Melton transcode</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="bg" aria-hidden="true"></div>
+  <main class="shell">
+    <header class="hero">
+      <p class="brand">ready2rip</p>
+      <h1>Melton transcode</h1>
+      <p class="lede">
+        Lightweight wrapper around Lisa Melton’s
+        <code>video_transcoding</code> scripts. Defaults match Melton; override only what you need.
+      </p>
+    </header>
+
+    <section class="panel" id="deps-panel" aria-live="polite">
+      <h2>Toolchain</h2>
+      <ul id="deps" class="deps"><li><span>checking…</span><span class="opt">…</span><span>—</span></li></ul>
+    </section>
+
+    <section
+      class="drop"
+      id="drop"
+      tabindex="0"
+      aria-label="Drop a video file here or paste a path"
+    >
+      <p class="drop-title">Drop a video here</p>
+      <p class="drop-hint">or paste / type an absolute path below, then Probe</p>
+      <div class="row path-row">
+        <input
+          id="input-path"
+          type="text"
+          spellcheck="false"
+          placeholder="/path/to/movie.mkv"
+          autocomplete="off"
+        />
+        <button type="button" id="btn-probe" class="btn">Probe</button>
+      </div>
+      <p id="probe-summary" class="muted"></p>
+    </section>
+
+    <form id="form" class="form">
+      <fieldset>
+        <legend>Tool</legend>
+        <label>
+          Script
+          <select id="tool" name="tool"></select>
+        </label>
+      </fieldset>
+
+      <fieldset id="fs-transcode">
+        <legend>Video &amp; container</legend>
+        <div class="grid">
+          <label>
+            Video mode
+            <select id="mode" name="mode"></select>
+          </label>
+          <label>
+            Container
+            <select id="container" name="container"></select>
+          </label>
+          <label>
+            Encoder preset
+            <input id="preset" name="preset" type="text" placeholder="Melton default (e.g. 8 for av1)" />
+          </label>
+          <label>
+            Bitrate (Kbps)
+            <input id="bitrate" name="bitrate" type="number" min="1" placeholder="auto from resolution" />
+          </label>
+          <label>
+            Quality (CQ)
+            <input id="quality" name="quality" type="number" step="0.1" placeholder="leave empty for bitrate modes" />
+          </label>
+        </div>
+        <label class="check">
+          <input id="no-bframe-refs" type="checkbox" />
+          --no-bframe-refs (older Nvidia GPUs)
+        </label>
+      </fieldset>
+
+      <fieldset id="fs-audio">
+        <legend>Audio</legend>
+        <div class="grid">
+          <label>
+            Audio mode
+            <select id="audio-mode" name="audio_mode"></select>
+          </label>
+          <label>
+            Audio track
+            <select id="audio-track"></select>
+          </label>
+          <label>
+            Or language / all
+            <select id="audio-lang"></select>
+          </label>
+          <label>
+            AAC encoder
+            <select id="aac-encoder" name="aac_encoder"></select>
+          </label>
+        </div>
+        <label class="check">
+          <input id="ac3-surround" type="checkbox" />
+          --ac3-surround (aac mode; more compatible surround)
+        </label>
+        <p class="hint">
+          Melton default is audio track <strong>1</strong>. Choosing a track or language adds
+          <code>--add-audio</code>. Leave both on Melton default to keep that behavior.
+        </p>
+      </fieldset>
+
+      <fieldset id="fs-subs">
+        <legend>Subtitles</legend>
+        <div class="grid">
+          <label>
+            Burn subtitle
+            <select id="burn-subtitle" name="burn_subtitle"></select>
+          </label>
+          <label>
+            Include subtitle track
+            <select id="sub-track"></select>
+          </label>
+          <label>
+            Or language / all
+            <select id="sub-lang"></select>
+          </label>
+        </div>
+        <p class="hint">
+          Default is automatic forced-subtitle burn. Using include subtitle disables burning
+          (<code>--add-subtitle</code>).
+        </p>
+      </fieldset>
+
+      <fieldset id="fs-crop">
+        <legend>detect-crop</legend>
+        <label>
+          Crop mode
+          <select id="crop-mode" name="crop_mode"></select>
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Output &amp; extras</legend>
+        <label>
+          Output directory (Melton writes into process cwd)
+          <input id="output-dir" type="text" spellcheck="false" placeholder="current directory if empty" />
+        </label>
+        <label>
+          Extra HandBrakeCLI options (<code>-x</code>), one per line — real names only
+          <textarea id="extra" rows="3" placeholder="crop=140:140:0:0&#10;detelecine"></textarea>
+        </label>
+        <div class="checks">
+          <label class="check"><input id="dry-run" type="checkbox" /> --dry-run</label>
+          <label class="check"><input id="debug" type="checkbox" /> --debug</label>
+        </div>
+      </fieldset>
+
+      <div class="actions">
+        <button type="button" id="btn-preview" class="btn ghost">Preview command</button>
+        <button type="submit" id="btn-run" class="btn primary">Run</button>
+      </div>
+    </form>
+
+    <section class="panel log-panel">
+      <h2>Command / log</h2>
+      <pre id="log" class="log" aria-live="polite"></pre>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
