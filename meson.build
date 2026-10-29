@@ -1,6 +1,6 @@
 project(
   'ready2rip',
-  version: '0.4.3',
+  version: '0.4.4',
   meson_version: '>= 1.0.0',
   default_options: ['warning_level=2', 'prefix=/usr'],
 )
@@ -32,7 +32,6 @@ conf.set('GETTEXT_PACKAGE', GETTEXT_PACKAGE)
 conf.set('LOCALEDIR', localedir)
 conf.set('PKGDATADIR', pkgdatadir)
 conf.set('PYTHON', py_installation.full_path())
-conf.set('VERSION', APPLICATION_VERSION)
 conf.set('PACKAGE_URL', PACKAGE_URL)
 conf.set('BUGTRACKER_URL', BUGTRACKER_URL)
 

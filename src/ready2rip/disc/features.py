@@ -6,12 +6,10 @@ from __future__ import annotations
 import logging
 import subprocess
 import tempfile
-import wave
-import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from ready2rip.disc.cache import flush_drive_cache
+from ready2rip.disc.cache import _pcm_crc, flush_drive_cache
 from ready2rip.disc.probe import DiscInfo
 
 log = logging.getLogger(__name__)
@@ -179,23 +177,3 @@ def _burst_span(device: str, span: str, wav_path: Path, *, timeout: int) -> None
         if len(detail) > 200:
             detail = detail[:200] + '…'
         raise RuntimeError(detail or f'cdparanoia burst span failed ({span})')
-
-
-def _pcm_crc(wav_path: Path) -> int | None:
-    try:
-        with wave.open(str(wav_path), 'rb') as wf:
-            crc = 0
-            remaining = wf.getnframes()
-            while remaining > 0:
-                take = min(65536, remaining)
-                data = wf.readframes(take)
-                remaining -= take
-                crc = zlib.crc32(data, crc)
-            return crc & 0xFFFFFFFF
-    except Exception:
-        try:
-            raw = wav_path.read_bytes()
-            pcm = raw[44:] if len(raw) > 44 and raw[:4] == b'RIFF' else raw
-            return zlib.crc32(pcm) & 0xFFFFFFFF
-        except OSError:
-            return None

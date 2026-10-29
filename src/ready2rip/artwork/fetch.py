@@ -137,7 +137,7 @@ class ArtworkFetcher:
                 '.webp': 'image/webp',
                 '.gif': 'image/gif',
             }.get(suffix, mime)
-        width, height = _image_size(data)
+        width, height = image_size(data)
         if width <= 0 or height <= 0:
             return None
         return ArtworkImage(
@@ -369,7 +369,7 @@ class ArtworkFetcher:
             return None
 
         mime = _guess_mime(data, content_type)
-        width, height = _image_size(data)
+        width, height = image_size(data)
         if width <= 0 or height <= 0:
             return None
 
@@ -473,7 +473,7 @@ def _guess_mime(data: bytes, content_type: str) -> str:
     return 'application/octet-stream'
 
 
-def _image_size(data: bytes) -> tuple[int, int]:
+def image_size(data: bytes) -> tuple[int, int]:
     try:
         from PIL import Image
 

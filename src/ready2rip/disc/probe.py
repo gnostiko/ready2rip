@@ -8,6 +8,13 @@ import subprocess
 from dataclasses import dataclass, field
 
 
+def sectors_to_mmss(sectors: int) -> str:
+    """Format a CDDA sector count as ``M:SS``."""
+    total = max(0, round(sectors / 75.0))
+    minutes, seconds = divmod(total, 60)
+    return f'{minutes}:{seconds:02d}'
+
+
 @dataclass(frozen=True)
 class TrackInfo:
     """One audio track from the disc TOC."""
@@ -23,9 +30,7 @@ class TrackInfo:
 
     @property
     def duration_label(self) -> str:
-        total = round(self.duration_seconds)
-        minutes, seconds = divmod(total, 60)
-        return f'{minutes}:{seconds:02d}'
+        return sectors_to_mmss(self.length_sectors)
 
 
 @dataclass

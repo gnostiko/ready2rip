@@ -179,18 +179,18 @@ class TagWriter:
 
             audio = MP4(path)
             audio['----:com.apple.iTunes:REPLAYGAIN_TRACK_GAIN'] = [
-                f'{values.track_gain_db:.2f} dB'.encode('utf-8')
+                f'{values.track_gain_db:.2f} dB'.encode()
             ]
             audio['----:com.apple.iTunes:REPLAYGAIN_TRACK_PEAK'] = [
-                f'{values.track_peak:.6f}'.encode('utf-8')
+                f'{values.track_peak:.6f}'.encode()
             ]
             if values.album_gain_db is not None:
                 audio['----:com.apple.iTunes:REPLAYGAIN_ALBUM_GAIN'] = [
-                    f'{values.album_gain_db:.2f} dB'.encode('utf-8')
+                    f'{values.album_gain_db:.2f} dB'.encode()
                 ]
             if values.album_peak is not None:
                 audio['----:com.apple.iTunes:REPLAYGAIN_ALBUM_PEAK'] = [
-                    f'{values.album_peak:.6f}'.encode('utf-8')
+                    f'{values.album_peak:.6f}'.encode()
                 ]
             audio.save()
         elif suffix in {'.opus', '.ogg'}:

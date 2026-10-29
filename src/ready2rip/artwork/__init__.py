@@ -10,7 +10,6 @@ __all__ = [
     'ArtworkImage',
     'ArtworkSourceOptions',
     'apply_artwork_to_picture',
-    'pixbuf_from_artwork',
 ]
 
 

@@ -21,7 +21,7 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 
-from ready2rip.disc.probe import DiscInfo
+from ready2rip.disc.probe import DiscInfo, sectors_to_mmss
 
 log = logging.getLogger(__name__)
 
@@ -43,9 +43,7 @@ class HtoaInfo:
 
     @property
     def duration_label(self) -> str:
-        total = round(self.duration_seconds)
-        minutes, seconds = divmod(total, 60)
-        return f'{minutes}:{seconds:02d}'
+        return sectors_to_mmss(self.length_sectors)
 
 
 def detect_htoa(disc: DiscInfo | None) -> HtoaInfo | None:

@@ -63,10 +63,8 @@ class RipState(Enum):
     RIPPING = auto()
     VERIFYING = auto()
     ENCODING = auto()
-    TAGGING = auto()
     REPLAYGAIN = auto()
     DONE = auto()
-    FAILED = auto()
 
 
 @dataclass
@@ -1252,7 +1250,15 @@ class RipEngine:
             self._ensure_destination_dirs(dests)
             n_targets = max(1, len(dests))
 
-            def _enc_progress(t_i: int, enc_fmt: str, _out_path: Path) -> None:
+            def _enc_progress(
+                t_i: int,
+                enc_fmt: str,
+                _out_path: Path,
+                *,
+                n_targets: int = n_targets,
+                track_no: int = track_no,
+                idx: int = idx,
+            ) -> None:
                 enc_frac = 0.62 + (0.24 * (t_i / n_targets))
                 report(
                     track_no,

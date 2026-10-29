@@ -11,7 +11,7 @@ from dataclasses import asdict, fields
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ready2rip.artwork.fetch import ArtworkImage
+from ready2rip.artwork.fetch import ArtworkImage, image_size
 from ready2rip.disc.discid_util import DiscIdentifiers
 from ready2rip.disc.probe import DiscInfo
 from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
@@ -133,9 +133,7 @@ class MetadataCache:
                     width = int(payload.get('artwork_width') or 0)
                     height = int(payload.get('artwork_height') or 0)
                     if width <= 0 or height <= 0:
-                        from ready2rip.artwork.fetch import _image_size
-
-                        width, height = _image_size(data)
+                        width, height = image_size(data)
                     if width > 0 and height > 0:
                         art = ArtworkImage(
                             data=data,

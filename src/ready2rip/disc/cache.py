@@ -260,6 +260,7 @@ def _extract_span(
 
 
 def _pcm_crc(wav_path: Path) -> int | None:
+    """CRC32 of WAV PCM frames (RIFF header skipped). Used by cache and Accurate Stream probes."""
     try:
         with wave.open(str(wav_path), 'rb') as wf:
             crc = 0

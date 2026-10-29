@@ -335,8 +335,6 @@ class RipLog:
             for t in self.disc.tracks:
                 end = t.start_sector + t.length_sectors - 1
                 start_lab = _msf_from_sectors(t.start_sector)
-                len_lab = t.duration_label if hasattr(t, 'duration_label') else _msf_from_sectors(t.length_sectors)
-                # duration_label is M:SS; expand to M:SS.FF when possible
                 len_lab = _msf_from_sectors(t.length_sectors)
                 lines.append(
                     f'       {t.number:2d}  | {start_lab:>8s} | {len_lab:>8s} | '

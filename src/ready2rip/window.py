@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import logging
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import gi
@@ -14,14 +16,13 @@ gi.require_version('Adw', '1')
 from gi.repository import Adw, Gio, GLib, GObject, Gtk, Pango
 
 from ready2rip import config
+from ready2rip.accuraterip import AccurateRipConfidence
 from ready2rip.artwork.fetch import (
     ArtworkFetcher,
     ArtworkImage,
     ArtworkSourceOptions,
     apply_artwork_to_picture,
 )
-from ready2rip.icons import apply_icon
-from ready2rip.playback import DiscPlayer, PlayState
 from ready2rip.disc.discid_util import DiscIdentifiers, identifiers_from_disc
 from ready2rip.disc.drive_info import DriveInfo, probe_drive
 from ready2rip.disc.drive_status import (
@@ -31,6 +32,7 @@ from ready2rip.disc.drive_status import (
     query_drive_status,
 )
 from ready2rip.disc.probe import DiscInfo, probe_disc
+from ready2rip.icons import apply_icon
 from ready2rip.metadata.cache import MetadataCache
 from ready2rip.metadata.providers import (
     AlbumMetadata,
@@ -41,6 +43,7 @@ from ready2rip.metadata.providers import (
 )
 from ready2rip.metadata_dialog import MetadataPickerDialog
 from ready2rip.paths import track_meta_for
+from ready2rip.playback import DiscPlayer, PlayState
 from ready2rip.rip.engine import RipEngine, RipJob, RipProgress, RipResult, RipState
 from ready2rip.settings import (
     AAC_QUALITIES,
@@ -57,9 +60,13 @@ from ready2rip.settings import (
     normalize_mp3_quality,
     opus_bitrate_label,
 )
+from ready2rip.setup_dialog import DriveSetupDialog
+from ready2rip.tags.artists import normalize_artists
 from ready2rip.theme import ChromeStyleController
-from ready2rip.util import normalize_release_date, parse_disc_field
+from ready2rip.util import normalize_release_date, parse_disc_field, validate_device_path
 from ready2rip.window_styles import install_window_styles
+
+log = logging.getLogger(__name__)
 
 _WINDOW_UI = str(Path(__file__).with_name('window.ui'))
 
@@ -98,6 +105,35 @@ def ensure_adw_template_types() -> None:
         if typ is not None:
             GObject.type_ensure(typ)
     _adw_types_ensured = True
+
+
+_RIP_HEADINGS = {
+    RipState.REPLAYGAIN: 'ReplayGain',
+    RipState.ENCODING: 'Encoding',
+    RipState.VERIFYING: 'Verifying',
+    RipState.PREPARING: 'Preparing',
+    RipState.RIPPING: 'Ripping',
+}
+
+
+def _empty_tray_copy(state: DriveTrayState, device: str) -> tuple[str, str] | None:
+    """Status-page title and description for an empty or missing drive."""
+    if state is DriveTrayState.TRAY_OPEN:
+        return (
+            'Tray open',
+            f'The drive tray is open on {device}. Insert a disc and close the tray.',
+        )
+    if state is DriveTrayState.NO_DISC:
+        return (
+            'No disc',
+            f'Tray is closed but no disc is in {device}. Insert an audio CD.',
+        )
+    if state is DriveTrayState.MISSING:
+        return (
+            'Drive not found',
+            f'Cannot open {device}. Check Optical device path in Rip options.',
+        )
+    return None
 
 
 @Gtk.Template(filename=_WINDOW_UI)
@@ -178,8 +214,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._track_header_suffix: Gtk.Widget | None = None
         self._disc_rows: list[Adw.ActionRow] = []
         self._drive_rows: list[Gtk.Widget] = []
-        self._option_rows: list[tuple[Adw.PreferencesGroup, Gtk.Widget]] = []
-        self._metadata_rows: list[tuple[Adw.PreferencesGroup, Gtk.Widget]] = []
         self._lookup_generation = 0
         self._looking_up = False
         self._artwork: ArtworkImage | None = None
@@ -295,9 +329,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             )
 
         def work() -> None:
-            import logging
-
-            log = logging.getLogger(__name__)
             status: DriveStatus | None = None
             info: DiscInfo | None = None
             ids: DiscIdentifiers | None = None
@@ -709,19 +740,20 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _setup_cover_widget(self) -> None:
         """Constrain cover to a fixed square; show action buttons on hover."""
         size = self._COVER_SIZE
-        for widget in (self.cover_frame, self.cover_overlay, self.cover_picture):
+        for widget in (self.cover_overlay, self.cover_picture):
             widget.set_size_request(size, size)
             widget.set_hexpand(True)
             widget.set_vexpand(True)
+        self.cover_frame.set_size_request(size, size)
+        # Frame must not grow to the paintable's natural size.
+        self.cover_frame.set_hexpand(False)
+        self.cover_frame.set_vexpand(False)
+        self.cover_frame.set_halign(Gtk.Align.CENTER)
 
         # Gtk.Picture is the correct widget for full-bleed album art.
         self.cover_picture.set_content_fit(Gtk.ContentFit.COVER)
         if hasattr(self.cover_picture, 'set_can_shrink'):
             self.cover_picture.set_can_shrink(True)
-        # Frame must not grow to the paintable's natural size.
-        self.cover_frame.set_hexpand(False)
-        self.cover_frame.set_vexpand(False)
-        self.cover_frame.set_halign(Gtk.Align.CENTER)
 
         self.cover_actions.set_opacity(0.0)
         for button in (
@@ -799,7 +831,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     # —— Settings groups (Preferences dialog) ——
 
     def _build_calibration_row(self) -> None:
-        """Calibrate drive row at the top of the Ripping group."""
+        """Calibrate drive row on the Drive page."""
         self._setup_row = Adw.ActionRow(
             title='Calibrate drive',
             activatable=True,
@@ -852,40 +884,21 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             btn.add_css_class('suggested-action')
             btn.set_tooltip_text('Calibrate this drive')
 
-    def _add_pref_row(
-        self,
-        group: Adw.PreferencesGroup,
-        row: Gtk.Widget,
-        track: list[tuple[Adw.PreferencesGroup, Gtk.Widget]],
-    ) -> None:
-        group.add(row)
-        track.append((group, row))
-
-    def _clear_pref_rows(
-        self,
-        track: list[tuple[Adw.PreferencesGroup, Gtk.Widget]],
-    ) -> None:
-        for group, row in track:
-            group.remove(row)
-        track.clear()
-
     def _add_option_row(
         self,
         row: Gtk.Widget,
         group: Adw.PreferencesGroup | None = None,
     ) -> None:
-        self._add_pref_row(group or self.extraction_group, row, self._option_rows)
+        (group or self.extraction_group).add(row)
 
     def _add_metadata_row(
         self,
         row: Gtk.Widget,
         group: Adw.PreferencesGroup | None = None,
     ) -> None:
-        self._add_pref_row(group or self.lookup_group, row, self._metadata_rows)
+        (group or self.lookup_group).add(row)
 
     def _build_options_rows(self) -> None:
-        self._clear_pref_rows(self._option_rows)
-
         settings = self.store.get()
         default_out = default_output_directory()
         ids = [e[0] for e in ENCODERS]
@@ -1088,8 +1101,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._add_option_row(self._auto_eject_row, self.automation_group)
 
     def _build_metadata_rows(self) -> None:
-        self._clear_pref_rows(self._metadata_rows)
-
         settings = self.store.get()
 
         self._auto_lookup_row = Adw.ExpanderRow(
@@ -1448,13 +1459,13 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             return
         self._apply_quality_selection(fmt, row.get_selected())
 
-    def _on_choose_also_output_folder(self, *_args) -> None:
-        dialog = Gtk.FileDialog(title='Second encode folder')
-        current = (
-            self._also_output_row.get_text().strip()
-            or self._output_row.get_text().strip()
-            or default_output_directory()
-        )
+    def _choose_folder(
+        self,
+        title: str,
+        current: str,
+        on_path: Callable[[str], None],
+    ) -> None:
+        dialog = Gtk.FileDialog(title=title)
         if hasattr(dialog, 'set_initial_folder'):
             try:
                 dialog.set_initial_folder(Gio.File.new_for_path(current))
@@ -1471,10 +1482,22 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             path = folder.get_path()
             if not path:
                 return
+            on_path(path)
+
+        dialog.select_folder(self, None, on_done)
+
+    def _on_choose_also_output_folder(self, *_args) -> None:
+        current = (
+            self._also_output_row.get_text().strip()
+            or self._output_row.get_text().strip()
+            or default_output_directory()
+        )
+
+        def on_path(path: str) -> None:
             self._also_output_row.set_text(path)
             self._persist_also_encode()
 
-        dialog.select_folder(self, None, on_done)
+        self._choose_folder('Second encode folder', current, on_path)
 
     def _on_output_changed(self, row: Adw.EntryRow) -> None:
         text = row.get_text().strip()
@@ -1484,32 +1507,15 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self.store.update(output_directory=text)
 
     def _on_choose_output_folder(self, *_args) -> None:
-        dialog = Gtk.FileDialog(title='Output folder')
         current = self._output_row.get_text().strip() or default_output_directory()
-        if hasattr(dialog, 'set_initial_folder'):
-            try:
-                dialog.set_initial_folder(Gio.File.new_for_path(current))
-            except GLib.Error:
-                pass
 
-        def on_done(dlg: Gtk.FileDialog, result: Gio.AsyncResult) -> None:
-            try:
-                folder = dlg.select_folder_finish(result)
-            except GLib.Error:
-                return
-            if folder is None:
-                return
-            path = folder.get_path()
-            if not path:
-                return
+        def on_path(path: str) -> None:
             self._output_row.set_text(path)
             self.store.update(output_directory=path)
 
-        dialog.select_folder(self, None, on_done)
+        self._choose_folder('Output folder', current, on_path)
 
     def _on_device_path_changed(self, row: Adw.EntryRow) -> None:
-        from ready2rip.util import validate_device_path
-
         text = row.get_text().strip() or '/dev/sr0'
         try:
             text = validate_device_path(text)
@@ -1822,8 +1828,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._prepare_embed_artwork()
             embed_art = self._artwork_embed or folder_art
 
-        from ready2rip.util import validate_device_path
-
         try:
             device = validate_device_path(
                 settings.device or self._device or '/dev/sr0'
@@ -2021,30 +2025,15 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._on_rip_progress(progress)
         return GLib.SOURCE_REMOVE
 
-    def _on_rip_progress(self, progress: RipProgress) -> bool:
+    def _on_rip_progress(self, progress: RipProgress) -> None:
         if not self._ripping:
-            return GLib.SOURCE_REMOVE
+            return
         self._set_progress_fraction(progress.fraction)
         if progress.message:
             self.rip_status_label.set_label(progress.message)
-        # Calm heading; track detail lives in the status line underneath.
-        if progress.state == RipState.REPLAYGAIN:
-            self.rip_title_label.set_label('ReplayGain')
-        elif progress.state == RipState.ENCODING:
-            self.rip_title_label.set_label('Encoding')
-        elif progress.state == RipState.VERIFYING:
-            self.rip_title_label.set_label('Verifying')
-        elif progress.state == RipState.PREPARING:
-            self.rip_title_label.set_label('Preparing')
-        elif progress.state == RipState.RIPPING:
-            self.rip_title_label.set_label('Ripping')
-        elif progress.state == RipState.TAGGING:
-            self.rip_title_label.set_label('Tagging')
-        if progress.state == RipState.FAILED:
-            self.rip_title_label.set_label('Rip failed')
-            self.rip_status_label.set_label(progress.message or 'Rip failed')
-            self._set_progress_style('error')
-        return GLib.SOURCE_REMOVE
+        heading = _RIP_HEADINGS.get(progress.state)
+        if heading is not None:
+            self.rip_title_label.set_label(heading)
 
     def _on_rip_finished(self, result: RipResult) -> None:
         self._ripping = False
@@ -2085,8 +2074,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if result.cache_result is not None and result.cache_result.caches:
             ar_bits.append('cache defeated')
         if result.accuraterip:
-            from ready2rip.accuraterip import AccurateRipConfidence
-
             matches = sum(
                 1
                 for r in result.accuraterip
@@ -2159,9 +2146,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             try:
                 status = query_drive_status(device)
             except Exception as exc:
-                import logging
-
-                logging.getLogger(__name__).debug('Drive poll failed: %s', exc)
+                log.debug('Drive poll failed: %s', exc)
                 status = None
 
             def finish() -> bool:
@@ -2197,30 +2182,14 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._last_tray_state = state
             self._apply_drive_status_to_ui(status)
 
-        if state is DriveTrayState.TRAY_OPEN:
-            if prev is not DriveTrayState.TRAY_OPEN:
-                self._auto_rip_disc_key = None
-                self._auto_rip_pending = False
-                self._clear_disc_ui_for_empty(
-                    title='Tray open',
-                    description=(
-                        f'The drive tray is open on {device}. '
-                        'Insert a disc and close the tray.'
-                    ),
-                )
-            return
-
-        if state is DriveTrayState.NO_DISC:
-            if prev is not DriveTrayState.NO_DISC:
-                self._auto_rip_disc_key = None
-                self._auto_rip_pending = False
-                self._clear_disc_ui_for_empty(
-                    title='No disc',
-                    description=(
-                        f'Tray is closed but no disc is in {device}. '
-                        'Insert an audio CD.'
-                    ),
-                )
+        empty = _empty_tray_copy(state, device)
+        if empty is not None:
+            if prev is not state:
+                if state is DriveTrayState.TRAY_OPEN or state is DriveTrayState.NO_DISC:
+                    self._auto_rip_disc_key = None
+                    self._auto_rip_pending = False
+                title, description = empty
+                self._clear_disc_ui_for_empty(title=title, description=description)
             return
 
         if state is DriveTrayState.NOT_READY:
@@ -2230,16 +2199,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                     self.status_page.set_description(
                         'Waiting for the drive to finish spinning up…'
                     )
-            return
-
-        if state is DriveTrayState.MISSING:
-            if prev is not DriveTrayState.MISSING:
-                self._clear_disc_ui_for_empty(
-                    title='Drive not found',
-                    description=(
-                        f'Cannot open {device}. Check Optical device path in Rip options.'
-                    ),
-                )
             return
 
         if state is DriveTrayState.DISC_OK:
@@ -2282,9 +2241,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self, info: DiscInfo, ids: DiscIdentifiers | None
     ) -> str:
         if ids is not None:
-            if getattr(ids, 'musicbrainz_discid', None):
+            if ids.musicbrainz_discid:
                 return f'mb:{ids.musicbrainz_discid}'
-            if getattr(ids, 'freedb_id', None):
+            if ids.freedb_id:
                 return f'cddb:{ids.freedb_id}'
         total = sum(t.length_sectors for t in info.tracks)
         return f'toc:{info.device}:{info.track_count}:{total}'
@@ -2353,30 +2312,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             device, drive_info=self._drive_info, allow_optical=False
         )
 
-        if status.state is DriveTrayState.TRAY_OPEN:
-            self._clear_disc_ui_for_empty(
-                title='Tray open',
-                description=(
-                    f'The drive tray is open on {device}. '
-                    'Insert a disc and close the tray.'
-                ),
-            )
-            return
-        if status.state is DriveTrayState.NO_DISC:
-            self._clear_disc_ui_for_empty(
-                title='No disc',
-                description=(
-                    f'Tray is closed but no disc is in {device}. Insert an audio CD.'
-                ),
-            )
-            return
-        if status.state is DriveTrayState.MISSING:
-            self._clear_disc_ui_for_empty(
-                title='Drive not found',
-                description=(
-                    f'Cannot open {device}. Check Optical device path in Rip options.'
-                ),
-            )
+        empty = _empty_tray_copy(status.state, device)
+        if empty is not None:
+            title, description = empty
+            self._clear_disc_ui_for_empty(title=title, description=description)
             return
 
         self._disc = info
@@ -2685,8 +2624,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._drive_rows.append(cache_row)
 
     def _on_run_drive_setup(self, *_args) -> None:
-        from ready2rip.setup_dialog import DriveSetupDialog
-
         dialog = DriveSetupDialog(self.store)
 
         def on_closed(*_a) -> None:
@@ -2800,8 +2737,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         return album
 
     def _fill_album_edit_fields(self, album: AlbumMetadata | None) -> None:
-        from ready2rip.tags.artists import normalize_artists
-
         self._suppress_meta_write = True
         try:
             if self._album_title_row is not None:
@@ -2828,8 +2763,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _on_album_field_changed(self, *_args) -> None:
         if self._suppress_meta_write or self._disc is None:
             return
-        from ready2rip.tags.artists import normalize_artists
-
         album = self._ensure_album_tracks()
         if self._album_title_row is not None:
             album.title = self._album_title_row.get_text().strip()
@@ -2940,8 +2873,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         col_header = self._make_track_column_header()
         expander.add_row(col_header)
         self._track_rows.append(col_header)
-
-        from ready2rip.tags.artists import normalize_artists
 
         album = self._ensure_album_tracks()
         album_artist = normalize_artists(album.artist or '')
@@ -3170,7 +3101,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._track_artist_stacks[number] = artist_stack
         return row
 
-
     def _on_tracks_edit_toggled(self, *_args) -> None:
         self._tracks_editing = not self._tracks_editing
         if not self._tracks_editing:
@@ -3190,12 +3120,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if self._track_artist_button is not None:
             self._track_artist_button.set_visible(editing)
 
-        title_stacks = getattr(self, '_track_title_stacks', {})
-        artist_stacks = getattr(self, '_track_artist_stacks', {})
         child = 'edit' if editing else 'view'
         for num in self._track_title_entries:
-            ts = title_stacks.get(num)
-            as_ = artist_stacks.get(num)
+            ts = self._track_title_stacks.get(num)
+            as_ = self._track_artist_stacks.get(num)
             if ts is not None:
                 ts.set_visible_child_name(child)
             if as_ is not None:
@@ -3213,8 +3141,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             )
 
     def _sync_track_labels_from_entries(self) -> None:
-        from ready2rip.tags.artists import normalize_artists
-
         for num, title_entry in self._track_title_entries.items():
             title = title_entry.get_text().strip()
             artist = normalize_artists(self._track_artist_entries[num].get_text())
@@ -3244,8 +3170,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         album = self._ensure_album_tracks()
         title_entry = self._track_title_entries.get(track_number)
         artist_entry = self._track_artist_entries.get(track_number)
-        from ready2rip.tags.artists import normalize_artists
-
         title = title_entry.get_text().strip() if title_entry else ''
         artist = (
             normalize_artists(artist_entry.get_text()) if artist_entry else ''
@@ -3304,8 +3228,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
     def _fill_empty_track_artists(self) -> None:
         """Copy album artist (incl. multi ``A; B``) into empty track artists."""
-        from ready2rip.tags.artists import normalize_artists
-
         if self._disc is None:
             return
         if not self._tracks_editing:
@@ -3380,7 +3302,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._set_lookup_controls_sensitive(False)
         self.lookup_progress.set_visible(True)
         self.lookup_progress.pulse()
-        # lookup progress bar handles status
 
         mb_id = self._ids.musicbrainz_discid
         freedb_id = self._ids.freedb_id
@@ -3430,7 +3351,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._set_lookup_controls_sensitive(False)
         self.lookup_progress.set_visible(True)
         self.lookup_progress.pulse()
-        # lookup progress bar handles status
 
         discid = ''
         if self._ids is not None and self._ids.musicbrainz_discid:
@@ -3523,7 +3443,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
         if error or album is None:
             msg = error or 'Could not load that MusicBrainz release'
-            # toast already covers MB failure
             self._toast(msg)
             return
 

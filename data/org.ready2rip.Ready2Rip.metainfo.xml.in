@@ -26,12 +26,21 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-10-18">
+    <release version="@APPLICATION_VERSION@" date="2026-10-28">
       <description>
         <p>
-          0.4.3: Fix truncated rips after in-app playback (wait for
-          GStreamer to release the drive); avoid duplicate GNOME icons
-          with AppImage/Gear Lever; bundle CDDA plugins for AppImage
+          0.4.4: Clean up dead code and shared helpers (unused rip
+          states, pref-row tracking, PCM CRC and duration formatting)
+          without changing rip behaviour.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.3" date="2026-10-18">
+      <description>
+        <p>
+          Fix truncated rips after in-app playback (wait for GStreamer
+          to release the drive); avoid duplicate GNOME icons with
+          AppImage/Gear Lever; bundle CDDA plugins for AppImage
           playback; remove unused code.
         </p>
       </description>
