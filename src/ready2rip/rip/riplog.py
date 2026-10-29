@@ -78,6 +78,7 @@ class RipLog:
         self.write_cue_file: bool = True
         self.defeat_audio_cache: bool = True
         self.rip_htoa: bool = True
+        self.rip_data_tracks: bool = True
         self.album: AlbumMetadata | None = None
         self.disc: DiscInfo | None = None
         self.ar_status: str = ''
@@ -116,6 +117,7 @@ class RipLog:
         self.write_cue_file = getattr(job, 'write_cue_file', True)
         self.defeat_audio_cache = getattr(job, 'defeat_audio_cache', True)
         self.rip_htoa = getattr(job, 'rip_htoa', True)
+        self.rip_data_tracks = getattr(job, 'rip_data_tracks', True)
         self.drive_caches = getattr(job, 'drive_caches_audio', None)
         self.cache_message = getattr(job, 'drive_cache_message', '') or ''
         self.accurate_stream = getattr(job, 'drive_accurate_stream', None)
@@ -247,6 +249,13 @@ class RipLog:
             if self.rip_htoa
             else 'Rip HTOA / pregap       : No'
         )
+        lines.append(
+            'Rip data tracks         : Yes'
+            if self.rip_data_tracks
+            else 'Rip data tracks         : No'
+        )
+        if self.disc is not None and getattr(self.disc, 'pregap_source', ''):
+            lines.append(f'Pregap source           : {self.disc.pregap_source}')
         lines.append('')
         lines.append(f'Read offset correction                      : {self.sample_offset}')
         lines.append(
@@ -263,8 +272,9 @@ class RipLog:
         )
         lines.append(
             'Gap handling                                : '
-            'Track 1 pregap ignored if ≤2s; longer non-silent HTOA → track 00; '
-            'track 1 never includes INDEX 00'
+            'INDEX 00 merged into previous track (EAC default / noncompliant); '
+            'standard 2s track-1 pause as PREGAP unless HTOA; '
+            'longer non-silent HTOA → track 00; track 1 never includes INDEX 00'
         )
         lines.append(
             'Error recovery                              : '
@@ -321,7 +331,8 @@ class RipLog:
             lines.append(f'AccurateRip database            : {self.ar_status}')
         lines.append(
             'Write CUE sheet                 : Yes '
-            '(multi-file / left-out gaps, or image CUE)'
+            '(multi-file with INDEX 00 in previous, or image CUE; '
+            'data tracks as MODE1/2352 or MODE2/2352)'
             if self.write_cue_file
             else 'Write CUE sheet                 : No'
         )
@@ -330,15 +341,30 @@ class RipLog:
         if self.disc and self.disc.tracks:
             lines.append('TOC of the extracted CD')
             lines.append('')
-            lines.append('     Track |   Start  |  Length  | Start sector | End sector')
-            lines.append('    ---------------------------------------------------------')
+            lines.append(
+                '     Track |   Start  |  Length  |   Pregap | Start sector | End sector'
+            )
+            lines.append(
+                '    ------------------------------------------------------------------'
+            )
             for t in self.disc.tracks:
                 end = t.start_sector + t.length_sectors - 1
                 start_lab = _msf_from_sectors(t.start_sector)
                 len_lab = _msf_from_sectors(t.length_sectors)
+                gap_lab = _msf_from_sectors(t.pregap_sectors)
                 lines.append(
                     f'       {t.number:2d}  | {start_lab:>8s} | {len_lab:>8s} | '
-                    f'{t.start_sector:9d}    | {end:8d}'
+                    f'{gap_lab:>8s} | {t.start_sector:9d}    | {end:8d}'
+                )
+            for d in getattr(self.disc, 'data_tracks', None) or []:
+                end = d.start_sector + d.length_sectors - 1
+                start_lab = _msf_from_sectors(d.start_sector)
+                len_lab = _msf_from_sectors(d.length_sectors)
+                gap_lab = _msf_from_sectors(d.pregap_sectors)
+                lines.append(
+                    f'       {d.number:2d}  | {start_lab:>8s} | {len_lab:>8s} | '
+                    f'{gap_lab:>8s} | {d.start_sector:9d}    | {end:8d}  '
+                    f'{d.cue_mode} session {d.session}'
                 )
             lines.append('')
 
@@ -391,7 +417,7 @@ class RipLog:
                 lines.append('     (single-pass extract — no dual CRC verify)')
             if entry.accuraterip is not None:
                 lines.append(f'     {_format_ar_line(entry.accuraterip)}')
-            else:
+            elif not (entry.extract_mode or '').lower().startswith('raw'):
                 lines.append('     AccurateRip not checked')
             # Error correction block (skip duplicate quality line).
             for ec in entry.error_correction_lines:

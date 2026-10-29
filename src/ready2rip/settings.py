@@ -357,6 +357,8 @@ class AppSettings:
     drive_accurate_stream: bool = False
     drive_accurate_stream_message: str = ''
     rip_htoa: bool = True
+    # Raw 2352-byte .bin for mixed-mode / CD-Extra data tracks.
+    rip_data_tracks: bool = True
     # Continuous disc image instead of per-track files (CUE is separate).
     copy_image: bool = False
     auto_rip: bool = False
@@ -535,6 +537,7 @@ class SettingsStore:
                     s, 'drive-accurate-stream-message', ''
                 ),
                 rip_htoa=_get_bool(s, 'rip-htoa', True),
+                rip_data_tracks=_get_bool(s, 'rip-data-tracks', True),
                 copy_image=_get_bool(s, 'copy-image', False),
                 auto_rip=_get_bool(s, 'auto-rip', False),
                 auto_eject=_get_bool(s, 'auto-eject', False),
@@ -612,6 +615,7 @@ class SettingsStore:
                 'string',
             ),
             'rip_htoa': ('rip-htoa', 'bool'),
+            'rip_data_tracks': ('rip-data-tracks', 'bool'),
             'copy_image': ('copy-image', 'bool'),
             'auto_rip': ('auto-rip', 'bool'),
             'auto_eject': ('auto-eject', 'bool'),

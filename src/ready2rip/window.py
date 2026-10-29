@@ -1051,6 +1051,14 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._htoa_row.connect('notify::active', self._on_htoa_toggled)
         self._add_option_row(self._htoa_row, self.extraction_group)
 
+        self._data_tracks_row = Adw.SwitchRow(
+            title='Data Tracks',
+            subtitle='Rip mixed-mode and CD-Extra data as raw .bin files',
+            active=settings.rip_data_tracks,
+        )
+        self._data_tracks_row.connect('notify::active', self._on_data_tracks_toggled)
+        self._add_option_row(self._data_tracks_row, self.extraction_group)
+
         self._ar_row = Adw.SwitchRow(
             title='AccurateRip',
             subtitle='Verify against the AccurateRip database',
@@ -1217,6 +1225,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             (self._offset_row, self._on_offset_changed),
             (self._test_copy_row, self._on_test_copy_toggled),
             (self._htoa_row, self._on_htoa_toggled),
+            (self._data_tracks_row, self._on_data_tracks_toggled),
             (self._copy_image_row, self._on_copy_image_toggled),
             (self._ar_row, self._on_ar_toggled),
             (self._burst_row, self._on_burst_toggled),
@@ -1268,6 +1277,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._offset_row.set_subtitle(status)
             self._test_copy_row.set_active(settings.test_and_copy)
             self._htoa_row.set_active(settings.rip_htoa)
+            self._data_tracks_row.set_active(settings.rip_data_tracks)
             self._copy_image_row.set_active(settings.copy_image)
             self._ar_row.set_active(settings.verify_accuraterip)
             self._burst_row.set_active(settings.burst_fallback)
@@ -1589,6 +1599,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _on_htoa_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(rip_htoa=row.get_active())
 
+    def _on_data_tracks_toggled(self, row: Adw.SwitchRow, *_args) -> None:
+        self.store.update(rip_data_tracks=row.get_active())
+
     def _on_copy_image_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(copy_image=row.get_active())
         if row.get_active():
@@ -1882,6 +1895,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 settings.defeat_audio_cache or settings.drive_caches_audio
             ),
             rip_htoa=settings.rip_htoa,
+            rip_data_tracks=settings.rip_data_tracks,
             copy_image=settings.copy_image,
             artwork_max_size=settings.artwork_max_size,
         )
@@ -2069,6 +2083,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         ar_bits = []
         if result.htoa_ripped:
             ar_bits.append('HTOA')
+        if any(p.suffix.lower() == '.bin' for p in result.output_files):
+            ar_bits.append('data')
         if result.cover_path is not None:
             ar_bits.append('cover saved')
         if result.cache_result is not None and result.cache_result.caches:
@@ -2383,7 +2399,14 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 timeout=3,
             )
         else:
-            self._toast(f'Found {info.track_count} audio tracks', timeout=3)
+            n_data = len(info.data_tracks)
+            if n_data:
+                self._toast(
+                    f'Found {info.track_count} audio tracks · {n_data} data',
+                    timeout=3,
+                )
+            else:
+                self._toast(f'Found {info.track_count} audio tracks', timeout=3)
 
         # Only auto-lookup when we have nothing useful cached.
         if settings.auto_lookup_metadata and not restored:
@@ -2509,14 +2532,27 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._disc_rows.append(row)
             return
 
-        self.disc_group.set_description(
-            f'{info.track_count} tracks · {info.device}'
-        )
+        n_data = len(info.data_tracks)
+        if n_data:
+            self.disc_group.set_description(
+                f'{info.track_count} audio · {n_data} data · {info.device}'
+            )
+        else:
+            self.disc_group.set_description(
+                f'{info.track_count} tracks · {info.device}'
+            )
 
         rows = [
             ('Device', info.device),
             ('Audio tracks', str(info.track_count)),
         ]
+        if n_data:
+            data_lab = ', '.join(
+                f'#{d.number} {d.cue_mode}'
+                + (f' (session {d.session})' if d.session > 1 else '')
+                for d in info.data_tracks
+            )
+            rows.append(('Data tracks', data_lab))
         if ids and ids.musicbrainz_discid:
             rows.append(('MusicBrainz DiscID', ids.musicbrainz_discid))
         if ids and ids.freedb_id:

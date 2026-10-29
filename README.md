@@ -23,7 +23,7 @@ AccurateRip verification, modern metadata, and various tag options, utilizing GN
 | Tags | mutagen - FLAC / MP3 / AAC (M4A) / Opus / WAV |
 | ReplayGain | Track + album loudness tags |
 | Artwork | Cover Art Archive and iTunes, with optional embed sizes |
-| Logs & CUE | Detailed rip log and multi-file / image CUE sheets |
+| Logs & CUE | Detailed rip log and multi-file / image CUE sheets (INDEX 00 pregaps, mixed-mode data) |
 | Drive setup | Sample offset, Accurate Stream, cache probe |
 
 ---
@@ -52,7 +52,7 @@ ready2rip aims for secure archival ripping on Linux via cdparanoia / libcdio-par
 | Error logging | Parses cdparanoia progress into quality / fixups / skips / suspicious positions |
 | Burst fallback | Off by default. Optional insecure `-Z` recovery after secure retries fail — noted in the log |
 
-**Copy Image** mode rips one continuous disc image (FLAC/WAV) instead of per-track files; enable **Write .cue file** for a matching image CUE. Per-track rips use a multi-file CUE (“left-out gaps”) when that option is on.
+**Copy Image** mode rips one continuous disc image (FLAC/WAV) instead of per-track files; enable **Write .cue file** for a matching image CUE. Per-track rips use a multi-file CUE with INDEX 00 pregaps appended to the previous track (EAC default). Mixed-mode and CD-Extra data tracks are saved as raw `.bin` files (MODE1/2352 or MODE2/2352).
 
 ---
 
@@ -85,11 +85,12 @@ Copy Image forces a lossless container (FLAC or WAV; other formats fall back to 
 |--------|---------|--------|
 | **Test and copy** | On | Two secure passes; matching CRCs required (retries on mismatch) |
 | **Copy Image** | Off | One continuous image instead of separate tracks |
-| **Pregap / HTOA** | On | Ignore ≤2s track-1 pause; longer non-silent pregap → track `00`; track 1 starts at index 01 |
+| **Pregap / HTOA** | On | Ignore ≤2s track-1 pause; longer non-silent pregap → track `00`; track 1 starts at index 01. Inter-track INDEX 00 is detected at rip start (cdrdao, else Q-subchannel) and written into the CUE |
+| **Data tracks** | On | Mixed-mode / CD-Extra data as raw 2352-byte `.bin`; listed in the CUE. Failed data extract fails the rip |
 | **AccurateRip** | On | Online CRC verification |
 | **Burst fallback** | Off | Optional insecure `-Z` recovery after secure retries fail |
 | **Write rip log** | On | Detailed status log in the album folder |
-| **Write .cue file** | On | Multi-file CUE, or image CUE when Copy Image is on |
+| **Write .cue file** | On | Multi-file CUE with INDEX 00 in the previous file, or image CUE when Copy Image is on |
 | **Auto-rip** | Off | Start rip shortly after a new disc is detected |
 | **Auto-eject** | Off | Open tray after a successful rip |
 
@@ -226,8 +227,8 @@ Check your system glibc with `ldd --version`. If the AppImage fails with `GLIBC_
 2. Make it executable and start it:
 
 ```bash
-chmod +x ready2rip-0.4.4-x86_64.AppImage
-./ready2rip-0.4.4-x86_64.AppImage
+chmod +x ready2rip-0.4.5-x86_64.AppImage
+./ready2rip-0.4.5-x86_64.AppImage
 ```
 
 ### Recommended: manage with Gear Lever

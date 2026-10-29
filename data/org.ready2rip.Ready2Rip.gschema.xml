@@ -232,9 +232,11 @@
       <summary>Write CUE sheet</summary>
       <description>
         After a secure rip, write a .cue sheet into the album folder.
-        Per-track rips get a multi-file CUE (“Multiple files with left-out gaps”);
-        Copy Image mode gets a single-file image CUE. Recommended for accurate
-        archival rips.
+        Per-track rips get a multi-file CUE with INDEX 00 pregaps appended to
+        the previous track (EAC default / noncompliant); Copy Image mode gets a
+        single-file image CUE. Mixed-mode / CD-Extra data tracks are listed as
+        MODE1/2352 or MODE2/2352 BINARY files. Recommended for accurate archival
+        rips.
       </description>
     </key>
 
@@ -306,7 +308,19 @@
         Enable Hidden Track One Audio handling: the standard 2-second pause
         before track 1 is ignored; only longer pregaps are checked. Non-silent
         audio is saved as track 00. Track 1 itself is never extended with the
-        pregap (always starts at index 01).
+        pregap (always starts at index 01). Inter-track INDEX 00 pregaps are
+        always detected at rip start and written into the CUE sheet.
+      </description>
+    </key>
+
+    <key name="rip-data-tracks" type="b">
+      <default>true</default>
+      <summary>Rip mixed-mode and CD-Extra data tracks</summary>
+      <description>
+        When the TOC includes a data track (mixed-mode CD or CD-Extra / enhanced
+        CD), extract it as a raw 2352-byte .bin (MODE1/2352 or MODE2/2352) and
+        list it in the CUE sheet. Audio extraction is unchanged. A failed data
+        extract fails the rip.
       </description>
     </key>
 

@@ -59,6 +59,13 @@ def detect_htoa(disc: DiscInfo | None) -> HtoaInfo | None:
         return None
 
     t1 = disc.tracks[0]
+    # Mixed-mode: first audio is track 2+; the region before it is data, not HTOA.
+    if t1.number != 1:
+        log.debug(
+            'First audio track is %s — skipping HTOA (mixed-mode / CD-Extra)',
+            t1.number,
+        )
+        return None
     pregap = int(t1.start_sector)
     if pregap <= 0:
         log.debug('Track 1 starts at sector 0 — no INDEX 00 pregap')

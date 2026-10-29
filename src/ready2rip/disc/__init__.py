@@ -2,9 +2,10 @@
 """Disc detection and TOC reading."""
 
 from ready2rip.disc.discid_util import DiscIdentifiers, identifiers_from_disc
-from ready2rip.disc.probe import DiscInfo, TrackInfo, probe_disc
+from ready2rip.disc.probe import DataTrackInfo, DiscInfo, TrackInfo, probe_disc
 
 __all__ = [
+    'DataTrackInfo',
     'DiscIdentifiers',
     'DiscInfo',
     'TrackInfo',

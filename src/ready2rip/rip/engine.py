@@ -14,13 +14,15 @@ from pathlib import Path
 from ready2rip.accuraterip import AccurateRipConfidence, AccurateRipResult, AccurateRipVerifier
 from ready2rip.artwork.fetch import ArtworkFetcher, ArtworkImage
 from ready2rip.disc.cache import DriveCacheResult, flush_drive_cache
+from ready2rip.disc.data import extract_data_tracks
+from ready2rip.disc.gaps import enrich_pregaps
 from ready2rip.disc.htoa import (
     detect_htoa,
     extract_htoa,
     htoa_display_title,
     is_digitally_silent,
 )
-from ready2rip.disc.probe import DiscInfo
+from ready2rip.disc.probe import DiscInfo, attach_mmc_toc
 from ready2rip.metadata.providers import AlbumMetadata
 from ready2rip.paths import build_output_paths
 from ready2rip.replaygain import apply_replaygain
@@ -146,6 +148,8 @@ class RipJob:
     # Handle extended track-1 pregap as HTOA (track 00); never
     # prepend that pregap onto track 1. Standard 2s pause is ignored.
     rip_htoa: bool = True
+    # Raw MODE1/2352 or MODE2/2352 .bin for mixed-mode / CD-Extra data.
+    rip_data_tracks: bool = True
     # Copy Image: one continuous image (instead of per-track files).
     # Pair with write_cue_file for a matching image CUE sheet.
     copy_image: bool = False
@@ -287,14 +291,18 @@ class RipEngine:
         job.output_directory = base
         job.encode_targets = list(targets)
 
+        layout_notes = self._detect_disc_layout(job, on_progress)
+
         if job.copy_image:
-            return self._run_copy_image(job, base, fmt, on_progress)
+            return self._run_copy_image(
+                job, base, fmt, on_progress, layout_notes=layout_notes
+            )
 
         # Work units: optional HTOA (track 0) + selected audio tracks.
         n_audio = max(1, len(tracks))
         outputs: list[Path] = []
         ar_results: list[AccurateRipResult] = []
-        notes: list[str] = []
+        notes: list[str] = list(layout_notes)
         burst_tracks: list[int] = []
         test_copy_mismatches: list[int] = []
         cover_path: Path | None = None
@@ -443,12 +451,18 @@ class RipEngine:
 
         # Count HTOA as an extra work unit for progress when present.
         htoa_info = detect_htoa(job.disc_info) if job.rip_htoa else None
-        total_units = float(len(tracks) + (1 if htoa_info else 0)) or 1.0
+        data_count = (
+            len(job.disc_info.data_tracks)
+            if job.rip_data_tracks and job.disc_info is not None
+            else 0
+        )
+        total_units = float(len(tracks) + (1 if htoa_info else 0) + data_count) or 1.0
         unit_index = 0.0
         htoa_path: Path | None = None
         htoa_paths: list[Path] = []
         # (track_number, path) for multi-file CUE generation after encode.
         track_output_pairs: list[tuple[int, Path]] = []
+        data_output_pairs: list[tuple[int, Path]] = []
 
         try:
             with tempfile.TemporaryDirectory(prefix='ready2rip-') as tmp:
@@ -534,6 +548,24 @@ class RipEngine:
                         test_copy_mismatches=test_copy_mismatches,
                     )
 
+                data_index = float(len(tracks) + (1 if htoa_info else 0))
+                album_dirs = _unique_album_dirs(outputs, album_dir)
+                data_output_pairs, data_paths = self._rip_data_tracks(
+                    job,
+                    album_dirs,
+                    notes=notes,
+                    rip_log=rip_log,
+                    report=lambda state, sub, msg: report(
+                        0,
+                        state,
+                        index=data_index,
+                        sub=sub,
+                        message=msg,
+                        total_units=total_units,
+                    ),
+                )
+                outputs.extend(data_paths)
+
                 # ReplayGain: track + album on complete set
                 if job.apply_replaygain and outputs and not self._cancelled:
                     report(
@@ -589,13 +621,18 @@ class RipEngine:
                                 track_files=pairs,
                                 htoa_path=htoa_by_dir.get(cue_album_dir),
                                 ext=cue_ext,
+                                data_files=[
+                                    (n, cue_album_dir / p.name)
+                                    for n, p in data_output_pairs
+                                    if (cue_album_dir / p.name).is_file()
+                                ],
                             )
                             if cue_path is not None:
                                 outputs.append(cue_path)
                                 notes.append(f'CUE sheet: {cue_path.name}')
                                 if rip_log is not None:
                                     rip_log.notes.append(
-                                        f'CUE sheet (multi-file, left-out gaps): '
+                                        f'CUE sheet (multi-file, gaps in previous): '
                                         f'{cue_path.name}'
                                     )
                         except Exception as cue_exc:
@@ -642,6 +679,8 @@ class RipEngine:
         done_msg = f'Done — {len(outputs)} file(s)'
         if htoa_ripped:
             done_msg = f'{done_msg} (incl. HTOA)'
+        if data_output_pairs:
+            done_msg = f'{done_msg} · {len(data_output_pairs)} data'
         if ar_summary:
             done_msg = f'{done_msg} · {ar_summary}'
         if burst_tracks:
@@ -946,6 +985,7 @@ class RipEngine:
         track_files: list[tuple[int, Path]],
         htoa_path: Path | None,
         ext: str,
+        data_files: list[tuple[int, Path]] | None = None,
     ) -> Path | None:
         """Write multi-file CUE for per-track outputs. Returns cue path or None."""
         pairs = [(n, p) for n, p in track_files if n > 0]
@@ -963,8 +1003,135 @@ class RipEngine:
             disc=job.disc_info,
             album=job.album,
             htoa_file=htoa_path if htoa_path is not None else None,
+            data_files=data_files or [],
         )
         return cue_path
+
+    def _detect_disc_layout(
+        self,
+        job: RipJob,
+        on_progress: ProgressCallback | None,
+    ) -> list[str]:
+        """Attach ioctl TOC + INDEX 00 pregaps. Non-fatal on failure."""
+        notes: list[str] = []
+        disc = job.disc_info
+        if disc is None:
+            return notes
+        if on_progress is not None:
+            on_progress(
+                RipProgress(
+                    track_number=0,
+                    state=RipState.PREPARING,
+                    fraction=0.0,
+                    message='Detecting pregaps…',
+                )
+            )
+        try:
+            attach_mmc_toc(disc)
+            source = enrich_pregaps(job.device, disc)
+            notes.append(f'Pregap detection: {source or "none"}')
+            n_gaps = sum(1 for t in disc.tracks if t.pregap_sectors)
+            if n_gaps:
+                notes.append(f'INDEX 00 pregaps on {n_gaps} audio track(s)')
+            if disc.data_tracks:
+                parts = ', '.join(
+                    f'#{d.number} {d.cue_mode} session {d.session}'
+                    for d in disc.data_tracks
+                )
+                notes.append(f'Data tracks: {parts}')
+        except Exception as exc:
+            log.warning('Disc layout detect failed: %s', exc)
+            notes.append(f'Pregap detection failed: {exc}')
+        return notes
+
+    def _rip_data_tracks(
+        self,
+        job: RipJob,
+        album_dirs: list[Path],
+        *,
+        notes: list[str],
+        rip_log: RipLog | None,
+        report: Callable | None = None,
+    ) -> tuple[list[tuple[int, Path]], list[Path]]:
+        """Extract mixed-mode / CD-Extra data into each album folder.
+
+        Returns ``(primary_pairs, all_written_paths)``. Raises if ripping
+        data is enabled and extract fails.
+        """
+        disc = job.disc_info
+        if (
+            not job.rip_data_tracks
+            or disc is None
+            or not disc.data_tracks
+            or not album_dirs
+        ):
+            return [], []
+        if self._cancelled:
+            return [], []
+
+        primary = album_dirs[0]
+        n_tracks = max(1, len(disc.data_tracks))
+
+        def on_progress(number: int, done: int, total: int, message: str) -> None:
+            if report is None:
+                return
+            idx = 0.0
+            for i, dt in enumerate(disc.data_tracks):
+                if dt.number == number:
+                    idx = i / n_tracks
+                    break
+            sub = idx + (done / max(1, total)) / n_tracks
+            report(RipState.RIPPING, sub, message)
+
+        try:
+            if report is not None:
+                report(RipState.RIPPING, 0.0, 'Extracting data tracks…')
+            extracted = extract_data_tracks(
+                job.device,
+                disc.data_tracks,
+                primary,
+                on_progress=on_progress,
+                cancelled=lambda: self._cancelled,
+            )
+        except Exception as exc:
+            raise RuntimeError(f'Data track extract failed: {exc}') from exc
+
+        pairs: list[tuple[int, Path]] = []
+        all_paths: list[Path] = []
+        updated: list = []
+        for item in extracted:
+            pairs.append((item.track.number, item.path))
+            all_paths.append(item.path)
+            updated.append(item.track)
+            notes.append(item.message)
+            if item.retries:
+                notes.append(
+                    f'Data track {item.track.number:02d}: {item.retries} sector retry(ies)'
+                )
+            if rip_log is not None:
+                entry = rip_log.begin_track(
+                    item.track.number,
+                    title=f'Data ({item.track.cue_mode})',
+                    length_label=item.track.duration_label,
+                    start_sector=item.track.start_sector,
+                    length_sectors=item.track.length_sectors,
+                )
+                entry.filename = item.path.name
+                entry.output_path = item.path
+                entry.extract_mode = f'raw {item.track.cue_mode}'
+                entry.copy_crc = item.crc32
+                entry.status = 'OK'
+                entry.notes.append(item.message)
+        disc.data_tracks = updated
+
+        for dest in album_dirs[1:]:
+            dest.mkdir(parents=True, exist_ok=True)
+            for _num, src in pairs:
+                copied = dest / src.name
+                if copied.resolve() != src.resolve():
+                    shutil.copy2(src, copied)
+                    all_paths.append(copied)
+        return pairs, all_paths
 
     def _missing_encoder(self, fmt: str) -> str | None:
         if fmt == 'flac' and not shutil.which('flac'):
@@ -2017,6 +2184,8 @@ class RipEngine:
         base: Path,
         fmt: str,
         on_progress: ProgressCallback | None,
+        *,
+        layout_notes: list[str] | None = None,
     ) -> RipResult:
         """Copy Image mode.
 
@@ -2025,7 +2194,7 @@ class RipEngine:
         Track 1 is never extended with a standard 2s pause; extended non-silent
         HTOA may start the image with INDEX 00.
         """
-        notes: list[str] = []
+        notes: list[str] = list(layout_notes or [])
         disc = job.disc_info
         if disc is None or not disc.tracks:
             return RipResult(success=False, error='No disc TOC for Copy Image')
@@ -2335,6 +2504,30 @@ class RipEngine:
                             notes=notes,
                             album_dir=dest.album_dir,
                         )
+
+                album_dirs = _unique_album_dirs(output_files, dests[0].album_dir)
+                data_pairs, data_paths = self._rip_data_tracks(
+                    job,
+                    album_dirs,
+                    notes=notes,
+                    rip_log=rip_log,
+                    report=lambda state, sub, msg: report(
+                        state, 0.88 + 0.06 * sub, msg
+                    ),
+                )
+                output_files.extend(data_paths)
+
+                for dest in dests:
+                    encoded = [
+                        p
+                        for p in output_files
+                        if p.parent == dest.album_dir
+                        and p.suffix.lower() in {'.flac', '.wav'}
+                        and p.stem == basename
+                    ]
+                    if not encoded:
+                        continue
+                    this_image = encoded[0]
                     if job.write_cue_file:
                         this_cue = dest.album_dir / f'{basename}.cue'
                         report(
@@ -2344,12 +2537,17 @@ class RipEngine:
                         )
                         write_cue_sheet(
                             this_cue,
-                            image_filename=this_out.name,
+                            image_filename=this_image.name,
                             file_type=cue_file_type_for_extension(dest.extension),
                             disc=disc,
                             album=job.album,
                             file_start_sector=file_start,
                             htoa_index00=htoa_in_image,
+                            data_files=[
+                                (n, dest.album_dir / p.name)
+                                for n, p in data_pairs
+                                if (dest.album_dir / p.name).is_file()
+                            ],
                         )
                         notes.append(f'CUE sheet: {this_cue.name}')
                         output_files.append(this_cue)
@@ -2800,6 +2998,25 @@ def _extract_timeout(expected_bytes: int | None, *, mode: str) -> int:
         return int(min(5400, max(600, audio_sec * 10 + 120)))
     # Burst is faster; still bound by slow drives.
     return int(min(2400, max(300, audio_sec * 4 + 60)))
+
+
+def _unique_album_dirs(outputs: list[Path], album_dir: Path | None) -> list[Path]:
+    """Album folders that should receive data-track .bin copies."""
+    dirs: list[Path] = []
+    seen: set[Path] = set()
+    if album_dir is not None:
+        dirs.append(album_dir)
+        seen.add(album_dir)
+    skip = {'.cue', '.log', '.jpg', '.jpeg', '.png', '.bin'}
+    for path in outputs:
+        if path.suffix.lower() in skip:
+            continue
+        parent = path.parent
+        if parent in seen:
+            continue
+        seen.add(parent)
+        dirs.append(parent)
+    return dirs
 
 
 def _finish_result(
