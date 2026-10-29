@@ -22,8 +22,10 @@ _CDROM_DATA_TRACK = 0x04
 # linux/scsi/sg.h
 _SG_IO = 0x2285
 _SG_DXFER_FROM_DEV = -3
+_SG_DXFER_NONE = -1
 
 _SCSI_READ_CD = 0xBE
+_SCSI_SEEK10 = 0x2B
 _DATA_RETRIES = 8
 _SCSI_TIMEOUT_MS = 20_000
 _MAX_SECTORS_PER_READ = 32
@@ -168,6 +170,44 @@ class MmcDevice:
                 if _mode1_edc_ok(last) or not _looks_mode1(last):
                     return last
         return last
+
+    def seek_lba(self, lba: int) -> bool:
+        """SCSI SEEK(10) — force the head off the current cached region."""
+        cdb = bytes(
+            [
+                _SCSI_SEEK10,
+                0x00,
+                (lba >> 24) & 0xFF,
+                (lba >> 16) & 0xFF,
+                (lba >> 8) & 0xFF,
+                lba & 0xFF,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+            ]
+        )
+        return self._sg_nodata(cdb)
+
+    def _sg_nodata(self, cdb: bytes) -> bool:
+        sense = bytearray(32)
+        cdb_buf = (ctypes.c_ubyte * len(cdb)).from_buffer_copy(cdb)
+        sense_buf = (ctypes.c_ubyte * len(sense)).from_buffer(sense)
+        hdr = _SgIoHdr()
+        hdr.interface_id = ord('S')
+        hdr.dxfer_direction = _SG_DXFER_NONE
+        hdr.cmd_len = len(cdb)
+        hdr.mx_sb_len = len(sense)
+        hdr.dxfer_len = 0
+        hdr.cmdp = ctypes.cast(cdb_buf, ctypes.c_void_p)
+        hdr.sbp = ctypes.cast(sense_buf, ctypes.c_void_p)
+        hdr.timeout = _SCSI_TIMEOUT_MS
+        try:
+            fcntl.ioctl(self.fd, _SG_IO, hdr)
+        except OSError as exc:
+            log.debug('SG_IO SEEK failed on %s: %s', self.device, exc)
+            return False
+        return hdr.status in (0,)
 
     def _sg_read(self, cdb: bytes, buf: bytearray) -> bytes | None:
         sense = bytearray(32)

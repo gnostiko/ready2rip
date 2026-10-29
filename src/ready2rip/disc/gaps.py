@@ -187,6 +187,7 @@ def _first_index00_length(mmc: MmcDevice, lo: int, hi: int) -> int:
     if hi <= lo + 1:
         return 0
     tail = _q_index(mmc, hi - 1)
+    # Failed Q read or not INDEX 00 → no usable pregap for this boundary.
     if tail != 0:
         return 0
     left, right = lo, hi - 1
@@ -194,11 +195,14 @@ def _first_index00_length(mmc: MmcDevice, lo: int, hi: int) -> int:
     while left <= right:
         mid = (left + right) // 2
         q = _q_index(mmc, mid)
+        if q is None:
+            # Don't treat a failed Q read as INDEX 01 — nudge past mid.
+            left = mid + 1
+            continue
         if q == 0:
             first0 = mid
             right = mid - 1
         else:
-            # None or INDEX 01 of the previous track — search right.
             left = mid + 1
     return max(0, hi - first0)
 

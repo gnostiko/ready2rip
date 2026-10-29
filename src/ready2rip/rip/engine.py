@@ -817,7 +817,12 @@ class RipEngine:
             self._unlink_quiet(test_wav)
             if defeat_cache:
                 report(RipState.RIPPING, 0.25, 'Defeating drive cache before HTOA copy…')
-                flush_drive_cache(job.device, job.disc_info)
+                flush_drive_cache(
+                    job.device,
+                    job.disc_info,
+                    avoid_start=0,
+                    avoid_end=htoa_info.length_sectors,
+                )
             report(RipState.RIPPING, 0.35, 'Copying HTOA…')
             try:
                 extract_htoa(
@@ -847,7 +852,12 @@ class RipEngine:
                 matched_htoa = False
                 for htoa_attempt in range(max_htoa_retries):
                     if defeat_cache:
-                        flush_drive_cache(job.device, job.disc_info)
+                        flush_drive_cache(
+                            job.device,
+                            job.disc_info,
+                            avoid_start=0,
+                            avoid_end=htoa_info.length_sectors,
+                        )
                     # Re-run both passes so CRCs are from the same secure pair.
                     extract_htoa(
                         job.device,
@@ -859,7 +869,12 @@ class RipEngine:
                     test_crc = wav_pcm_crc(test_wav)
                     self._unlink_quiet(test_wav)
                     if defeat_cache:
-                        flush_drive_cache(job.device, job.disc_info)
+                        flush_drive_cache(
+                            job.device,
+                            job.disc_info,
+                            avoid_start=0,
+                            avoid_end=htoa_info.length_sectors,
+                        )
                     extract_htoa(
                         job.device,
                         htoa_info,
@@ -880,7 +895,12 @@ class RipEngine:
                 if not matched_htoa and test_crc != copy_crc:
                     if job.burst_fallback:
                         if defeat_cache:
-                            flush_drive_cache(job.device, job.disc_info)
+                            flush_drive_cache(
+                                job.device,
+                                job.disc_info,
+                                avoid_start=0,
+                                avoid_end=htoa_info.length_sectors,
+                            )
                         extract_htoa(
                             job.device,
                             htoa_info,
@@ -1083,15 +1103,37 @@ class RipEngine:
             sub = idx + (done / max(1, total)) / n_tracks
             report(RipState.RIPPING, sub, message)
 
+        def data_flush() -> None:
+            # Seek away from whatever data span was just read.
+            for dt in disc.data_tracks:
+                flush_drive_cache(
+                    job.device,
+                    disc,
+                    avoid_start=dt.start_sector,
+                    avoid_end=dt.start_sector + dt.length_sectors,
+                )
+                break
+
         try:
             if report is not None:
-                report(RipState.RIPPING, 0.0, 'Extracting data tracks…')
+                report(
+                    RipState.RIPPING,
+                    0.0,
+                    (
+                        'Extracting data tracks (test & copy)…'
+                        if job.test_and_copy
+                        else 'Extracting data tracks…'
+                    ),
+                )
             extracted = extract_data_tracks(
                 job.device,
                 disc.data_tracks,
                 primary,
                 on_progress=on_progress,
                 cancelled=lambda: self._cancelled,
+                test_and_copy=job.test_and_copy,
+                max_retries=job.test_copy_max_retries,
+                flush=data_flush if job.test_and_copy else None,
             )
         except Exception as exc:
             raise RuntimeError(f'Data track extract failed: {exc}') from exc
@@ -1118,8 +1160,14 @@ class RipEngine:
                 )
                 entry.filename = item.path.name
                 entry.output_path = item.path
-                entry.extract_mode = f'raw {item.track.cue_mode}'
+                entry.extract_mode = (
+                    f'raw {item.track.cue_mode} (test & copy)'
+                    if item.test_crc
+                    else f'raw {item.track.cue_mode}'
+                )
+                entry.test_crc = item.test_crc
                 entry.copy_crc = item.crc32
+                entry.crc_verified = item.matched if item.test_crc else None
                 entry.status = 'OK'
                 entry.notes.append(item.message)
         disc.data_tracks = updated
@@ -1564,7 +1612,13 @@ class RipEngine:
                             message='Defeating drive cache…',
                             total_units=total_units,
                         )
-                        flush_drive_cache(job.device, job.disc_info)
+                        avoid0, avoid1 = _track_avoid_span(job.disc_info, track_no)
+                        flush_drive_cache(
+                            job.device,
+                            job.disc_info,
+                            avoid_start=avoid0,
+                            avoid_end=avoid1,
+                        )
 
                 report(
                     track_no,
@@ -2333,7 +2387,12 @@ class RipEngine:
                             )
                             self._unlink_quiet(test_wav, copy_wav)
                             if job.drive_caches_audio is not False:
-                                flush_drive_cache(job.device, disc)
+                                flush_drive_cache(
+                                    job.device,
+                                    disc,
+                                    avoid_start=file_start,
+                                    avoid_end=end_sector,
+                                )
                             mode, retry_stats = self._rip_span(
                                 job.device,
                                 file_start,
@@ -2355,7 +2414,12 @@ class RipEngine:
                             report(
                                 RipState.RIPPING, 0.35, 'Defeating drive cache…'
                             )
-                            flush_drive_cache(job.device, disc)
+                            flush_drive_cache(
+                                job.device,
+                                disc,
+                                avoid_start=file_start,
+                                avoid_end=end_sector,
+                            )
                         report(
                             RipState.RIPPING, 0.40, 'Copy pass for disc image…'
                         )
@@ -2394,7 +2458,12 @@ class RipEngine:
                                 'Image test & copy failed — burst recovery…',
                             )
                             if job.drive_caches_audio is not False:
-                                flush_drive_cache(job.device, disc)
+                                flush_drive_cache(
+                                    job.device,
+                                    disc,
+                                    avoid_start=file_start,
+                                    avoid_end=end_sector,
+                                )
                             copy_mode, burst_stats = self._rip_span(
                                 job.device,
                                 file_start,
@@ -2998,6 +3067,19 @@ def _extract_timeout(expected_bytes: int | None, *, mode: str) -> int:
         return int(min(5400, max(600, audio_sec * 10 + 120)))
     # Burst is faster; still bound by slow drives.
     return int(min(2400, max(300, audio_sec * 4 + 60)))
+
+
+def _track_avoid_span(
+    disc: DiscInfo | None, track_no: int
+) -> tuple[int | None, int | None]:
+    """Absolute ``[start, end)`` for the track just extracted (cache flush)."""
+    if disc is None:
+        return None, None
+    for t in disc.tracks:
+        if t.number == track_no:
+            start = int(t.start_sector)
+            return start, start + int(t.length_sectors)
+    return None, None
 
 
 def _unique_album_dirs(outputs: list[Path], album_dir: Path | None) -> list[Path]:

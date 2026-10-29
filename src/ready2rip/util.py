@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import shutil
+import socket
 import urllib.parse
 from pathlib import Path
 
@@ -25,6 +27,22 @@ _DEVICE_BAD = re.compile(r'[\x00-\x1f;&|`$<>(){}\n\r]')
 # Max remote image payload we will hold in memory (bytes).
 MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 
+# Cap for draining HTTPError bodies (ResourceWarning avoidance only).
+_HTTP_ERROR_DRAIN_BYTES = 64 * 1024
+
+# Host suffixes we intentionally fetch (metadata / art / AccurateRip).
+# Blocks DNS-rebinding SSRF to arbitrary public hosts.
+_FETCH_HOST_SUFFIXES = (
+    'musicbrainz.org',
+    'coverartarchive.org',
+    'archive.org',  # CAA CDN redirects
+    'itunes.apple.com',
+    'mzstatic.com',  # iTunes artwork CDN
+    'accuraterip.com',
+    'gnudb.org',
+    'gnudb.gnudb.org',
+)
+
 
 def find_cdparanoia() -> str | None:
     """Return path to ``cdparanoia`` or libcdio's ``cd-paranoia`` binary."""
@@ -34,7 +52,8 @@ def find_cdparanoia() -> str | None:
 def validate_device_path(device: str | None, *, default: str = '/dev/sr0') -> str:
     """Return a safe optical device path for use with cdparanoia / eject.
 
-    Rejects shell metacharacters, path traversal, and non-``/dev`` locations.
+    Rejects shell metacharacters, path traversal, non-``/dev`` locations, and
+    non-optical node names (no fallback to ``/dev/sda``, ``/dev/mem``, etc.).
     """
     raw = (device or '').strip() or default
     if _DEVICE_BAD.search(raw):
@@ -47,14 +66,16 @@ def validate_device_path(device: str | None, *, default: str = '/dev/sr0') -> st
     normalized = '/' + '/'.join(parts)
     if _DEVICE_OK.match(normalized):
         return normalized
-    # Allow simple single-name nodes such as /dev/sr0 if regex drifts.
-    if re.fullmatch(r'/dev/[A-Za-z][A-Za-z0-9._+-]*', normalized):
-        return normalized
     raise ValueError(f'Unsupported optical device path: {normalized!r}')
 
 
 def is_safe_http_url(url: str) -> bool:
-    """True if *url* is http(s) without credentials (safe to fetch for art/meta)."""
+    """True if *url* is an allowlisted http(s) host resolving to a public IP.
+
+    Requires a known metadata/art/AccurateRip host suffix **and** public
+    resolved addresses. That blocks private/link-local SSRF and DNS rebinding
+    to arbitrary public sites. Redirects must pass the same check.
+    """
     if not url or not isinstance(url, str):
         return False
     try:
@@ -67,8 +88,67 @@ def is_safe_http_url(url: str) -> bool:
         return False
     if parsed.username is not None or parsed.password is not None:
         return False
-    host = (parsed.hostname or '').casefold()
-    return host not in {'localhost', '127.0.0.1', '::1', '0.0.0.0'}
+    host = parsed.hostname
+    if not host:
+        return False
+    host_cf = host.casefold()
+    if host_cf in {'localhost', '127.0.0.1', '::1', '0.0.0.0', '[::1]'}:
+        return False
+    if host_cf.endswith('.localhost') or host_cf.endswith('.local'):
+        return False
+    if not _is_allowed_fetch_host(host_cf):
+        return False
+
+    # Literal IP hosts are never on the suffix allowlist — reject.
+    try:
+        ipaddress.ip_address(host)
+        return False
+    except ValueError:
+        pass
+
+    # Numeric IPv4 spellings urllib leaves as hostnames (e.g. 2130706433).
+    if re.fullmatch(r'\d{1,10}', host) or re.fullmatch(
+        r'\d{1,3}(?:\.\d{1,3}){1,3}', host
+    ):
+        return False
+
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        addr = info[4][0]
+        try:
+            if not _is_public_ip(ipaddress.ip_address(addr)):
+                return False
+        except ValueError:
+            return False
+    return True
+
+
+def _is_allowed_fetch_host(host: str) -> bool:
+    return any(
+        host == suffix or host.endswith('.' + suffix)
+        for suffix in _FETCH_HOST_SUFFIXES
+    )
+
+
+def _is_public_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast:
+        return False
+    if ip.is_reserved or ip.is_unspecified:
+        return False
+    # CGNAT / documentation / benchmarking ranges.
+    if isinstance(ip, ipaddress.IPv4Address):
+        if ip in ipaddress.ip_network('100.64.0.0/10'):
+            return False
+        if ip in ipaddress.ip_network('198.18.0.0/15'):
+            return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return _is_public_ip(ip.ipv4_mapped)
+    return True
 
 
 def ensure_path_under(base: Path, path: Path) -> Path:
@@ -108,6 +188,23 @@ def read_limited(response, max_bytes: int = MAX_DOWNLOAD_BYTES) -> bytes:
             raise ValueError(f'Response exceeded {max_bytes} bytes')
         chunks.append(block)
     return b''.join(chunks)
+
+
+def drain_http_error(exc, max_bytes: int = _HTTP_ERROR_DRAIN_BYTES) -> None:
+    """Drain a capped amount from an HTTPError body, then close it."""
+    try:
+        remaining = max_bytes
+        while remaining > 0:
+            block = exc.read(min(8192, remaining))
+            if not block:
+                break
+            remaining -= len(block)
+    except Exception:
+        pass
+    try:
+        exc.close()
+    except Exception:
+        pass
 
 
 def parse_disc_field(text: str) -> tuple[int, int]:
@@ -180,5 +277,3 @@ def _parse_partial_iso_date(raw: str) -> str:
     if day_i < 1 or day_i > 31:
         return f'{year}-{month_i:02d}'
     return f'{year}-{month_i:02d}-{day_i:02d}'
-
-

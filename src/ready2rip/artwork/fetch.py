@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ready2rip.metadata.providers import USER_AGENT, AlbumMetadata
-from ready2rip.util import is_safe_http_url, read_limited
+from ready2rip.util import drain_http_error, is_safe_http_url, read_limited
 
 log = logging.getLogger(__name__)
 
@@ -385,14 +385,7 @@ class ArtworkFetcher:
 
 def _close_http_error(exc: urllib.error.HTTPError) -> None:
     """Drain/close HTTPError to avoid ResourceWarning on CPython."""
-    try:
-        exc.read()
-    except Exception:
-        pass
-    try:
-        exc.close()
-    except Exception:
-        pass
+    drain_http_error(exc)
 
 
 def itunes_hires_url(url: str, size: int = 10000) -> str:

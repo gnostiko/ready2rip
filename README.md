@@ -86,7 +86,7 @@ Copy Image forces a lossless container (FLAC or WAV; other formats fall back to 
 | **Test and copy** | On | Two secure passes; matching CRCs required (retries on mismatch) |
 | **Copy Image** | Off | One continuous image instead of separate tracks |
 | **Pregap / HTOA** | On | Ignore ≤2s track-1 pause; longer non-silent pregap → track `00`; track 1 starts at index 01. Inter-track INDEX 00 is detected at rip start (cdrdao, else Q-subchannel) and written into the CUE |
-| **Data tracks** | On | Mixed-mode / CD-Extra data as raw 2352-byte `.bin`; listed in the CUE. Failed data extract fails the rip |
+| **Data tracks** | On | Mixed-mode / CD-Extra data as raw 2352-byte `.bin` with test & copy when that option is on; listed in the CUE. Failed data extract fails the rip |
 | **AccurateRip** | On | Online CRC verification |
 | **Burst fallback** | Off | Optional insecure `-Z` recovery after secure retries fail |
 | **Write rip log** | On | Detailed status log in the album folder |
@@ -227,8 +227,8 @@ Check your system glibc with `ldd --version`. If the AppImage fails with `GLIBC_
 2. Make it executable and start it:
 
 ```bash
-chmod +x ready2rip-0.4.5-x86_64.AppImage
-./ready2rip-0.4.5-x86_64.AppImage
+chmod +x ready2rip-0.4.6-x86_64.AppImage
+./ready2rip-0.4.6-x86_64.AppImage
 ```
 
 ### Recommended: manage with Gear Lever

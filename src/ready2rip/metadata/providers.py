@@ -16,7 +16,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ready2rip import config
-from ready2rip.util import is_safe_http_url, normalize_release_date, read_limited
+from ready2rip.util import (
+    drain_http_error,
+    is_safe_http_url,
+    normalize_release_date,
+    read_limited,
+)
 
 log = logging.getLogger(__name__)
 
@@ -239,11 +244,7 @@ class MusicBrainzProvider(MetadataProvider):
             except urllib.error.HTTPError as exc:
                 code = exc.code
                 retry_after = exc.headers.get('Retry-After') if exc.headers else None
-                try:
-                    exc.read()
-                    exc.close()
-                except Exception:
-                    pass
+                drain_http_error(exc)
                 if code in (429, 503) and attempt + 1 < 5:
                     delay = _retry_delay_seconds(retry_after, attempt)
                     log.warning(
@@ -442,7 +443,7 @@ class FreeDBProvider(MetadataProvider):
 
     def _cddb_hello(self) -> str:
         # gnudb expects identifiable hello; email-shaped user reduces blocks.
-        version = getattr(config, 'APPLICATION_VERSION', '0.4.5')
+        version = getattr(config, 'APPLICATION_VERSION', '0.4.6')
         return (
             f'ready2rip@users.noreply.github.com localhost '
             f'{config.APPLICATION_NAME} {version}'
@@ -560,11 +561,7 @@ class FreeDBProvider(MetadataProvider):
         except urllib.error.HTTPError as exc:
             if exc.code != 404:
                 log.debug('gnudb HTTP %s for %s', exc.code, url)
-            try:
-                exc.read()
-                exc.close()
-            except Exception:
-                pass
+            drain_http_error(exc)
             return None, exc
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             return None, exc

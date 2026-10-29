@@ -61,6 +61,12 @@ def probe_drive(device: str = '/dev/sr0', *, allow_optical: bool = True) -> Driv
     When *allow_optical* is False, only udev/sysfs/proc are used so the call
     stays fast and never invokes cdparanoia (safe on the GTK thread at startup).
     """
+    from ready2rip.util import validate_device_path
+
+    try:
+        device = validate_device_path(device)
+    except ValueError as exc:
+        return DriveInfo(device=device or '', notes=[str(exc)])
     info = DriveInfo(device=device)
     _fill_from_udev(info)
     _fill_from_sysfs(info)

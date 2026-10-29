@@ -20,6 +20,8 @@ log = logging.getLogger(__name__)
 _BATCH = 32
 _SECTOR = 2352
 _RETRIES = 8
+# Match audio secure test&copy retry budget (avoid importing rip.secure → cycle).
+_DEFAULT_TEST_COPY_RETRIES = 3
 
 ProgressFn = Callable[[int, int, int, str], None]
 CancelledFn = Callable[[], bool]
@@ -32,7 +34,9 @@ class DataExtractResult:
     track: DataTrackInfo
     path: Path
     crc32: str
+    test_crc: str = ''
     retries: int = 0
+    matched: bool = True
     message: str = ''
 
 
@@ -43,11 +47,16 @@ def extract_data_tracks(
     *,
     on_progress: ProgressFn | None = None,
     cancelled: CancelledFn | None = None,
+    test_and_copy: bool = True,
+    max_retries: int = _DEFAULT_TEST_COPY_RETRIES,
+    flush: Callable[[], None] | None = None,
 ) -> list[DataExtractResult]:
     """Write raw MODE1/2352 or MODE2/2352 ``trackNN.bin`` files.
 
     No sample offset is applied. Failed sectors are retried individually.
-    Raises ``RuntimeError`` if a track cannot be read completely.
+    When *test_and_copy* is True, extract twice and require matching CRC32
+    (with *max_retries* extra cycles after a mismatch). Raises ``RuntimeError``
+    if a track cannot be read completely or CRCs never match.
     """
     if not tracks:
         return []
@@ -68,6 +77,9 @@ def extract_data_tracks(
                     dest_dir,
                     on_progress=on_progress,
                     cancelled=cancelled,
+                    test_and_copy=test_and_copy,
+                    max_retries=max_retries,
+                    flush=flush,
                 )
             )
     finally:
@@ -86,23 +98,127 @@ def _extract_one(
     *,
     on_progress: ProgressFn | None,
     cancelled: CancelledFn | None,
+    test_and_copy: bool,
+    max_retries: int,
+    flush: Callable[[], None] | None,
 ) -> DataExtractResult:
     path = dest_dir / data_bin_name(track.number)
+    test_path = dest_dir / f'.{data_bin_name(track.number)}.test'
     length = int(track.length_sectors)
-    start = int(track.start_sector)
     if length <= 0:
         raise RuntimeError(f'Data track {track.number} has no sectors')
 
+    attempts = 1 + max(0, int(max_retries)) if test_and_copy else 1
+    last_err = ''
+
+    for attempt in range(attempts):
+        if cancelled is not None and cancelled():
+            raise RuntimeError('Cancelled')
+        label = (
+            f'Data track {track.number:02d}'
+            + (f' (retry {attempt})' if attempt else '')
+        )
+        if test_and_copy:
+            test_res = _read_to_file(
+                mmc,
+                track,
+                test_path,
+                on_progress=on_progress,
+                cancelled=cancelled,
+                phase=f'{label} test',
+            )
+            if flush is not None:
+                try:
+                    flush()
+                except Exception as exc:
+                    log.debug('Data-track cache flush failed: %s', exc)
+            copy_res = _read_to_file(
+                mmc,
+                track,
+                path,
+                on_progress=on_progress,
+                cancelled=cancelled,
+                phase=f'{label} copy',
+            )
+            try:
+                test_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            if test_res.crc32 and copy_res.crc32 and test_res.crc32 == copy_res.crc32:
+                msg = (
+                    f'Data track {track.number:02d} {copy_res.track.cue_mode} '
+                    f'{length} sectors → {path.name} '
+                    f'test&copy CRC32 {copy_res.crc32}'
+                )
+                log.info('%s', msg)
+                return DataExtractResult(
+                    track=copy_res.track,
+                    path=path,
+                    crc32=copy_res.crc32,
+                    test_crc=test_res.crc32,
+                    retries=test_res.retries + copy_res.retries,
+                    matched=True,
+                    message=msg,
+                )
+            last_err = (
+                f'Data track {track.number:02d} test/copy CRC mismatch '
+                f'({test_res.crc32} ≠ {copy_res.crc32})'
+            )
+            log.warning('%s', last_err)
+            continue
+
+        single = _read_to_file(
+            mmc,
+            track,
+            path,
+            on_progress=on_progress,
+            cancelled=cancelled,
+            phase=label,
+        )
+        msg = (
+            f'Data track {track.number:02d} {single.track.cue_mode} '
+            f'{length} sectors → {path.name} CRC32 {single.crc32}'
+        )
+        log.info('%s', msg)
+        return DataExtractResult(
+            track=single.track,
+            path=path,
+            crc32=single.crc32,
+            retries=single.retries,
+            matched=True,
+            message=msg,
+        )
+
+    try:
+        test_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    raise RuntimeError(last_err or f'Data track {track.number} extract failed')
+
+
+@dataclass
+class _PassResult:
+    track: DataTrackInfo
+    crc32: str
+    retries: int
+
+
+def _read_to_file(
+    mmc: MmcDevice,
+    track: DataTrackInfo,
+    path: Path,
+    *,
+    on_progress: ProgressFn | None,
+    cancelled: CancelledFn | None,
+    phase: str,
+) -> _PassResult:
+    length = int(track.length_sectors)
+    start = int(track.start_sector)
     mode = int(track.mode) if track.mode in (1, 2) else 0
     retries = 0
     crc = 0
     if on_progress is not None:
-        on_progress(
-            track.number,
-            0,
-            length,
-            f'Extracting data track {track.number:02d} ({track.cue_mode})…',
-        )
+        on_progress(track.number, 0, length, f'{phase}…')
 
     with path.open('wb') as fh:
         offset = 0
@@ -125,7 +241,7 @@ def _extract_one(
                     track.number,
                     offset,
                     length,
-                    f'Data track {track.number:02d}: {offset}/{length} sectors',
+                    f'{phase}: {offset}/{length} sectors',
                 )
 
     size = path.stat().st_size
@@ -143,18 +259,10 @@ def _extract_one(
         session=track.session,
         pregap_sectors=track.pregap_sectors,
     )
-    crc_hex = f'{crc & 0xFFFFFFFF:08x}'
-    msg = (
-        f'Data track {track.number:02d} {out_track.cue_mode} '
-        f'{length} sectors → {path.name} CRC32 {crc_hex}'
-    )
-    log.info('%s', msg)
-    return DataExtractResult(
+    return _PassResult(
         track=out_track,
-        path=path,
-        crc32=crc_hex,
+        crc32=f'{crc & 0xFFFFFFFF:08x}',
         retries=retries,
-        message=msg,
     )
 
 

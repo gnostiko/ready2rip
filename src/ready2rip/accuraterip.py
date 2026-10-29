@@ -173,7 +173,7 @@ def fetch_database(ids: AccurateRipDiscIds, timeout: float = 15.0) -> AccurateRi
         f'{ids.ar_id1}-{ids.ar_id2}-{ids.freedb_id}.bin'
     )
     url = AR_BASE + dir_ + file_
-    from ready2rip.util import is_safe_http_url, read_limited
+    from ready2rip.util import drain_http_error, is_safe_http_url, read_limited
 
     if not is_safe_http_url(url):
         log.warning('Refusing non-http(s) AccurateRip URL: %s', url)
@@ -195,11 +195,7 @@ def fetch_database(ids: AccurateRipDiscIds, timeout: float = 15.0) -> AccurateRi
             log.info('Disc not in AccurateRip database: %s', ids.disc_id_string)
         else:
             log.warning('AccurateRip HTTP %s: %s', exc.code, url)
-        try:
-            exc.read()
-            exc.close()
-        except Exception:
-            pass
+        drain_http_error(exc)
         return None
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         log.warning('AccurateRip fetch failed: %s', exc)

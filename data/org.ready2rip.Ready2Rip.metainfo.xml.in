@@ -29,7 +29,17 @@
     <release version="@APPLICATION_VERSION@" date="2026-10-29">
       <description>
         <p>
-          0.4.5: Full INDEX 00 pregaps in CUE sheets (EAC default /
+          0.4.6: Security hardening (device allowlist, fetch host
+          allowlist, cache path checks); data-track test &amp; copy;
+          stronger cache defeat for full-disc images; correct
+          whole-album ReplayGain.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.5" date="2026-10-29">
+      <description>
+        <p>
+          Full INDEX 00 pregaps in CUE sheets (EAC default /
           noncompliant) and mixed-mode / CD-Extra data tracks as raw
           2352-byte .bin files. Secure extract flags unchanged.
         </p>

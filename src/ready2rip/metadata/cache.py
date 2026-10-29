@@ -15,6 +15,7 @@ from ready2rip.artwork.fetch import ArtworkImage, image_size
 from ready2rip.disc.discid_util import DiscIdentifiers
 from ready2rip.disc.probe import DiscInfo
 from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
+from ready2rip.util import ensure_path_under
 
 log = logging.getLogger(__name__)
 
@@ -124,9 +125,13 @@ class MetadataCache:
 
         art: ArtworkImage | None = None
         cover_rel = payload.get('artwork_file')
-        if cover_rel:
-            cover_path = self.root / cover_rel
-            if cover_path.is_file():
+        if cover_rel and isinstance(cover_rel, str) and not Path(cover_rel).is_absolute():
+            try:
+                cover_path = ensure_path_under(self.root, self.root / cover_rel)
+            except ValueError:
+                log.warning('Ignoring cache artwork path outside cache root: %s', cover_rel)
+                cover_path = None
+            if cover_path is not None and cover_path.is_file():
                 try:
                     data = cover_path.read_bytes()
                     mime = payload.get('artwork_mime') or 'image/jpeg'
