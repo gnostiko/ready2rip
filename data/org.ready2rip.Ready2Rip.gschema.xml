@@ -290,25 +290,6 @@
       <summary>Human-readable drive cache analysis summary</summary>
     </key>
 
-    <key name="drive-accurate-stream-configured" type="b">
-      <default>false</default>
-      <summary>Accurate Stream test completed</summary>
-    </key>
-
-    <key name="drive-accurate-stream" type="b">
-      <default>false</default>
-      <summary>Drive supports Accurate Stream</summary>
-      <description>
-        True when re-reads of the same sector range match after seeking away
-        (Accurate Stream test, measured during Drive setup).
-      </description>
-    </key>
-
-    <key name="drive-accurate-stream-message" type="s">
-      <default>''</default>
-      <summary>Accurate Stream test summary</summary>
-    </key>
-
     <key name="rip-htoa" type="b">
       <default>true</default>
       <summary>Pregap / HTOA handling</summary>

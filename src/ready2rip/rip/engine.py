@@ -149,8 +149,6 @@ class RipJob:
     # Persisted from Drive setup (None = unknown / not measured).
     drive_caches_audio: bool | None = None
     drive_cache_message: str = ''
-    drive_accurate_stream: bool | None = None
-    drive_accurate_stream_message: str = ''
     # Seek/read elsewhere between test and copy when cache is present (or always).
     defeat_audio_cache: bool = True
     # Handle extended track-1 pregap as HTOA (track 00); never
@@ -438,18 +436,8 @@ class RipEngine:
                 total_samples=total_audio_samples(job.disc_info),
             )
 
-        # Drive features: use results persisted from Drive setup.
+        # Drive cache: use results persisted from Drive setup.
         defeat_cache = job.defeat_audio_cache
-        if job.drive_accurate_stream is not None:
-            amsg = job.drive_accurate_stream_message or (
-                'Accurate Stream: yes'
-                if job.drive_accurate_stream
-                else 'Accurate Stream: no'
-            )
-            notes.append(amsg)
-            if rip_log is not None:
-                rip_log.accurate_stream = job.drive_accurate_stream
-                rip_log.accurate_stream_message = amsg
         if job.drive_caches_audio is not None:
             msg = job.drive_cache_message or (
                 'Drive caches audio (from Drive setup)'

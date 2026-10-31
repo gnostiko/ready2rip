@@ -878,7 +878,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             btn.set_tooltip_text('Recalibrate drive')
         else:
             row.set_title('Calibrate Drive')
-            row.set_subtitle('Offset, cache, and Accurate Stream')
+            row.set_subtitle('Offset and audio cache')
             self._setup_ok_icon.set_visible(False)
             btn.set_icon_name('')
             btn.set_label('Calibrate')
@@ -1900,12 +1900,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 else None
             ),
             drive_cache_message=settings.drive_cache_message,
-            drive_accurate_stream=(
-                settings.drive_accurate_stream
-                if settings.drive_accurate_stream_configured
-                else None
-            ),
-            drive_accurate_stream_message=settings.drive_accurate_stream_message,
             defeat_audio_cache=(
                 settings.defeat_audio_cache or settings.drive_caches_audio
             ),
@@ -2652,19 +2646,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         offset_row = Adw.ActionRow(title='Sample offset', subtitle=offset_sub)
         self.drive_group.add(offset_row)
         self._drive_rows.append(offset_row)
-
-        if settings.drive_accurate_stream_configured:
-            astream_sub = 'Yes' if settings.drive_accurate_stream else 'No'
-            if settings.drive_accurate_stream_message:
-                astream_sub = (
-                    f'{astream_sub} · {settings.drive_accurate_stream_message}'
-                )
-        else:
-            astream_sub = 'Not measured — run Drive setup'
-        astream_row = Adw.ActionRow(title='Accurate Stream', subtitle=astream_sub)
-        astream_row.set_tooltip_text(astream_sub)
-        self.drive_group.add(astream_row)
-        self._drive_rows.append(astream_row)
 
         if settings.drive_cache_configured:
             if settings.drive_cache_message:

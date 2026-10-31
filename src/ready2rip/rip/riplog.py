@@ -88,8 +88,6 @@ class RipLog:
         self.ctdb_status: str = ''
         self.cache_message: str = ''
         self.drive_caches: bool | None = None
-        self.accurate_stream: bool | None = None
-        self.accurate_stream_message: str = ''
         self.tracks: list[TrackLogEntry] = []
         self.notes: list[str] = []
         # Session-level archival history (e.g. superseded secure rips before
@@ -125,10 +123,6 @@ class RipLog:
         self.rip_data_tracks = getattr(job, 'rip_data_tracks', True)
         self.drive_caches = getattr(job, 'drive_caches_audio', None)
         self.cache_message = getattr(job, 'drive_cache_message', '') or ''
-        self.accurate_stream = getattr(job, 'drive_accurate_stream', None)
-        self.accurate_stream_message = (
-            getattr(job, 'drive_accurate_stream_message', '') or ''
-        )
         self.album = job.album
         self.disc = job.disc_info
         self.test_copy_max_retries = int(
@@ -227,15 +221,6 @@ class RipLog:
             if self.burst_fallback
             else 'Burst fallback          : No'
         )
-        if self.accurate_stream is True:
-            astream = 'Yes'
-        elif self.accurate_stream is False:
-            astream = 'No'
-        else:
-            astream = 'Unknown (run Drive setup)'
-        lines.append(f'Utilize accurate stream : {astream}')
-        if self.accurate_stream_message:
-            lines.append(f'Accurate Stream test    : {self.accurate_stream_message}')
         if self.drive_caches is True:
             defeat = 'Yes (detected; flush between test/copy)'
         elif self.drive_caches is False:

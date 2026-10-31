@@ -66,7 +66,7 @@ class DriveSetupDialog(Adw.Dialog):
 
         desc = Gtk.Label(
             label=(
-                'Measures sample offset, audio cache, and Accurate Stream. '
+                'Measures sample offset and audio cache. '
                 'Insert a commercial CD, then start.'
             ),
             wrap=True,
@@ -253,9 +253,7 @@ class DriveSetupDialog(Adw.Dialog):
         self._prog_bar.set_fraction(frac)
         self._prog_bar.set_text(f'{int(frac * 100)}%')
         lower = msg.casefold()
-        if 'accurate stream' in lower:
-            self._prog_title.set_label('Accurate Stream…')
-        elif 'cache' in lower:
+        if 'cache' in lower:
             self._prog_title.set_label('Drive cache…')
         elif 'offset' in lower or 'scanning' in lower:
             self._prog_title.set_label('Sample offset…')
@@ -277,10 +275,7 @@ class DriveSetupDialog(Adw.Dialog):
             self._result_desc.set_label(body)
             self._manual_btn.set_visible(False)
         else:
-            if (
-                result.caches_audio is not None
-                or result.accurate_stream is not None
-            ):
+            if result.caches_audio is not None:
                 _save_result(
                     self._store,
                     device,
@@ -337,12 +332,6 @@ class DriveSetupDialog(Adw.Dialog):
                     s.drive_caches_audio if s.drive_cache_configured else None
                 ),
                 cache_message=s.drive_cache_message,
-                accurate_stream=(
-                    s.drive_accurate_stream
-                    if s.drive_accurate_stream_configured
-                    else None
-                ),
-                accurate_stream_message=s.drive_accurate_stream_message,
             )
             features = ''
         apply_icon(self._result_icon, 'emblem-ok-symbolic')
@@ -368,21 +357,12 @@ def _save_result(
         offset=offset,
         caches_audio=result.caches_audio,
         cache_message=result.cache_message,
-        accurate_stream=result.accurate_stream,
-        accurate_stream_message=result.accurate_stream_message,
     )
 
 
 def _format_feature_lines(result: CalibrationResult) -> str:
     """One short line per feature for a compact result summary."""
     lines: list[str] = []
-
-    if result.accurate_stream is True:
-        lines.append('Accurate Stream: yes')
-    elif result.accurate_stream is False:
-        lines.append('Accurate Stream: no')
-    elif result.accurate_stream_message:
-        lines.append('Accurate Stream: unknown')
 
     if result.caches_audio is True:
         lines.append('Audio cache: yes (defeat on)')

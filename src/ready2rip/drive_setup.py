@@ -22,10 +22,6 @@ from ready2rip.accuraterip import (
     load_cdda_wav_samples,
 )
 from ready2rip.disc.cache import detect_drive_cache
-from ready2rip.disc.features import (
-    FeatureTestResult,
-    test_accurate_stream,
-)
 from ready2rip.disc.probe import probe_disc
 from ready2rip.util import find_cdparanoia
 
@@ -51,9 +47,6 @@ class CalibrationResult:
     # Cache analysis (run during drive setup, persisted with the offset).
     caches_audio: bool | None = None
     cache_message: str = ''
-    # Accurate Stream (re-read consistency).
-    accurate_stream: bool | None = None
-    accurate_stream_message: str = ''
 
 
 def needs_drive_setup(store) -> bool:
@@ -78,7 +71,7 @@ def calibrate_drive_offset(
     """Analyze drive features, then find AccurateRip sample offset.
 
     Strategy (fast path first):
-      1. Quick Accurate Stream / cache probes (time-boxed).
+      1. Quick cache probe (time-boxed).
       2. Burst-extract one mid-length track.
       3. Try the most popular AccurateRip offsets first.
       4. Only then try a wider native/Python scan if time remains.
@@ -105,23 +98,9 @@ def calibrate_drive_offset(
             message=f'No audio CD found on {device}. Insert a commercial CD and try again.',
         )
 
-    # Feature analysis — keep these short so offset search gets most of the budget.
+    # Cache probe — keep short so offset search gets most of the budget.
     if not timed_out():
-        progress('Testing Accurate Stream…', 0.04)
-        astream = test_accurate_stream(
-            device,
-            info,
-            trials=1,
-            timeout=min(_FEATURE_TIMEOUT_SEC, max(5, int(remaining() - 30))),
-        )
-        progress(astream.message, 0.10)
-    else:
-        astream = FeatureTestResult(
-            supported=None, message='Accurate Stream skipped (time budget)'
-        )
-
-    if not timed_out():
-        progress('Analyzing drive audio cache…', 0.11)
+        progress('Analyzing drive audio cache…', 0.06)
         cache = detect_drive_cache(
             device,
             info,
@@ -139,8 +118,6 @@ def calibrate_drive_offset(
         return CalibrationResult(
             caches_audio=cache.caches,
             cache_message=cache.message,
-            accurate_stream=astream.supported,
-            accurate_stream_message=astream.message,
             **kwargs,
         )
 
@@ -525,10 +502,8 @@ def save_calibration(
     offset: int,
     caches_audio: bool | None = None,
     cache_message: str = '',
-    accurate_stream: bool | None = None,
-    accurate_stream_message: str = '',
 ) -> None:
-    """Persist sample offset and optional feature analysis for *device*.
+    """Persist sample offset and optional cache analysis for *device*.
 
     Values are written to GSettings (or the in-memory fallback) so they survive
     app restarts. When *caches_audio* is True, cache defeat is also enabled.
@@ -548,13 +523,6 @@ def save_calibration(
         if caches_audio:
             updates['defeat_audio_cache'] = True
 
-    if accurate_stream is not None:
-        updates['drive_accurate_stream_configured'] = True
-        updates['drive_accurate_stream'] = bool(accurate_stream)
-        updates['drive_accurate_stream_message'] = accurate_stream_message or (
-            'Accurate Stream: yes' if accurate_stream else 'Accurate Stream: no'
-        )
-
     store.update(**updates)
 
     try:
@@ -565,9 +533,8 @@ def save_calibration(
         pass
 
     log.info(
-        'Saved drive calibration for %s: offset=%s caches=%s astream=%s',
+        'Saved drive calibration for %s: offset=%s caches=%s',
         device,
         offset,
         caches_audio,
-        accurate_stream,
     )
