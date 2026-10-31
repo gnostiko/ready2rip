@@ -341,6 +341,7 @@ class AppSettings:
     # {disc_folder} expands to CD1, CD2, … only when total discs > 1.
     album_folder_template: str = '{album_artist}/{dated_album}/{disc_folder}'
     verify_accuraterip: bool = True
+    verify_ctdb: bool = True
     drive_sample_offset: int = 0
     drive_offset_configured: bool = False
     drive_offset_device: str = ''
@@ -518,6 +519,7 @@ class SettingsStore:
                     s.get_string('album-folder-template')
                 ),
                 verify_accuraterip=s.get_boolean('verify-accuraterip'),
+                verify_ctdb=_get_bool(s, 'verify-ctdb', True),
                 drive_sample_offset=s.get_int('drive-sample-offset'),
                 drive_offset_configured=s.get_boolean('drive-offset-configured'),
                 drive_offset_device=s.get_string('drive-offset-device'),
@@ -594,6 +596,7 @@ class SettingsStore:
             'filename_template': ('filename-template', 'string'),
             'album_folder_template': ('album-folder-template', 'string'),
             'verify_accuraterip': ('verify-accuraterip', 'bool'),
+            'verify_ctdb': ('verify-ctdb', 'bool'),
             'drive_sample_offset': ('drive-sample-offset', 'int'),
             'drive_offset_configured': ('drive-offset-configured', 'bool'),
             'drive_offset_device': ('drive-offset-device', 'string'),

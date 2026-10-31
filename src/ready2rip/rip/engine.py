@@ -13,6 +13,12 @@ from pathlib import Path
 
 from ready2rip.accuraterip import AccurateRipConfidence, AccurateRipResult, AccurateRipVerifier
 from ready2rip.artwork.fetch import ArtworkFetcher, ArtworkImage
+from ready2rip.ctdb import (
+    CtdbConfidence,
+    CtdbResult,
+    CtdbVerifier,
+    total_audio_samples,
+)
 from ready2rip.disc.cache import DriveCacheResult, flush_drive_cache
 from ready2rip.disc.data import extract_data_tracks
 from ready2rip.disc.gaps import enrich_pregaps
@@ -85,6 +91,7 @@ class RipResult:
     error: str | None = None
     cancelled: bool = False
     accuraterip: list[AccurateRipResult] = field(default_factory=list)
+    ctdb: list[CtdbResult] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     burst_tracks: list[int] = field(default_factory=list)
     log_path: Path | None = None
@@ -120,6 +127,7 @@ class RipJob:
     album_folder_template: str = '{album_artist}/{dated_album}'
     save_cover_file: bool = True
     verify_accuraterip: bool = True
+    verify_ctdb: bool = True
     sample_offset: int = 0
     disc_info: DiscInfo | None = None
     # Total tracks on the disc (for AR first/last sample skip), not just selected.
@@ -302,6 +310,7 @@ class RipEngine:
         n_audio = max(1, len(tracks))
         outputs: list[Path] = []
         ar_results: list[AccurateRipResult] = []
+        ctdb_results: list[CtdbResult] = []
         notes: list[str] = list(layout_notes)
         burst_tracks: list[int] = []
         test_copy_mismatches: list[int] = []
@@ -382,8 +391,8 @@ class RipEngine:
             if rip_log is not None:
                 rip_log.notes.append(f'Cover art saved before rip: {cover_path}')
 
-        # AccurateRip setup. Sample offset is applied at extract time via
-        # cdparanoia -O applies read offset; AR hashes the offset-corrected WAV as-is.
+        # AccurateRip / CTDB setup. Sample offset is applied at extract time via
+        # cdparanoia -O; both verifiers hash the offset-corrected WAV as-is.
         ar_verifier: AccurateRipVerifier | None = None
         if job.verify_accuraterip and job.disc_info is not None:
             ar_verifier = AccurateRipVerifier(sample_offset=0)
@@ -403,11 +412,31 @@ class RipEngine:
                 message=status,
             )
 
+        ctdb_verifier: CtdbVerifier | None = None
+        if job.verify_ctdb and job.disc_info is not None:
+            ctdb_verifier = CtdbVerifier()
+            ctdb_status = ctdb_verifier.prepare(job.disc_info)
+            notes.append(ctdb_status)
+            if rip_log is not None:
+                rip_log.ctdb_status = ctdb_status
+            report(
+                first_for_paths,
+                RipState.VERIFYING,
+                index=0.0,
+                sub=0.03,
+                message=ctdb_status,
+            )
+
         disc_track_count = job.disc_track_count or (
             job.disc_info.track_count if job.disc_info else (max(tracks) if tracks else 0)
         )
         if ar_verifier is not None:
             ar_verifier.set_total_tracks(disc_track_count)
+        if ctdb_verifier is not None and job.disc_info is not None:
+            ctdb_verifier.set_totals(
+                total_tracks=disc_track_count,
+                total_samples=total_audio_samples(job.disc_info),
+            )
 
         # Drive features: use results persisted from Drive setup.
         defeat_cache = job.defeat_audio_cache
@@ -515,6 +544,7 @@ class RipEngine:
                         defeat_cache=defeat_cache,
                         expected_sizes=expected_sizes,
                         ar_verifier=ar_verifier,
+                        ctdb_verifier=ctdb_verifier,
                         disc_track_count=disc_track_count,
                         unit_index=unit_index,
                         total_units=total_units,
@@ -522,6 +552,7 @@ class RipEngine:
                         outputs=outputs,
                         track_output_pairs=track_output_pairs,
                         ar_results=ar_results,
+                        ctdb_results=ctdb_results,
                         notes=notes,
                         burst_tracks=burst_tracks,
                         test_copy_mismatches=test_copy_mismatches,
@@ -539,6 +570,7 @@ class RipEngine:
                         outputs=outputs,
                         album_dir=album_dir,
                         ar_results=ar_results,
+                        ctdb_results=ctdb_results,
                         notes=notes,
                         burst_tracks=burst_tracks,
                         rip_log=rip_log,
@@ -649,6 +681,7 @@ class RipEngine:
                 outputs=outputs,
                 album_dir=album_dir,
                 ar_results=ar_results,
+                ctdb_results=ctdb_results,
                 notes=notes,
                 burst_tracks=burst_tracks,
                 rip_log=rip_log,
@@ -666,6 +699,7 @@ class RipEngine:
                 outputs=outputs,
                 album_dir=album_dir,
                 ar_results=ar_results,
+                ctdb_results=ctdb_results,
                 notes=notes,
                 burst_tracks=burst_tracks,
                 rip_log=rip_log,
@@ -676,6 +710,7 @@ class RipEngine:
             )
 
         ar_summary = _summarize_ar(ar_results)
+        ctdb_summary = _summarize_ctdb(ctdb_results)
         done_msg = f'Done — {len(outputs)} file(s)'
         if htoa_ripped:
             done_msg = f'{done_msg} (incl. HTOA)'
@@ -683,6 +718,8 @@ class RipEngine:
             done_msg = f'{done_msg} · {len(data_output_pairs)} data'
         if ar_summary:
             done_msg = f'{done_msg} · {ar_summary}'
+        if ctdb_summary:
+            done_msg = f'{done_msg} · {ctdb_summary}'
         if burst_tracks:
             done_msg = (
                 f'{done_msg} · burst fallback on '
@@ -703,6 +740,7 @@ class RipEngine:
             outputs=outputs,
             album_dir=album_dir,
             ar_results=ar_results,
+            ctdb_results=ctdb_results,
             notes=notes,
             burst_tracks=burst_tracks,
             rip_log=rip_log,
@@ -1351,6 +1389,7 @@ class RipEngine:
         defeat_cache: bool,
         expected_sizes: dict[int, int],
         ar_verifier: AccurateRipVerifier | None,
+        ctdb_verifier: CtdbVerifier | None,
         disc_track_count: int,
         unit_index: float,
         total_units: float,
@@ -1358,6 +1397,7 @@ class RipEngine:
         outputs: list[Path],
         track_output_pairs: list[tuple[int, Path]],
         ar_results: list[AccurateRipResult],
+        ctdb_results: list[CtdbResult],
         notes: list[str],
         burst_tracks: list[int],
         test_copy_mismatches: list[int],
@@ -1455,6 +1495,28 @@ class RipEngine:
                     index=idx,
                     sub=0.58,
                     message=ar.message,
+                    total_units=total_units,
+                )
+
+            if ctdb_verifier is not None:
+                report(
+                    track_no,
+                    RipState.VERIFYING,
+                    index=idx,
+                    sub=0.59,
+                    message=f'CTDB check track {track_no}…',
+                    total_units=total_units,
+                )
+                ctdb = ctdb_verifier.verify_wav(extracted.copy_wav, track_no)
+                ctdb_results.append(ctdb)
+                if log_entry is not None:
+                    log_entry.ctdb = ctdb
+                report(
+                    track_no,
+                    RipState.VERIFYING,
+                    index=idx,
+                    sub=0.60,
+                    message=ctdb.message,
                     total_units=total_units,
                 )
 
@@ -3117,6 +3179,7 @@ def _finish_result(
     cache_result: DriveCacheResult | None = None,
     test_copy_mismatches: list[int] | None = None,
     log_dir: Path | None = None,
+    ctdb_results: list[CtdbResult] | None = None,
 ) -> RipResult:
     """Build a RipResult; write the rip log beside the *first* encode only.
 
@@ -3145,6 +3208,7 @@ def _finish_result(
         error=error,
         cancelled=cancelled,
         accuraterip=ar_results,
+        ctdb=ctdb_results or [],
         notes=notes,
         burst_tracks=burst_tracks,
         log_path=log_path,
@@ -3166,6 +3230,24 @@ def _summarize_ar(results: list[AccurateRipResult]) -> str:
         1 for r in results if r.confidence == AccurateRipConfidence.NOT_IN_DB
     )
     parts = [f'AR {matches}/{len(results)} match']
+    if mismatches:
+        parts.append(f'{mismatches} mismatch')
+    if missing:
+        parts.append(f'{missing} not in DB')
+    return ', '.join(parts)
+
+
+def _summarize_ctdb(results: list[CtdbResult]) -> str:
+    if not results:
+        return ''
+    matches = sum(1 for r in results if r.confidence == CtdbConfidence.MATCH)
+    mismatches = sum(
+        1 for r in results if r.confidence == CtdbConfidence.MISMATCH
+    )
+    missing = sum(
+        1 for r in results if r.confidence == CtdbConfidence.NOT_IN_DB
+    )
+    parts = [f'CTDB {matches}/{len(results)} match']
     if mismatches:
         parts.append(f'{mismatches} mismatch')
     if missing:

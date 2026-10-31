@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ready2rip import config
 from ready2rip.accuraterip import AccurateRipConfidence, AccurateRipResult
+from ready2rip.ctdb import CtdbConfidence, CtdbResult
 from ready2rip.disc.probe import DiscInfo
 from ready2rip.metadata.providers import AlbumMetadata
 from ready2rip.paths import sanitize_component, track_meta_for
@@ -47,6 +48,7 @@ class TrackLogEntry:
     expected_wav_bytes: int = 0
     wav_bytes: int = 0
     accuraterip: AccurateRipResult | None = None
+    ctdb: CtdbResult | None = None
     status: str = 'OK'
     notes: list[str] = field(default_factory=list)
     # Chronological attempt history (retries, CRC mismatches, mode switches).
@@ -72,6 +74,7 @@ class RipLog:
         self.opus_bitrate: int = 160
         self.burst_fallback: bool = False
         self.verify_accuraterip: bool = True
+        self.verify_ctdb: bool = True
         self.apply_replaygain: bool = True
         self.embed_artwork: bool = True
         self.test_and_copy: bool = True
@@ -82,6 +85,7 @@ class RipLog:
         self.album: AlbumMetadata | None = None
         self.disc: DiscInfo | None = None
         self.ar_status: str = ''
+        self.ctdb_status: str = ''
         self.cache_message: str = ''
         self.drive_caches: bool | None = None
         self.accurate_stream: bool | None = None
@@ -111,6 +115,7 @@ class RipLog:
         self.opus_bitrate = job.opus_bitrate
         self.burst_fallback = job.burst_fallback
         self.verify_accuraterip = job.verify_accuraterip
+        self.verify_ctdb = getattr(job, 'verify_ctdb', True)
         self.apply_replaygain = job.apply_replaygain
         self.embed_artwork = job.embed_artwork
         self.test_and_copy = getattr(job, 'test_and_copy', True)
@@ -329,6 +334,9 @@ class RipLog:
         lines.append(f'AccurateRip                     : {"Yes" if self.verify_accuraterip else "No"}')
         if self.ar_status:
             lines.append(f'AccurateRip database            : {self.ar_status}')
+        lines.append(f'CTDB                            : {"Yes" if self.verify_ctdb else "No"}')
+        if self.ctdb_status:
+            lines.append(f'CTDB database                   : {self.ctdb_status}')
         lines.append(
             'Write CUE sheet                 : Yes '
             '(multi-file with INDEX 00 in previous, or image CUE; '
@@ -419,6 +427,13 @@ class RipLog:
                 lines.append(f'     {_format_ar_line(entry.accuraterip)}')
             elif not (entry.extract_mode or '').lower().startswith('raw'):
                 lines.append('     AccurateRip not checked')
+            if entry.ctdb is not None:
+                lines.append(f'     {_format_ctdb_line(entry.ctdb)}')
+            elif (
+                self.verify_ctdb
+                and not (entry.extract_mode or '').lower().startswith('raw')
+            ):
+                lines.append('     CTDB not checked')
             # Error correction block (skip duplicate quality line).
             for ec in entry.error_correction_lines:
                 if ec.lower().startswith('track quality'):
@@ -450,6 +465,23 @@ class RipLog:
             else:
                 lines.append(
                     f'{matches} of {len(ar_checked)} tracks accurately ripped'
+                )
+            lines.append('')
+
+        ctdb_checked = [t for t in self.tracks if t.ctdb is not None]
+        if ctdb_checked:
+            matches = sum(
+                1
+                for t in ctdb_checked
+                if t.ctdb and t.ctdb.confidence == CtdbConfidence.MATCH
+            )
+            if matches == len(ctdb_checked):
+                lines.append('All tracks verified by CTDB')
+            elif matches == 0:
+                lines.append('No tracks could be verified by CTDB')
+            else:
+                lines.append(
+                    f'{matches} of {len(ctdb_checked)} tracks verified by CTDB'
                 )
             lines.append('')
 
@@ -666,3 +698,21 @@ def _format_ar_line(ar: AccurateRipResult) -> str:
     if ar.confidence == AccurateRipConfidence.ERROR:
         return f'AccurateRip error: {ar.message}'
     return f'AccurateRip: {ar.message or "unknown"}'
+
+
+def _format_ctdb_line(ctdb: CtdbResult) -> str:
+    if ctdb.confidence == CtdbConfidence.MATCH:
+        return (
+            f'CTDB accurately ripped (confidence {ctdb.confidence_count})  '
+            f'[CRC {ctdb.crc}]'
+        )
+    if ctdb.confidence == CtdbConfidence.MISMATCH:
+        return (
+            f'CTDB cannot be verified as accurate '
+            f'(confidence {ctdb.confidence_count})  [CRC {ctdb.crc}]'
+        )
+    if ctdb.confidence == CtdbConfidence.NOT_IN_DB:
+        return 'Track not present in CUETools Database'
+    if ctdb.confidence == CtdbConfidence.ERROR:
+        return f'CTDB error: {ctdb.message}'
+    return f'CTDB: {ctdb.message or "unknown"}'

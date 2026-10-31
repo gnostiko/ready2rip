@@ -35,6 +35,14 @@ ignore = [
   "RUF012", # ClassVar for mutable defaults — noisy with dataclasses
 ]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+markers = [
+  "network: tests that hit the public internet (enable with --network)",
+]
+
 [tool.basedpyright]
 include = ["src"]
 exclude = ["**/__pycache__", "build", "build-appimage", "dist", ".tools"]

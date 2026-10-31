@@ -19,6 +19,7 @@ AccurateRip verification, modern metadata, and various tag options, utilizing GN
 |---------|-------------|
 | Secure rip | Full cdparanoia, retries, optional test & copy |
 | AccurateRip | Online CRC database check after extraction |
+| CTDB | CUETools Database track CRC verification |
 | Metadata | MusicBrainz + FreeDB-compatible (e.g. gnudb) |
 | Tags | mutagen - FLAC / MP3 / AAC (M4A) / Opus / WAV |
 | ReplayGain | Track + album loudness tags |
@@ -49,6 +50,7 @@ ready2rip aims for secure archival ripping on Linux via cdparanoia / libcdio-par
 | Sample offset | Applied at extract time (`-O`) when calibrated (read offset correction) |
 | Test and copy | Extract twice, compare CRC32; up to 3 secure retries on mismatch; defeat drive audio cache between passes; unmatched tracks fail the rip |
 | AccurateRip | Verifies the offset-corrected audio against the public AR database |
+| CTDB | Verifies track CRCs against the CUETools Database (complements AccurateRip) |
 | Error logging | Parses cdparanoia progress into quality / fixups / skips / suspicious positions |
 | Burst fallback | Off by default. Optional insecure `-Z` recovery after secure retries fail — noted in the log |
 
@@ -88,6 +90,7 @@ Copy Image forces a lossless container (FLAC or WAV; other formats fall back to 
 | **Pregap / HTOA** | On | Ignore ≤2s track-1 pause; longer non-silent pregap → track `00`; track 1 starts at index 01. Inter-track INDEX 00 is detected at rip start (cdrdao, else Q-subchannel) and written into the CUE |
 | **Data tracks** | On | Mixed-mode / CD-Extra data as raw 2352-byte `.bin` with test & copy when that option is on; listed in the CUE. Failed data extract fails the rip |
 | **AccurateRip** | On | Online CRC verification |
+| **CTDB** | On | CUETools Database track CRC verification |
 | **Burst fallback** | Off | Optional insecure `-Z` recovery after secure retries fail |
 | **Write rip log** | On | Detailed status log in the album folder |
 | **Write .cue file** | On | Multi-file CUE with INDEX 00 in the previous file, or image CUE when Copy Image is on |

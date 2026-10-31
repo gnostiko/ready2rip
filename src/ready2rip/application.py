@@ -150,9 +150,9 @@ class Application(Adw.Application):
             copyright='© 2026 gnostiko',
             license_type=Gtk.License.GPL_3_0,
             comments=(
-                'Secure CD ripper for Linux. Ready2Rip uses full cdparanoia '
+                'Secure CD ripper for Linux. Ready2Rip uses full cdparanoia, '
                 'secure extraction, test & copy, cache defeat, AccurateRip, '
-                'MusicBrainz metadata, ReplayGain, and album art.'
+                'CTDB, MusicBrainz metadata, ReplayGain, and album art.'
             ),
             website='https://github.com/gnostiko/ready2rip',
             issue_url='https://github.com/gnostiko/ready2rip/issues',

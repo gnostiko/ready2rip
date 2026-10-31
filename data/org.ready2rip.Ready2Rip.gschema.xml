@@ -186,6 +186,14 @@
       <description>After extraction, compare track CRCs to the AccurateRip database.</description>
     </key>
 
+    <key name="verify-ctdb" type="b">
+      <default>true</default>
+      <summary>Verify rips with CTDB</summary>
+      <description>
+        After extraction, compare track CRCs to the CUETools Database (CTDB).
+      </description>
+    </key>
+
     <key name="drive-sample-offset" type="i">
       <range min="-2000" max="2000"/>
       <default>0</default>

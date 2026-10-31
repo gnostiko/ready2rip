@@ -30,7 +30,7 @@ MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 # Cap for draining HTTPError bodies (ResourceWarning avoidance only).
 _HTTP_ERROR_DRAIN_BYTES = 64 * 1024
 
-# Host suffixes we intentionally fetch (metadata / art / AccurateRip).
+# Host suffixes we intentionally fetch (metadata / art / AccurateRip / CTDB).
 # Blocks DNS-rebinding SSRF to arbitrary public hosts.
 _FETCH_HOST_SUFFIXES = (
     'musicbrainz.org',
@@ -41,6 +41,8 @@ _FETCH_HOST_SUFFIXES = (
     'accuraterip.com',
     'gnudb.org',
     'gnudb.gnudb.org',
+    'cuetools.net',  # CTDB lookup + parity CDN
+    'cue.tools',  # CTDB HTTPS frontend
 )
 
 

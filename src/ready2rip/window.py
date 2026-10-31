@@ -23,6 +23,7 @@ from ready2rip.artwork.fetch import (
     ArtworkSourceOptions,
     apply_artwork_to_picture,
 )
+from ready2rip.ctdb import CtdbConfidence
 from ready2rip.disc.discid_util import DiscIdentifiers, identifiers_from_disc
 from ready2rip.disc.drive_info import DriveInfo, probe_drive
 from ready2rip.disc.drive_status import (
@@ -1067,6 +1068,14 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._ar_row.connect('notify::active', self._on_ar_toggled)
         self._add_option_row(self._ar_row, self.extraction_group)
 
+        self._ctdb_row = Adw.SwitchRow(
+            title='CTDB',
+            subtitle='Verify against the CUETools Database',
+            active=settings.verify_ctdb,
+        )
+        self._ctdb_row.connect('notify::active', self._on_ctdb_toggled)
+        self._add_option_row(self._ctdb_row, self.extraction_group)
+
         self._burst_row = Adw.SwitchRow(
             title='Burst Fallback',
             subtitle='Allow insecure -Z recovery after secure retries fail',
@@ -1228,6 +1237,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             (self._data_tracks_row, self._on_data_tracks_toggled),
             (self._copy_image_row, self._on_copy_image_toggled),
             (self._ar_row, self._on_ar_toggled),
+            (self._ctdb_row, self._on_ctdb_toggled),
             (self._burst_row, self._on_burst_toggled),
             (self._log_row, self._on_log_toggled),
             (self._cue_row, self._on_cue_toggled),
@@ -1280,6 +1290,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._data_tracks_row.set_active(settings.rip_data_tracks)
             self._copy_image_row.set_active(settings.copy_image)
             self._ar_row.set_active(settings.verify_accuraterip)
+            self._ctdb_row.set_active(settings.verify_ctdb)
             self._burst_row.set_active(settings.burst_fallback)
             self._log_row.set_active(settings.write_rip_log)
             self._cue_row.set_active(settings.write_cue_file)
@@ -1613,6 +1624,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _on_ar_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(verify_accuraterip=row.get_active())
 
+    def _on_ctdb_toggled(self, row: Adw.SwitchRow, *_args) -> None:
+        self.store.update(verify_ctdb=row.get_active())
+
     def _on_burst_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(burst_fallback=row.get_active())
 
@@ -1872,6 +1886,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             # Always write full-size cover into the album folder when we have art.
             save_cover_file=folder_art is not None,
             verify_accuraterip=settings.verify_accuraterip,
+            verify_ctdb=settings.verify_ctdb,
             sample_offset=settings.drive_sample_offset,
             disc_info=self._disc,
             disc_track_count=self._disc.track_count,
@@ -2096,6 +2111,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 if r.confidence == AccurateRipConfidence.MATCH
             )
             ar_bits.append(f'AR {matches}/{len(result.accuraterip)}')
+        if result.ctdb:
+            matches = sum(
+                1 for r in result.ctdb if r.confidence == CtdbConfidence.MATCH
+            )
+            ar_bits.append(f'CTDB {matches}/{len(result.ctdb)}')
         if result.burst_tracks:
             ar_bits.append(f'burst on {len(result.burst_tracks)}')
         if result.log_path is not None:
@@ -2109,9 +2129,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._set_progress_style('success')
         self._hide_progress_panel(delay_ms=7000)
         self._toast(f'Rip complete · {n} file(s)', timeout=4)
-        # Show per-track AR outcome in the track list subtitles when available.
-        if result.accuraterip:
-            self._apply_ar_results_to_rows(result.accuraterip)
+        # Show per-track AR/CTDB outcome in the track list subtitles when available.
+        if result.accuraterip or result.ctdb:
+            self._apply_verify_results_to_rows(
+                ar_results=result.accuraterip,
+                ctdb_results=result.ctdb,
+            )
 
         if self.store.get().auto_eject:
             GLib.timeout_add(800, self._do_auto_eject)
@@ -3297,13 +3320,26 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         else:
             self._toast('All tracks already have an artist')
 
-    def _apply_ar_results_to_rows(self, results) -> None:
-        by_num = {r.track_number: r for r in results}
-        for num, ar in by_num.items():
+    def _apply_verify_results_to_rows(
+        self,
+        *,
+        ar_results=None,
+        ctdb_results=None,
+    ) -> None:
+        ar_by = {r.track_number: r for r in (ar_results or [])}
+        ctdb_by = {r.track_number: r for r in (ctdb_results or [])}
+        for num in sorted(set(ar_by) | set(ctdb_by)):
             label = self._track_status_labels.get(num)
             if label is None:
                 continue
-            msg = ar.message or ''
+            parts: list[str] = []
+            ar = ar_by.get(num)
+            if ar is not None and ar.message:
+                parts.append(ar.message)
+            ctdb = ctdb_by.get(num)
+            if ctdb is not None and ctdb.message:
+                parts.append(ctdb.message)
+            msg = ' · '.join(parts)
             label.set_text(msg)
             label.set_tooltip_text(msg)
             label.set_visible(bool(msg))
