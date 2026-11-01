@@ -9,6 +9,9 @@ gi.require_version('Gtk', '4.0')
 
 from gi.repository import Gtk
 
+# Adwaita ease-out cubic (matches audio2go flash / banner motion).
+_EASE = 'cubic-bezier(0.33, 1, 0.68, 1)'
+
 
 def window_css(*, cover_size: int) -> str:
     """Compact app CSS aligned with Adwaita spacing."""
@@ -54,19 +57,19 @@ image.ready2rip-cover-placeholder {{
 
 .ready2rip-rip-bar {{
     background-color: @window_bg_color;
+    min-height: 48px;
 }}
 
-progressbar.ready2rip-progress,
-progressbar.ready2rip-progress > trough,
-progressbar.ready2rip-progress > trough > progress {{
-    min-height: 4px;
-    border-radius: 9999px;
+.ready2rip-flash-veil {{
+    background-color: @success_bg_color;
+    opacity: 0;
+    transition: opacity 200ms {_EASE};
 }}
-progressbar.ready2rip-progress.success > trough > progress {{
-    background-color: @success_color;
+.ready2rip-flash-veil.error {{
+    background-color: @error_bg_color;
 }}
-progressbar.ready2rip-progress.error > trough > progress {{
-    background-color: @error_color;
+.ready2rip-flash-veil.visible {{
+    opacity: 0.34;
 }}
 
 button.ready2rip-setup-icon {{
@@ -155,6 +158,25 @@ scale.ready2rip-seek {{
 }}
 entry.ready2rip-track-entry {{
     min-height: 34px;
+}}
+"""
+
+
+def banner_fill_css(fraction: float) -> str:
+    """GNOME success-green fill for the Ripping disc banner."""
+    percent = max(0.0, min(100.0, fraction * 100.0))
+    if percent <= 0.05:
+        return '.ready2rip-rip-bar { background-image: none; }'
+    edge = max(0.0, percent - 2.5)
+    return f"""
+.ready2rip-rip-bar {{
+    background-image: linear-gradient(
+        to right,
+        alpha(@success_bg_color, 0.72) 0%,
+        alpha(@success_bg_color, 0.72) {edge:.1f}%,
+        alpha(@success_bg_color, 0.28) {percent:.1f}%,
+        transparent {percent:.1f}%
+    );
 }}
 """
 

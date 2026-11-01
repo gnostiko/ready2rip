@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -65,7 +66,7 @@ from ready2rip.setup_dialog import DriveSetupDialog
 from ready2rip.tags.artists import normalize_artists
 from ready2rip.theme import ChromeStyleController
 from ready2rip.util import normalize_release_date, parse_disc_field, validate_device_path
-from ready2rip.window_styles import install_window_styles
+from ready2rip.window_styles import banner_fill_css, install_window_styles
 
 log = logging.getLogger(__name__)
 
@@ -108,12 +109,12 @@ def ensure_adw_template_types() -> None:
     _adw_types_ensured = True
 
 
-_RIP_HEADINGS = {
-    RipState.REPLAYGAIN: 'ReplayGain',
-    RipState.ENCODING: 'Encoding',
-    RipState.VERIFYING: 'Verifying',
-    RipState.PREPARING: 'Preparing',
-    RipState.RIPPING: 'Ripping',
+_RIP_STATUS_FALLBACK = {
+    RipState.REPLAYGAIN: 'Applying ReplayGain…',
+    RipState.ENCODING: 'Encoding…',
+    RipState.VERIFYING: 'Verifying…',
+    RipState.PREPARING: 'Preparing…',
+    RipState.RIPPING: 'Extracting…',
 }
 
 
@@ -142,6 +143,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     __gtype_name__ = 'Ready2RipWindow'
 
     toast_overlay = Gtk.Template.Child()
+    window_overlay = Gtk.Template.Child()
+    flash_veil = Gtk.Template.Child()
     toolbar_view = Gtk.Template.Child()
     window_title = Gtk.Template.Child()
     menu_button = Gtk.Template.Child()
@@ -172,10 +175,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     player_duration_label = Gtk.Template.Child()
     lookup_progress = Gtk.Template.Child()
     rip_revealer = Gtk.Template.Child()
+    rip_banner = Gtk.Template.Child()
     rip_title_label = Gtk.Template.Child()
     rip_status_label = Gtk.Template.Child()
-    rip_progress = Gtk.Template.Child()
-    rip_percent_label = Gtk.Template.Child()
 
     # Cover left of transport — fits Preferences clamp beside bubbles.
     _COVER_SIZE = 240
@@ -240,6 +242,13 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._poll_in_flight = False
         self._pending_progress: RipProgress | None = None
         self._progress_idle_id: int | None = None
+        self._banner_shown = 0.0
+        self._banner_target = 0.0
+        self._banner_tick_id: int | None = None
+        self._banner_last_us = 0
+        self._banner_hold = False
+        self._banner_provider = Gtk.CssProvider()
+        self._flash_id: int | None = None
         self.store = store if store is not None else SettingsStore()
         self._device = self.store.get().device
         self._player = DiscPlayer()
@@ -442,6 +451,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         # a half-written log that looked like a crash. Cancel cleanly first.
         if self._ripping and self._rip_engine is not None:
             self._rip_engine.cancel()
+        if self._flash_id is not None:
+            GLib.source_remove(self._flash_id)
+            self._flash_id = None
+        if self._banner_tick_id is not None:
+            self.remove_tick_callback(self._banner_tick_id)
+            self._banner_tick_id = None
         return False
 
     def _on_play_toggle(self, *_args) -> None:
@@ -775,8 +790,17 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self.cover_frame.add_controller(motion)
 
     def _setup_progress_styles(self) -> None:
-        """Install cover / track / progress CSS."""
+        """Install cover / track / progress CSS and wire the rip banner fill."""
         install_window_styles(self.get_display(), cover_size=self._COVER_SIZE)
+        self.flash_veil.set_halign(Gtk.Align.FILL)
+        self.flash_veil.set_valign(Gtk.Align.FILL)
+        self.flash_veil.set_hexpand(True)
+        self.flash_veil.set_vexpand(True)
+        self.rip_banner.get_style_context().add_provider(
+            self._banner_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 20,
+        )
+        self._apply_banner_fill()
 
     def _setup_chrome_style(self) -> None:
         """Flat custom chrome: pure black dark, warm grey light."""
@@ -1818,7 +1842,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if self._ripping:
             if self._rip_engine is not None:
                 self._rip_engine.cancel()
-                self.rip_title_label.set_label('Cancelling')
+                self.rip_title_label.set_label('Ripping disc')
                 self.rip_status_label.set_label('Stopping extraction…')
             return
         self._start_rip()
@@ -1849,10 +1873,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         embed_art = self._artwork_embed or self._artwork
         need_art = settings.embed_artwork or settings.fetch_artwork
         if need_art and folder_art is None and self._album is not None:
-            self._show_progress_panel(title='Preparing')
+            self._show_progress_panel(title='Ripping disc')
             self.rip_status_label.set_label('Fetching artwork…')
             self._set_progress_fraction(0.0)
-            self._set_progress_style(None)
             try:
                 full = ArtworkFetcher().fetch_best(
                     self._album,
@@ -1927,16 +1950,15 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         targets = job.encode_targets or [(job.encode_format, job.output_directory)]
         fmt = ' + '.join(t[0].upper() for t in targets)
         n = len(job.track_numbers)
+        self.rip_title_label.set_label('Ripping disc')
         if job.copy_image:
-            self.rip_title_label.set_label('Copy Image')
             self.rip_status_label.set_label(f'Starting disc image ({fmt})…')
         else:
-            self.rip_title_label.set_label(
-                f'Ripping {n} track{"s" if n != 1 else ""}'
+            self.rip_status_label.set_label(
+                f'Starting {fmt} · {n} track{"s" if n != 1 else ""}…'
             )
-            self.rip_status_label.set_label(f'Starting {fmt} extraction…')
-        self._set_progress_fraction(0.0)
-        self._set_progress_style(None)
+        self._banner_hold = False
+        self._set_progress_fraction(0.02)
 
         engine = self._rip_engine
 
@@ -1960,21 +1982,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._progress_hide_id = None
 
     def _set_progress_fraction(self, fraction: float) -> None:
-        frac = max(0.0, min(1.0, fraction))
-        self.rip_progress.set_fraction(frac)
-        self.rip_percent_label.set_label(f'{int(frac * 100)}%')
-
-    def _set_progress_style(self, state: str | None) -> None:
-        """state: None | 'success' | 'error'"""
-        self.rip_progress.remove_css_class('success')
-        self.rip_progress.remove_css_class('error')
-        if state:
-            self.rip_progress.add_css_class(state)
+        self._set_banner_target(max(0.0, min(1.0, fraction)))
 
     def _show_progress_panel(self, *, title: str | None = None) -> None:
         self._cancel_progress_hide()
-        if title:
-            self.rip_title_label.set_label(title)
+        self._banner_hold = False
+        self.rip_title_label.set_label(title or 'Ripping disc')
         # Reveal the ToolbarView bottom bar first so content slides up cleanly
         # without a pre-existing separator line sitting at the window edge.
         self.toolbar_view.set_reveal_bottom_bars(True)
@@ -1995,15 +2008,100 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
         def _hide() -> bool:
             self._progress_hide_id = None
-            if not self._ripping:
+            if not self._ripping and not self._banner_hold:
                 _hide_now()
             return GLib.SOURCE_REMOVE
 
         self._progress_hide_id = GLib.timeout_add(delay_ms, _hide)
 
     def _finish_hide_bottom_bar(self) -> bool:
-        if not self._ripping and not self.rip_revealer.get_reveal_child():
+        if (
+            not self._ripping
+            and not self._banner_hold
+            and not self.rip_revealer.get_reveal_child()
+        ):
             self.toolbar_view.set_reveal_bottom_bars(False)
+            self._reset_banner_fill()
+        return GLib.SOURCE_REMOVE
+
+    def _set_banner_target(self, fraction: float) -> None:
+        self._banner_target = max(0.0, min(1.0, fraction))
+        self._ensure_banner_tick()
+
+    def _ensure_banner_tick(self) -> None:
+        if self._banner_tick_id is not None:
+            return
+        self._banner_last_us = 0
+        self._banner_tick_id = self.add_tick_callback(self._on_banner_tick)
+
+    def _on_banner_tick(self, _widget, clock) -> bool:
+        frame = clock.get_frame_time()
+        if self._banner_last_us == 0:
+            self._banner_last_us = frame
+            self._apply_banner_fill()
+            return GLib.SOURCE_CONTINUE
+        dt = min(0.05, (frame - self._banner_last_us) / 1_000_000)
+        self._banner_last_us = frame
+        t = 1.0 - math.exp(-dt / 0.16)
+        self._banner_shown += (self._banner_target - self._banner_shown) * t
+        if abs(self._banner_target - self._banner_shown) < 0.003:
+            self._banner_shown = self._banner_target
+            self._apply_banner_fill()
+            self._banner_tick_id = None
+            return GLib.SOURCE_REMOVE
+        self._apply_banner_fill()
+        return GLib.SOURCE_CONTINUE
+
+    def _apply_banner_fill(self) -> None:
+        self._banner_provider.load_from_string(banner_fill_css(self._banner_shown))
+
+    def _reset_banner_fill(self) -> bool:
+        if self._ripping or self._banner_hold:
+            return GLib.SOURCE_REMOVE
+        self._banner_shown = 0.0
+        self._banner_target = 0.0
+        if self._banner_tick_id is not None:
+            self.remove_tick_callback(self._banner_tick_id)
+            self._banner_tick_id = None
+        self._apply_banner_fill()
+        return GLib.SOURCE_REMOVE
+
+    def _flash(self, kind: str = 'success') -> None:
+        """Brief full-window flash: green on success, red on cancel/error."""
+        if self._flash_id is not None:
+            GLib.source_remove(self._flash_id)
+        if kind == 'error':
+            self.flash_veil.add_css_class('error')
+        else:
+            self.flash_veil.remove_css_class('error')
+        self.flash_veil.add_css_class('visible')
+        self._flash_id = GLib.timeout_add(350, self._hide_flash)
+
+    def _flash_success(self) -> None:
+        self._flash('success')
+
+    def _flash_error(self) -> None:
+        self._flash('error')
+
+    def _hide_flash(self) -> bool:
+        self._flash_id = None
+        self.flash_veil.remove_css_class('visible')
+        # Drop error tint after the fade so the next success flash stays green.
+        GLib.timeout_add(220, self._clear_flash_error_class)
+        return GLib.SOURCE_REMOVE
+
+    def _clear_flash_error_class(self) -> bool:
+        if 'visible' not in self.flash_veil.get_css_classes():
+            self.flash_veil.remove_css_class('error')
+        return GLib.SOURCE_REMOVE
+
+    def _release_banner(self) -> bool:
+        if self._ripping:
+            self._banner_hold = False
+            return GLib.SOURCE_REMOVE
+        self._banner_hold = False
+        self._hide_progress_panel()
+        GLib.timeout_add(220, self._reset_banner_fill)
         return GLib.SOURCE_REMOVE
 
     def _set_lookup_controls_sensitive(self, sensitive: bool) -> None:
@@ -2022,7 +2120,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _set_ripping_ui(self, active: bool) -> None:
         if active:
             self._stop_playback()
-            self._show_progress_panel(title='Ripping')
+            self._show_progress_panel(title='Ripping disc')
         self.eject_button.set_sensitive(not active)
         self._set_action_enabled('eject', not active)
         self._set_lookup_controls_sensitive(not active and self._disc is not None)
@@ -2058,12 +2156,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _on_rip_progress(self, progress: RipProgress) -> None:
         if not self._ripping:
             return
+        self.rip_title_label.set_label('Ripping disc')
         self._set_progress_fraction(progress.fraction)
         if progress.message:
             self.rip_status_label.set_label(progress.message)
-        heading = _RIP_HEADINGS.get(progress.state)
-        if heading is not None:
-            self.rip_title_label.set_label(heading)
+        elif (fallback := _RIP_STATUS_FALLBACK.get(progress.state)) is not None:
+            self.rip_status_label.set_label(fallback)
 
     def _on_rip_finished(self, result: RipResult) -> None:
         self._ripping = False
@@ -2071,18 +2169,20 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._set_ripping_ui(False)
 
         if result.cancelled:
-            self.rip_title_label.set_label('Cancelled')
+            self.rip_title_label.set_label('Ripping disc')
             self.rip_status_label.set_label('Rip cancelled')
-            self._set_progress_style(None)
+            self._set_progress_fraction(0.0)
+            self._flash_error()
             self._hide_progress_panel(delay_ms=2500)
             self._toast('Rip cancelled')
             return
 
         if not result.success:
-            self._show_progress_panel(title='Rip failed')
+            self.rip_title_label.set_label('Ripping disc')
             self.rip_status_label.set_label(result.error or 'Rip failed')
             self._set_progress_fraction(0.0)
-            self._set_progress_style('error')
+            self._show_progress_panel(title='Ripping disc')
+            self._flash_error()
             self._hide_progress_panel(delay_ms=8000)
             self._toast(result.error or 'Rip failed')
             return
@@ -2122,11 +2222,14 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         detail = f'{n} file{"s" if n != 1 else ""} saved to {dest}'
         if ar_bits:
             detail = f'{detail} · {", ".join(ar_bits)}'
-        self._show_progress_panel(title='Rip complete')
+        self.rip_title_label.set_label('Ripping disc')
         self.rip_status_label.set_label(detail)
         self._set_progress_fraction(1.0)
-        self._set_progress_style('success')
-        self._hide_progress_panel(delay_ms=7000)
+        self._flash_success()
+        self._banner_hold = True
+        self.toolbar_view.set_reveal_bottom_bars(True)
+        self.rip_revealer.set_reveal_child(True)
+        GLib.timeout_add(560, self._release_banner)
         self._toast(f'Rip complete · {n} file(s)', timeout=4)
         # Show per-track AR/CTDB outcome in the track list subtitles when available.
         if result.accuraterip or result.ctdb:
