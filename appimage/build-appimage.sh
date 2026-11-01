@@ -192,12 +192,13 @@ REQUIRED_TYPELIBS=(
   Pango-1.0 PangoCairo-1.0
   cairo-1.0 freetype2-2.0 fontconfig-2.0
   xlib-2.0
-  GIRepository-2.0 GIRepository-3.0
   # In-app CD playback (DiscPlayer)
   Gst-1.0 GstBase-1.0 GstAudio-1.0
 )
 # Optional but useful on Wayland/X11 hosts
 OPTIONAL_TYPELIBS=(
+  # Ubuntu 22.04 ships GIRepository-2.0; newer distros often have 3.0 only.
+  GIRepository-2.0 GIRepository-3.0
   GdkWayland-4.0 GdkX11-4.0
   Soup-3.0 Soup-2.4 Json-1.0
   GstPbutils-1.0 GstTag-1.0 GstApp-1.0
@@ -231,6 +232,12 @@ done
 for t in "${OPTIONAL_TYPELIBS[@]}"; do
   copy_typelib "$t" 0 || true
 done
+# Need at least one GIRepository typelib (2.0 on Jammy, 3.0 on newer hosts).
+if [ ! -f "${APPDIR}/usr/lib/girepository-1.0/GIRepository-2.0.typelib" ] \
+  && [ ! -f "${APPDIR}/usr/lib/girepository-1.0/GIRepository-3.0.typelib" ]; then
+  echo "error: missing GIRepository-2.0/3.0.typelib (install gobject-introspection)" >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # GStreamer CD playback plugins (cdio / cdparanoia + audio sink chain)
