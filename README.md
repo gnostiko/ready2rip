@@ -19,7 +19,7 @@ AccurateRip verification, modern metadata, and various tag options, utilizing GN
 |---------|-------------|
 | Secure rip | Full cdparanoia, retries, optional test & copy |
 | AccurateRip | Online CRC database check after extraction |
-| CTDB | CUETools Database track CRC verification |
+| CTDB | CUETools Database verification; optional confirm / new-parity submit |
 | Metadata | MusicBrainz + FreeDB-compatible (e.g. gnudb) |
 | Tags | mutagen - FLAC / MP3 / AAC (M4A) / Opus / WAV |
 | ReplayGain | Track + album loudness tags |
@@ -91,6 +91,7 @@ Copy Image forces a lossless container (FLAC or WAV; other formats fall back to 
 | **Data tracks** | On | Mixed-mode / CD-Extra data as raw 2352-byte `.bin` with test & copy when that option is on; listed in the CUE. Failed data extract fails the rip |
 | **AccurateRip** | On | Online CRC verification |
 | **CTDB** | On | CUETools Database track CRC verification |
+| **Submit to CTDB** | Off | Confirm a full-disc match, or submit new parity when unmatched and quality is 100 |
 | **Burst fallback** | Off | Optional insecure `-Z` recovery after secure retries fail |
 | **Write rip log** | On | Detailed status log in the album folder |
 | **Write .cue file** | On | Multi-file CUE with INDEX 00 in the previous file, or image CUE when Copy Image is on |
@@ -230,8 +231,8 @@ Check your system glibc with `ldd --version`. If the AppImage fails with `GLIBC_
 2. Make it executable and start it:
 
 ```bash
-chmod +x ready2rip-0.4.6-x86_64.AppImage
-./ready2rip-0.4.6-x86_64.AppImage
+chmod +x ready2rip-0.4.7-x86_64.AppImage
+./ready2rip-0.4.7-x86_64.AppImage
 ```
 
 ### Recommended: manage with Gear Lever
