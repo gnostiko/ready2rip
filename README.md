@@ -25,7 +25,7 @@ AccurateRip verification, modern metadata, and various tag options, utilizing GN
 | ReplayGain | Track + album loudness tags |
 | Artwork | Cover Art Archive and iTunes, with optional embed sizes |
 | Logs & CUE | Detailed rip log and multi-file / image CUE sheets (INDEX 00 pregaps, mixed-mode data) |
-| Drive setup | Sample offset, cache probe |
+| Drive setup | Sample offset |
 
 ---
 
@@ -33,7 +33,7 @@ AccurateRip verification, modern metadata, and various tag options, utilizing GN
 
 1. **Install / run** the AppImage (recommended: with [Gear Lever](https://flathub.org/apps/it.mijorus.gearlever) - see [Run the AppImage](#run-the-appimage)).
 2. **Insert an audio CD.** ready2rip detects the disc, reads the TOC, and shows tracks.
-3. **Drive setup** (first run, or when you change drives): calibrate **sample offset**, measure cache support.
+3. **Drive setup** (first run, or when you change drives): calibrate **sample offset**.
 4. **Metadata** (optional): auto-lookup when a disc is detected, or open **Lookup** → **By disc ID** and pick a release. If the wrong album is matched, use **Lookup** → **MusicBrainz link…** and paste a `musicbrainz.org/release/…` URL (or release UUID). Edit album/track fields if needed. Cover art can be fetched, chosen from disk, or cleared.
 5. **Settings**: choose encoder, test & copy, CUE/log, Copy Image, HTOA, etc. Defaults already match a secure archival setup.
 6. Press **Rip CD**. Progress appears in the bottom panel (status line shows track detail).
@@ -102,7 +102,7 @@ Copy Image forces a lossless container (FLAC or WAV; other formats fall back to 
 | Option | Notes |
 |--------|--------|
 | **Sample offset** | From Drive setup or [driveoffsets.htm](http://www.accuraterip.com/driveoffsets.htm) |
-| **Drive setup** | Offset scan, audio cache |
+| **Drive setup** | Offset scan |
 
 ### Metadata & art
 

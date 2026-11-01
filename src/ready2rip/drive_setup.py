@@ -21,7 +21,6 @@ from ready2rip.accuraterip import (
     fetch_database,
     load_cdda_wav_samples,
 )
-from ready2rip.disc.cache import detect_drive_cache
 from ready2rip.disc.probe import probe_disc
 from ready2rip.util import find_cdparanoia
 
@@ -29,11 +28,10 @@ log = logging.getLogger(__name__)
 
 ProgressCb = Callable[[str, float], None]  # message, fraction 0..1
 
-# Hard cap for the entire calibration session (feature tests + extract + scan).
+# Hard cap for the entire calibration session (extract + offset scan).
 CALIBRATION_BUDGET_SEC = 180.0
 # Leave a little room for saving results after the deadline check.
 _EXTRACT_TIMEOUT_SEC = 90
-_FEATURE_TIMEOUT_SEC = 25
 
 
 @dataclass
@@ -44,9 +42,6 @@ class CalibrationResult:
     track_number: int | None = None
     confidence: int = 0
     disc_id: str = ''
-    # Cache analysis (run during drive setup, persisted with the offset).
-    caches_audio: bool | None = None
-    cache_message: str = ''
 
 
 def needs_drive_setup(store) -> bool:
@@ -68,13 +63,12 @@ def calibrate_drive_offset(
     *,
     on_progress: ProgressCb | None = None,
 ) -> CalibrationResult:
-    """Analyze drive features, then find AccurateRip sample offset.
+    """Find AccurateRip sample offset for *device*.
 
     Strategy (fast path first):
-      1. Quick cache probe (time-boxed).
-      2. Burst-extract one mid-length track.
-      3. Try the most popular AccurateRip offsets first.
-      4. Only then try a wider native/Python scan if time remains.
+      1. Burst-extract one mid-length track.
+      2. Try the most popular AccurateRip offsets first.
+      3. Only then try a wider native/Python scan if time remains.
 
     The whole procedure is capped at :data:`CALIBRATION_BUDGET_SEC` (3 minutes).
     """
@@ -98,49 +92,26 @@ def calibrate_drive_offset(
             message=f'No audio CD found on {device}. Insert a commercial CD and try again.',
         )
 
-    # Cache probe — keep short so offset search gets most of the budget.
-    if not timed_out():
-        progress('Analyzing drive audio cache…', 0.06)
-        cache = detect_drive_cache(
-            device,
-            info,
-            timeout=min(_FEATURE_TIMEOUT_SEC, max(5, int(remaining() - 20))),
-        )
-        progress(cache.message, 0.16)
-    else:
-        from ready2rip.disc.cache import DriveCacheResult
-
-        cache = DriveCacheResult(
-            caches=None, message='Cache test skipped (time budget)'
-        )
-
-    def with_cache(**kwargs) -> CalibrationResult:
-        return CalibrationResult(
-            caches_audio=cache.caches,
-            cache_message=cache.message,
-            **kwargs,
-        )
-
     if timed_out():
-        return with_cache(
+        return CalibrationResult(
             success=False,
             message=(
-                f'Calibration timed out after {int(CALIBRATION_BUDGET_SEC)}s '
-                'during drive feature tests. Try again or enter offset manually.'
+                f'Calibration timed out after {int(CALIBRATION_BUDGET_SEC)}s. '
+                'Try again or enter offset manually.'
             ),
         )
 
     ids = disc_ids_from_info(info)
     if ids is None:
-        return with_cache(
+        return CalibrationResult(
             success=False,
             message='Could not compute AccurateRip disc IDs for this disc.',
         )
 
-    progress(f'Looking up AccurateRip database ({ids.disc_id_string})…', 0.18)
+    progress(f'Looking up AccurateRip database ({ids.disc_id_string})…', 0.10)
     db = fetch_database(ids)
     if db is None:
-        return with_cache(
+        return CalibrationResult(
             success=False,
             message=(
                 'This disc is not in the AccurateRip database. '
@@ -151,7 +122,7 @@ def calibrate_drive_offset(
 
     cdparanoia = find_cdparanoia()
     if cdparanoia is None:
-        return with_cache(success=False, message='cdparanoia not found')
+        return CalibrationResult(success=False, message='cdparanoia not found')
 
     # One mid-length track is enough for offset detection; full multi-track
     # re-rips made calibration last tens of minutes.
@@ -237,7 +208,7 @@ def calibrate_drive_offset(
                     f'Detected sample offset {off} '
                     f'(AccurateRip match on track {track.number}, confidence {conf})'
                 )
-                return with_cache(
+                return CalibrationResult(
                     success=True,
                     offset=off,
                     confidence=conf,
@@ -247,7 +218,7 @@ def calibrate_drive_offset(
                 )
 
     if timed_out():
-        return with_cache(
+        return CalibrationResult(
             success=False,
             message=(
                 f'Calibration stopped after {int(CALIBRATION_BUDGET_SEC)}s without a match. '
@@ -258,7 +229,7 @@ def calibrate_drive_offset(
             track_number=last_track_num,
         )
 
-    return with_cache(
+    return CalibrationResult(
         success=False,
         message=(
             'Could not find a matching AccurateRip offset for this disc/drive. '
@@ -500,30 +471,18 @@ def save_calibration(
     *,
     device: str,
     offset: int,
-    caches_audio: bool | None = None,
-    cache_message: str = '',
 ) -> None:
-    """Persist sample offset and optional cache analysis for *device*.
+    """Persist sample offset for *device*.
 
     Values are written to GSettings (or the in-memory fallback) so they survive
-    app restarts. When *caches_audio* is True, cache defeat is also enabled.
+    app restarts.
     """
-    updates: dict = {
-        'drive_sample_offset': int(offset),
-        'drive_offset_configured': True,
-        'drive_offset_device': device,
-        'device': device,
-    }
-    if caches_audio is not None:
-        updates['drive_cache_configured'] = True
-        updates['drive_caches_audio'] = bool(caches_audio)
-        updates['drive_cache_message'] = cache_message or (
-            'Drive caches audio' if caches_audio else 'No clear audio cache'
-        )
-        if caches_audio:
-            updates['defeat_audio_cache'] = True
-
-    store.update(**updates)
+    store.update(
+        drive_sample_offset=int(offset),
+        drive_offset_configured=True,
+        drive_offset_device=device,
+        device=device,
+    )
 
     try:
         from gi.repository import Gio
@@ -532,9 +491,4 @@ def save_calibration(
     except Exception:
         pass
 
-    log.info(
-        'Saved drive calibration for %s: offset=%s caches=%s',
-        device,
-        offset,
-        caches_audio,
-    )
+    log.info('Saved drive calibration for %s: offset=%s', device, offset)

@@ -19,7 +19,7 @@ from ready2rip.ctdb import (
     CtdbVerifier,
     total_audio_samples,
 )
-from ready2rip.disc.cache import DriveCacheResult, flush_drive_cache
+from ready2rip.disc.cache import flush_drive_cache
 from ready2rip.disc.data import extract_data_tracks
 from ready2rip.disc.gaps import enrich_pregaps
 from ready2rip.disc.htoa import (
@@ -97,7 +97,6 @@ class RipResult:
     log_path: Path | None = None
     cover_path: Path | None = None
     htoa_ripped: bool = False
-    cache_result: DriveCacheResult | None = None
     test_copy_mismatches: list[int] = field(default_factory=list)
 
 
@@ -146,10 +145,7 @@ class RipJob:
     # After retries still fail, that track is recovered once in burst mode
     # only when burst_fallback is enabled — otherwise the rip fails.
     test_copy_max_retries: int = SECURE_TEST_COPY_RETRIES
-    # Persisted from Drive setup (None = unknown / not measured).
-    drive_caches_audio: bool | None = None
-    drive_cache_message: str = ''
-    # Seek/read elsewhere between test and copy when cache is present (or always).
+    # Always seek/read elsewhere between test and copy to defeat drive audio cache.
     defeat_audio_cache: bool = True
     # Handle extended track-1 pregap as HTOA (track 00); never
     # prepend that pregap onto track 1. Standard 2s pause is ignored.
@@ -314,7 +310,6 @@ class RipEngine:
         test_copy_mismatches: list[int] = []
         cover_path: Path | None = None
         htoa_ripped = False
-        cache_result: DriveCacheResult | None = None
         expected_sizes = _expected_wav_sizes(job.disc_info)
 
         rip_log: RipLog | None = None
@@ -436,35 +431,10 @@ class RipEngine:
                 total_samples=total_audio_samples(job.disc_info),
             )
 
-        # Drive cache: use results persisted from Drive setup.
-        defeat_cache = job.defeat_audio_cache
-        if job.drive_caches_audio is not None:
-            msg = job.drive_cache_message or (
-                'Drive caches audio (from Drive setup)'
-                if job.drive_caches_audio
-                else 'No clear audio cache (from Drive setup)'
-            )
-            cache_result = DriveCacheResult(
-                caches=job.drive_caches_audio,
-                message=msg,
-            )
-            notes.append(msg)
-            if rip_log is not None:
-                rip_log.cache_message = msg
-                rip_log.drive_caches = job.drive_caches_audio
-            if job.drive_caches_audio:
-                defeat_cache = True
-                notes.append('Cache defeat enabled between test and copy')
-            else:
-                defeat_cache = False
-                notes.append('No audio cache measured — skipping cache defeat')
-        elif defeat_cache:
-            notes.append(
-                'Drive cache not measured — defeating cache between test & copy anyway'
-            )
-            if rip_log is not None:
-                rip_log.cache_message = 'Not measured (Drive setup)'
-                rip_log.drive_caches = None
+        # Always defeat drive audio cache between test and copy.
+        defeat_cache = bool(job.defeat_audio_cache)
+        if defeat_cache:
+            notes.append('Cache defeat enabled between test and copy')
 
         # Count HTOA as an extra work unit for progress when present.
         htoa_info = detect_htoa(job.disc_info) if job.rip_htoa else None
@@ -564,7 +534,6 @@ class RipEngine:
                         rip_log=rip_log,
                         cover_path=cover_path,
                         htoa_ripped=htoa_ripped,
-                        cache_result=cache_result,
                         test_copy_mismatches=test_copy_mismatches,
                     )
 
@@ -675,7 +644,6 @@ class RipEngine:
                 rip_log=rip_log,
                 cover_path=cover_path,
                 htoa_ripped=htoa_ripped,
-                cache_result=cache_result,
                 test_copy_mismatches=test_copy_mismatches,
             )
 
@@ -693,7 +661,6 @@ class RipEngine:
                 rip_log=rip_log,
                 cover_path=cover_path,
                 htoa_ripped=htoa_ripped,
-                cache_result=cache_result,
                 test_copy_mismatches=test_copy_mismatches,
             )
 
@@ -734,7 +701,6 @@ class RipEngine:
             rip_log=rip_log,
             cover_path=cover_path,
             htoa_ripped=htoa_ripped,
-            cache_result=cache_result,
             test_copy_mismatches=test_copy_mismatches,
         )
         if result.log_path is not None:
@@ -2436,13 +2402,12 @@ class RipEngine:
                                 f'(attempt {img_attempt + 1})…',
                             )
                             self._unlink_quiet(test_wav, copy_wav)
-                            if job.drive_caches_audio is not False:
-                                flush_drive_cache(
-                                    job.device,
-                                    disc,
-                                    avoid_start=file_start,
-                                    avoid_end=end_sector,
-                                )
+                            flush_drive_cache(
+                                job.device,
+                                disc,
+                                avoid_start=file_start,
+                                avoid_end=end_sector,
+                            )
                             mode, retry_stats = self._rip_span(
                                 job.device,
                                 file_start,
@@ -2458,9 +2423,7 @@ class RipEngine:
                             img_stats.merge(retry_stats)
 
                         test_crc = wav_pcm_crc(test_wav)
-                        if job.drive_caches_audio is not False and (
-                            job.defeat_audio_cache or job.drive_caches_audio
-                        ):
+                        if job.defeat_audio_cache:
                             report(
                                 RipState.RIPPING, 0.35, 'Defeating drive cache…'
                             )
@@ -2507,13 +2470,12 @@ class RipEngine:
                                 0.45,
                                 'Image test & copy failed — burst recovery…',
                             )
-                            if job.drive_caches_audio is not False:
-                                flush_drive_cache(
-                                    job.device,
-                                    disc,
-                                    avoid_start=file_start,
-                                    avoid_end=end_sector,
-                                )
+                            flush_drive_cache(
+                                job.device,
+                                disc,
+                                avoid_start=file_start,
+                                avoid_end=end_sector,
+                            )
                             copy_mode, burst_stats = self._rip_span(
                                 job.device,
                                 file_start,
@@ -3164,7 +3126,6 @@ def _finish_result(
     cancelled: bool = False,
     cover_path: Path | None = None,
     htoa_ripped: bool = False,
-    cache_result: DriveCacheResult | None = None,
     test_copy_mismatches: list[int] | None = None,
     log_dir: Path | None = None,
     ctdb_results: list[CtdbResult] | None = None,
@@ -3202,7 +3163,6 @@ def _finish_result(
         log_path=log_path,
         cover_path=cover_path,
         htoa_ripped=htoa_ripped,
-        cache_result=cache_result,
         test_copy_mismatches=test_copy_mismatches or [],
     )
 

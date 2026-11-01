@@ -86,8 +86,6 @@ class RipLog:
         self.disc: DiscInfo | None = None
         self.ar_status: str = ''
         self.ctdb_status: str = ''
-        self.cache_message: str = ''
-        self.drive_caches: bool | None = None
         self.tracks: list[TrackLogEntry] = []
         self.notes: list[str] = []
         # Session-level archival history (e.g. superseded secure rips before
@@ -121,8 +119,6 @@ class RipLog:
         self.defeat_audio_cache = getattr(job, 'defeat_audio_cache', True)
         self.rip_htoa = getattr(job, 'rip_htoa', True)
         self.rip_data_tracks = getattr(job, 'rip_data_tracks', True)
-        self.drive_caches = getattr(job, 'drive_caches_audio', None)
-        self.cache_message = getattr(job, 'drive_cache_message', '') or ''
         self.album = job.album
         self.disc = job.disc_info
         self.test_copy_max_retries = int(
@@ -221,19 +217,11 @@ class RipLog:
             if self.burst_fallback
             else 'Burst fallback          : No'
         )
-        if self.drive_caches is True:
-            defeat = 'Yes (detected; flush between test/copy)'
-        elif self.drive_caches is False:
-            defeat = (
-                'Yes (not detected; still flush between test/copy)'
-                if self.defeat_audio_cache
-                else 'No (not detected)'
-            )
-        else:
-            defeat = 'Yes' if self.defeat_audio_cache else 'No'
-        lines.append(f'Defeat audio cache      : {defeat}')
-        if self.cache_message:
-            lines.append(f'Cache analysis          : {self.cache_message}')
+        lines.append(
+            'Defeat audio cache      : Yes (flush between test/copy)'
+            if self.defeat_audio_cache
+            else 'Defeat audio cache      : No'
+        )
         lines.append(
             'Rip HTOA / pregap       : Yes'
             if self.rip_htoa

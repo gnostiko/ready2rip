@@ -878,7 +878,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             btn.set_tooltip_text('Recalibrate drive')
         else:
             row.set_title('Calibrate Drive')
-            row.set_subtitle('Offset and audio cache')
+            row.set_subtitle('Sample offset calibration')
             self._setup_ok_icon.set_visible(False)
             btn.set_icon_name('')
             btn.set_label('Calibrate')
@@ -1894,15 +1894,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             write_rip_log=settings.write_rip_log,
             write_cue_file=settings.write_cue_file,
             test_and_copy=settings.test_and_copy,
-            drive_caches_audio=(
-                settings.drive_caches_audio
-                if settings.drive_cache_configured
-                else None
-            ),
-            drive_cache_message=settings.drive_cache_message,
-            defeat_audio_cache=(
-                settings.defeat_audio_cache or settings.drive_caches_audio
-            ),
             rip_htoa=settings.rip_htoa,
             rip_data_tracks=settings.rip_data_tracks,
             copy_image=settings.copy_image,
@@ -2096,8 +2087,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             ar_bits.append('data')
         if result.cover_path is not None:
             ar_bits.append('cover saved')
-        if result.cache_result is not None and result.cache_result.caches:
-            ar_bits.append('cache defeated')
         if result.accuraterip:
             matches = sum(
                 1
@@ -2646,22 +2635,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         offset_row = Adw.ActionRow(title='Sample offset', subtitle=offset_sub)
         self.drive_group.add(offset_row)
         self._drive_rows.append(offset_row)
-
-        if settings.drive_cache_configured:
-            if settings.drive_cache_message:
-                cache_sub = settings.drive_cache_message
-            else:
-                cache_sub = (
-                    'Yes — defeat between test and copy'
-                    if settings.drive_caches_audio
-                    else 'No clear audio cache'
-                )
-        else:
-            cache_sub = 'Not measured — run Drive setup'
-        cache_row = Adw.ActionRow(title='Audio cache', subtitle=cache_sub)
-        cache_row.set_tooltip_text(cache_sub)
-        self.drive_group.add(cache_row)
-        self._drive_rows.append(cache_row)
 
     def _on_run_drive_setup(self, *_args) -> None:
         dialog = DriveSetupDialog(self.store)

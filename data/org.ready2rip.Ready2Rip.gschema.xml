@@ -258,38 +258,6 @@
       </description>
     </key>
 
-    <key name="defeat-audio-cache" type="b">
-      <default>true</default>
-      <summary>Defeat audio cache between test and copy</summary>
-      <description>
-        Between the test and copy passes, force a read of a distant sector range
-        so the drive cannot serve the second pass from cache. When drive setup
-        detected caching, this is forced on.
-      </description>
-    </key>
-
-    <key name="drive-cache-configured" type="b">
-      <default>false</default>
-      <summary>Drive audio-cache analysis completed</summary>
-      <description>
-        True after Drive setup has probed whether this drive caches audio.
-      </description>
-    </key>
-
-    <key name="drive-caches-audio" type="b">
-      <default>false</default>
-      <summary>Drive caches audio data</summary>
-      <description>
-        Result of cache analysis from Drive setup. When true, rips always defeat
-        the audio cache between test and copy.
-      </description>
-    </key>
-
-    <key name="drive-cache-message" type="s">
-      <default>''</default>
-      <summary>Human-readable drive cache analysis summary</summary>
-    </key>
-
     <key name="rip-htoa" type="b">
       <default>true</default>
       <summary>Pregap / HTOA handling</summary>

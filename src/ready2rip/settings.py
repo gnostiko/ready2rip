@@ -350,10 +350,6 @@ class AppSettings:
     # Multi-file .cue sheet for secure/accurate rips.
     write_cue_file: bool = True
     test_and_copy: bool = True
-    defeat_audio_cache: bool = True
-    drive_cache_configured: bool = False
-    drive_caches_audio: bool = False
-    drive_cache_message: str = ''
     rip_htoa: bool = True
     # Raw 2352-byte .bin for mixed-mode / CD-Extra data tracks.
     rip_data_tracks: bool = True
@@ -524,10 +520,6 @@ class SettingsStore:
                 write_rip_log=s.get_boolean('write-rip-log'),
                 write_cue_file=_get_bool(s, 'write-cue-file', True),
                 test_and_copy=_get_bool(s, 'test-and-copy', True),
-                defeat_audio_cache=_get_bool(s, 'defeat-audio-cache', True),
-                drive_cache_configured=_get_bool(s, 'drive-cache-configured', False),
-                drive_caches_audio=_get_bool(s, 'drive-caches-audio', False),
-                drive_cache_message=_get_string(s, 'drive-cache-message', ''),
                 rip_htoa=_get_bool(s, 'rip-htoa', True),
                 rip_data_tracks=_get_bool(s, 'rip-data-tracks', True),
                 copy_image=_get_bool(s, 'copy-image', False),
@@ -594,10 +586,6 @@ class SettingsStore:
             'write_rip_log': ('write-rip-log', 'bool'),
             'write_cue_file': ('write-cue-file', 'bool'),
             'test_and_copy': ('test-and-copy', 'bool'),
-            'defeat_audio_cache': ('defeat-audio-cache', 'bool'),
-            'drive_cache_configured': ('drive-cache-configured', 'bool'),
-            'drive_caches_audio': ('drive-caches-audio', 'bool'),
-            'drive_cache_message': ('drive-cache-message', 'string'),
             'rip_htoa': ('rip-htoa', 'bool'),
             'rip_data_tracks': ('rip-data-tracks', 'bool'),
             'copy_image': ('copy-image', 'bool'),

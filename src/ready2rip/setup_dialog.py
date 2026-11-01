@@ -66,7 +66,7 @@ class DriveSetupDialog(Adw.Dialog):
 
         desc = Gtk.Label(
             label=(
-                'Measures sample offset and audio cache. '
+                'Measures the AccurateRip sample offset. '
                 'Insert a commercial CD, then start.'
             ),
             wrap=True,
@@ -253,51 +253,26 @@ class DriveSetupDialog(Adw.Dialog):
         self._prog_bar.set_fraction(frac)
         self._prog_bar.set_text(f'{int(frac * 100)}%')
         lower = msg.casefold()
-        if 'cache' in lower:
-            self._prog_title.set_label('Drive cache…')
-        elif 'offset' in lower or 'scanning' in lower:
+        if 'offset' in lower or 'scanning' in lower:
             self._prog_title.set_label('Sample offset…')
         elif 'extract' in lower:
             self._prog_title.set_label('Reading track…')
         return GLib.SOURCE_REMOVE
 
     def _show_result(self, device: str, result: CalibrationResult) -> None:
-        features = _format_feature_lines(result)
-
         if result.success and result.offset is not None:
             _save_result(self._store, device, result, offset=result.offset)
             apply_icon(self._result_icon, 'emblem-ok-symbolic')
             self._result_title.set_label('Drive calibrated')
-            body = result.message
-            if features:
-                body = f'{body}\n{features}'
-            body = f'{body}\nSaved for {device}.'
-            self._result_desc.set_label(body)
+            self._result_desc.set_label(f'{result.message}\nSaved for {device}.')
             self._manual_btn.set_visible(False)
         else:
-            if result.caches_audio is not None:
-                _save_result(
-                    self._store,
-                    device,
-                    result,
-                    offset=self._store.get().drive_sample_offset,
-                )
-                if not result.success:
-                    self._store.update(drive_offset_configured=False)
-                    try:
-                        from gi.repository import Gio
-
-                        Gio.Settings.sync()
-                    except Exception:
-                        pass
-
             apply_icon(self._result_icon, 'dialog-warning-symbolic')
             self._result_title.set_label('Calibration incomplete')
-            parts = [result.message or 'Calibration failed.']
-            if features:
-                parts.append(features)
-            parts.append('Enter an offset manually or skip.')
-            self._result_desc.set_label('\n'.join(parts))
+            self._result_desc.set_label(
+                f'{result.message or "Calibration failed."}\n'
+                'Enter an offset manually or skip.'
+            )
             self._manual_btn.set_visible(True)
         self._stack.set_visible_child_name('result')
 
@@ -318,28 +293,10 @@ class DriveSetupDialog(Adw.Dialog):
     def _on_save_manual(self, *_args) -> None:
         device = self._device_row.get_text().strip() or '/dev/sr0'
         offset = int(self._manual_offset.get_value())
-        prev = self._last_result
-        if prev is not None:
-            _save_result(self._store, device, prev, offset=offset)
-            features = _format_feature_lines(prev)
-        else:
-            s = self._store.get()
-            save_calibration(
-                self._store,
-                device=device,
-                offset=offset,
-                caches_audio=(
-                    s.drive_caches_audio if s.drive_cache_configured else None
-                ),
-                cache_message=s.drive_cache_message,
-            )
-            features = ''
+        save_calibration(self._store, device=device, offset=offset)
         apply_icon(self._result_icon, 'emblem-ok-symbolic')
         self._result_title.set_label('Offset saved')
-        body = f'Saved sample offset {offset} for {device}.'
-        if features:
-            body = f'{body}\n{features}'
-        self._result_desc.set_label(body)
+        self._result_desc.set_label(f'Saved sample offset {offset} for {device}.')
         self._manual_btn.set_visible(False)
         self._stack.set_visible_child_name('result')
 
@@ -351,24 +308,4 @@ def _save_result(
     *,
     offset: int,
 ) -> None:
-    save_calibration(
-        store,
-        device=device,
-        offset=offset,
-        caches_audio=result.caches_audio,
-        cache_message=result.cache_message,
-    )
-
-
-def _format_feature_lines(result: CalibrationResult) -> str:
-    """One short line per feature for a compact result summary."""
-    lines: list[str] = []
-
-    if result.caches_audio is True:
-        lines.append('Audio cache: yes (defeat on)')
-    elif result.caches_audio is False:
-        lines.append('Audio cache: no')
-    elif result.cache_message:
-        lines.append('Audio cache: unknown')
-
-    return '\n'.join(lines)
+    save_calibration(store, device=device, offset=offset)
