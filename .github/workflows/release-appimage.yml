@@ -1,5 +1,5 @@
-# Build a portable x86_64 AppImage on Ubuntu 22.04 (older glibc → wider reach)
-# and attach it to the GitHub Release for the matching tag.
+# Build a portable x86_64 AppImage on Ubuntu 26.04 and attach it to the
+# GitHub Release for the matching tag.
 #
 # Usage:
 #   1. Bump version in meson.build (and friends) on main.
@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   appimage:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
 
     steps:
       - uses: actions/checkout@v4
@@ -36,7 +36,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          # Ubuntu 22.04 apt meson is 0.61; project needs >= 1.0 — install via pip.
+          # Prefer pip Meson so we stay on >=1.0 even if apt lags.
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential \
             curl \
