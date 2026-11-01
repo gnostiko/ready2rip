@@ -1,0 +1,115 @@
+# Build a portable x86_64 AppImage on Ubuntu 22.04 (older glibc → wider reach)
+# and attach it to the GitHub Release for the matching tag.
+#
+# Usage:
+#   1. Bump version in meson.build (and friends) on main.
+#   2. git tag v0.4.8 && git push origin v0.4.8
+#   3. This workflow builds and uploads:
+#        ready2rip-VERSION-x86_64.AppImage
+#        ready2rip-VERSION-x86_64.AppImage.zsync
+#
+# Manual dry-run (artifact only, no release upload):
+#   Actions → Release AppImage → Run workflow
+
+name: Release AppImage
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  appimage:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential \
+            curl \
+            file \
+            binutils \
+            meson \
+            ninja-build \
+            python3 \
+            python3-pip \
+            python3-gi \
+            python3-gi-cairo \
+            gir1.2-gtk-4.0 \
+            gir1.2-adw-1 \
+            libgtk-4-1 \
+            libadwaita-1-0 \
+            gobject-introspection \
+            libgirepository1.0-dev \
+            cdparanoia \
+            flac \
+            lame \
+            ffmpeg \
+            opus-tools \
+            zsync \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            libfuse2
+
+      - name: Verify encoder / extract tools on PATH
+        run: |
+          set -euo pipefail
+          for t in python3 meson ninja gcc curl cdparanoia flac lame ffmpeg opusenc zsyncmake; do
+            command -v "$t"
+          done
+
+      - name: Check tag matches meson version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          VERSION="$(grep -E "version: '" meson.build | head -1 | sed -E "s/.*version: '([^']+)'.*/\1/")"
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "meson version=${VERSION} tag=${TAG}"
+          if [ "$VERSION" != "$TAG" ]; then
+            echo "error: meson.build version (${VERSION}) must match tag (${TAG})" >&2
+            exit 1
+          fi
+
+      - name: Build AppImage
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: ./appimage/build-appimage.sh
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ready2rip-appimage
+          path: |
+            dist/ready2rip-*-x86_64.AppImage
+            dist/ready2rip-*-x86_64.AppImage.zsync
+          if-no-files-found: error
+
+      - name: Publish to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(dist/ready2rip-*-x86_64.AppImage dist/ready2rip-*-x86_64.AppImage.zsync)
+          if [ "${#assets[@]}" -lt 1 ]; then
+            echo "error: no AppImage assets in dist/" >&2
+            exit 1
+          fi
+          tag="${GITHUB_REF_NAME}"
+          title="ready2rip ${tag#v}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --title "$title" \
+              --generate-notes
+          fi
+          gh release view "$tag"

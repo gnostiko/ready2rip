@@ -199,6 +199,16 @@ sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 python3-mutagen python3-
 
 The script **warns** (does not fail) if `flac` / `lame` / `ffmpeg` / `opusenc` are missing. Smoke-test only requires Python/GTK/mutagen/cdparanoia. Check the build log for `warning: flac not on host` etc. before publishing.
 
+### GitHub Actions release (recommended)
+
+CI already runs ruff + pytest on PRs/`main`. To publish an AppImage without building on your laptop:
+
+1. Bump the version in `meson.build` (and the usual release files) on `main`.
+2. Tag and push: `git tag v0.4.8 && git push origin v0.4.8`
+3. Workflow **Release AppImage** runs on **Ubuntu 22.04**, builds the image, and uploads `.AppImage` + `.zsync` to that GitHub Release (creates the release if needed).
+
+Manual dry-run: Actions → **Release AppImage** → Run workflow (artifact only; no release upload). The tag must match `meson.build` (`v0.4.8` ↔ `0.4.8`).
+
 ### AppImage portability
 
 What is portable:
