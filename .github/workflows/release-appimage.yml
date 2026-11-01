@@ -8,14 +8,18 @@
 #        ready2rip-VERSION-x86_64.AppImage
 #        ready2rip-VERSION-x86_64.AppImage.zsync
 #
-# Manual dry-run (artifact only, no release upload):
+# Manual dry-run (artifact only unless publish_release is on):
 #   Actions → Release AppImage → Run workflow
+# Nightly builds upload artifacts only (no release publish).
 
 name: Release AppImage
 
 on:
   push:
     tags: ['v*']
+  schedule:
+    # Daily 06:00 UTC — AppImage artifact smoke; does not publish a release.
+    - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
       publish_release:
