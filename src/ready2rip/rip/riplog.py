@@ -75,6 +75,7 @@ class RipLog:
         self.burst_fallback: bool = False
         self.verify_accuraterip: bool = True
         self.verify_ctdb: bool = True
+        self.submit_ctdb: bool = False
         self.apply_replaygain: bool = True
         self.embed_artwork: bool = True
         self.test_and_copy: bool = True
@@ -112,6 +113,7 @@ class RipLog:
         self.burst_fallback = job.burst_fallback
         self.verify_accuraterip = job.verify_accuraterip
         self.verify_ctdb = getattr(job, 'verify_ctdb', True)
+        self.submit_ctdb = getattr(job, 'submit_ctdb', False)
         self.apply_replaygain = job.apply_replaygain
         self.embed_artwork = job.embed_artwork
         self.test_and_copy = getattr(job, 'test_and_copy', True)
@@ -310,6 +312,9 @@ class RipLog:
         lines.append(f'CTDB                            : {"Yes" if self.verify_ctdb else "No"}')
         if self.ctdb_status:
             lines.append(f'CTDB database                   : {self.ctdb_status}')
+        lines.append(
+            f'CTDB submit                      : {"Yes" if self.submit_ctdb else "No"}'
+        )
         lines.append(
             'Write CUE sheet                 : Yes '
             '(multi-file with INDEX 00 in previous, or image CUE; '

@@ -127,6 +127,7 @@ class RipJob:
     save_cover_file: bool = True
     verify_accuraterip: bool = True
     verify_ctdb: bool = True
+    submit_ctdb: bool = False
     sample_offset: int = 0
     disc_info: DiscInfo | None = None
     # Total tracks on the disc (for AR first/last sample skip), not just selected.
@@ -406,7 +407,7 @@ class RipEngine:
             )
 
         ctdb_verifier: CtdbVerifier | None = None
-        if job.verify_ctdb and job.disc_info is not None:
+        if (job.verify_ctdb or job.submit_ctdb) and job.disc_info is not None:
             ctdb_verifier = CtdbVerifier()
             ctdb_status = ctdb_verifier.prepare(job.disc_info)
             notes.append(ctdb_status)
@@ -663,6 +664,55 @@ class RipEngine:
                 htoa_ripped=htoa_ripped,
                 test_copy_mismatches=test_copy_mismatches,
             )
+
+        if job.submit_ctdb and ctdb_verifier is not None and ctdb_results:
+            if on_progress is not None:
+                on_progress(
+                    RipProgress(
+                        track_number=tracks[-1] if tracks else 0,
+                        state=RipState.VERIFYING,
+                        fraction=0.97,
+                        message='Submitting to CTDB…',
+                    )
+                )
+            drivename = ''
+            try:
+                from ready2rip.disc.drive_info import probe_drive
+
+                drivename = probe_drive(
+                    job.device, allow_optical=False
+                ).ctdb_drivename
+            except Exception:
+                drivename = ''
+            album = job.album
+            ctdb_quality = 0
+            if (
+                job.test_and_copy
+                and not burst_tracks
+                and not test_copy_mismatches
+            ):
+                ctdb_quality = 100
+            submit = ctdb_verifier.submit(
+                ctdb_results,
+                drivename=drivename,
+                artist=(album.artist if album else '') or '',
+                title=(album.title if album else '') or '',
+                barcode=(album.barcode if album else '') or '',
+                quality=ctdb_quality,
+            )
+            notes.append(submit.message)
+            if rip_log is not None:
+                rip_log.notes.append(submit.message)
+            if not submit.ok and any(
+                r.confidence == CtdbConfidence.MISMATCH for r in ctdb_results
+            ):
+                try:
+                    probe = ctdb_verifier.attempt_repair_for_mismatch(ctdb_results)
+                    notes.append(probe.message)
+                    if rip_log is not None:
+                        rip_log.notes.append(probe.message)
+                except Exception as exc:
+                    log.warning('CTDB repair probe failed: %s', exc)
 
         ar_summary = _summarize_ar(ar_results)
         ctdb_summary = _summarize_ctdb(ctdb_results)
