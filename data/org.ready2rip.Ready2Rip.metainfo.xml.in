@@ -26,13 +26,22 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-10-29">
+    <release version="@APPLICATION_VERSION@" date="2026-10-31">
       <description>
         <p>
-          0.4.6: Security hardening (device allowlist, fetch host
-          allowlist, cache path checks); data-track test &amp; copy;
-          stronger cache defeat for full-disc images; correct
-          whole-album ReplayGain.
+          0.4.7: CTDB confirm and new-parity submit (Galois16 encode,
+          syndrome upload); optional Submit to CTDB; hasparity repair
+          probe (no PCM rewrite yet).
+        </p>
+      </description>
+    </release>
+    <release version="0.4.6" date="2026-10-29">
+      <description>
+        <p>
+          Security hardening (device allowlist, fetch host allowlist,
+          cache path checks); data-track test &amp; copy; stronger
+          cache defeat for full-disc images; correct whole-album
+          ReplayGain.
         </p>
       </description>
     </release>
