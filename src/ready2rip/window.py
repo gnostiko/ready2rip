@@ -1076,16 +1076,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._ctdb_row.connect('notify::active', self._on_ctdb_toggled)
         self._add_option_row(self._ctdb_row, self.extraction_group)
 
-        self._submit_ctdb_row = Adw.SwitchRow(
-            title='Submit to CTDB',
-            subtitle=(
-                'Confirm matches, or submit new parity for secure high-quality rips'
-            ),
-            active=settings.submit_ctdb,
-        )
-        self._submit_ctdb_row.connect('notify::active', self._on_submit_ctdb_toggled)
-        self._add_option_row(self._submit_ctdb_row, self.extraction_group)
-
         self._burst_row = Adw.SwitchRow(
             title='Burst Fallback',
             subtitle='Allow insecure -Z recovery after secure retries fail',
@@ -1248,7 +1238,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             (self._copy_image_row, self._on_copy_image_toggled),
             (self._ar_row, self._on_ar_toggled),
             (self._ctdb_row, self._on_ctdb_toggled),
-            (self._submit_ctdb_row, self._on_submit_ctdb_toggled),
             (self._burst_row, self._on_burst_toggled),
             (self._log_row, self._on_log_toggled),
             (self._cue_row, self._on_cue_toggled),
@@ -1302,7 +1291,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._copy_image_row.set_active(settings.copy_image)
             self._ar_row.set_active(settings.verify_accuraterip)
             self._ctdb_row.set_active(settings.verify_ctdb)
-            self._submit_ctdb_row.set_active(settings.submit_ctdb)
             self._burst_row.set_active(settings.burst_fallback)
             self._log_row.set_active(settings.write_rip_log)
             self._cue_row.set_active(settings.write_cue_file)
@@ -1639,9 +1627,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _on_ctdb_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(verify_ctdb=row.get_active())
 
-    def _on_submit_ctdb_toggled(self, row: Adw.SwitchRow, *_args) -> None:
-        self.store.update(submit_ctdb=row.get_active())
-
     def _on_burst_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(burst_fallback=row.get_active())
 
@@ -1902,7 +1887,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             save_cover_file=folder_art is not None,
             verify_accuraterip=settings.verify_accuraterip,
             verify_ctdb=settings.verify_ctdb,
-            submit_ctdb=settings.submit_ctdb,
             sample_offset=settings.drive_sample_offset,
             disc_info=self._disc,
             disc_track_count=self._disc.track_count,
