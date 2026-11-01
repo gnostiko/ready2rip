@@ -26,12 +26,21 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-10-31">
+    <release version="@APPLICATION_VERSION@" date="2026-11-01">
       <description>
         <p>
-          0.4.7: CTDB confirm and new-parity submit (Galois16 encode,
-          syndrome upload); optional Submit to CTDB; hasparity repair
-          probe (no PCM rewrite yet).
+          0.4.8: Ripping disc progress banner with green success and red
+          cancel/error flash; AppImage rebuilt for broader Linux
+          compatibility.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.7" date="2026-10-31">
+      <description>
+        <p>
+          CTDB confirm and new-parity submit (Galois16 encode, syndrome
+          upload); optional Submit to CTDB; hasparity repair probe (no
+          PCM rewrite yet).
         </p>
       </description>
     </release>

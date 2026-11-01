@@ -231,8 +231,8 @@ Check your system glibc with `ldd --version`. If the AppImage fails with `GLIBC_
 2. Make it executable and start it:
 
 ```bash
-chmod +x ready2rip-0.4.7-x86_64.AppImage
-./ready2rip-0.4.7-x86_64.AppImage
+chmod +x ready2rip-0.4.8-x86_64.AppImage
+./ready2rip-0.4.8-x86_64.AppImage
 ```
 
 ### Recommended: manage with Gear Lever
