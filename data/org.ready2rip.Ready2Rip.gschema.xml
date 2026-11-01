@@ -194,6 +194,16 @@
       </description>
     </key>
 
+    <key name="submit-ctdb" type="b">
+      <default>false</default>
+      <summary>Submit rips to CTDB</summary>
+      <description>
+        After ripping, confirm a full-disc CTDB match, or submit a new parity
+        entry when the disc is missing/unmatched and rip quality is 100
+        (secure test&amp;copy). Off by default.
+      </description>
+    </key>
+
     <key name="drive-sample-offset" type="i">
       <range min="-2000" max="2000"/>
       <default>0</default>

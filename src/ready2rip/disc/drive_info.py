@@ -33,6 +33,14 @@ class DriveInfo:
         parts = [p for p in (self.vendor, self.model) if p]
         return ' '.join(parts) if parts else self.device
 
+    @property
+    def ctdb_drivename(self) -> str:
+        """Vendor-Model-Revision token for CTDB submit (spaces → underscores)."""
+        parts = [p for p in (self.vendor, self.model, self.revision) if p]
+        if not parts:
+            return ''
+        return '_'.join(' '.join(parts).split())
+
     def as_rows(self) -> list[tuple[str, str]]:
         """Return (title, subtitle) pairs for Adw.ActionRow."""
         rows: list[tuple[str, str]] = [
