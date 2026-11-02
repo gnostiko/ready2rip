@@ -93,5 +93,28 @@ if [ -d "$HERE/usr/lib/gdk-pixbuf-2.0" ]; then
   done
 fi
 
+# ---------------------------------------------------------------------------
+# TLS CA bundle for bundled OpenSSL (defaults to /usr/lib/ssl/cert.pem, which
+# is empty inside the AppImage unless we ship certs). Prefer bundled, then host.
+# ---------------------------------------------------------------------------
+if [ -z "${SSL_CERT_FILE:-}" ]; then
+  if [ -f "$HERE/usr/lib/ssl/cert.pem" ]; then
+    export SSL_CERT_FILE="$HERE/usr/lib/ssl/cert.pem"
+  elif [ -f /etc/ssl/certs/ca-certificates.crt ]; then
+    export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+  elif [ -f /etc/pki/tls/certs/ca-bundle.crt ]; then
+    export SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt
+  elif [ -f /etc/pki/tls/cert.pem ]; then
+    export SSL_CERT_FILE=/etc/pki/tls/cert.pem
+  fi
+fi
+if [ -n "${SSL_CERT_FILE:-}" ]; then
+  export CURL_CA_BUNDLE="$SSL_CERT_FILE"
+  export REQUESTS_CA_BUNDLE="$SSL_CERT_FILE"
+fi
+if [ -z "${SSL_CERT_DIR:-}" ] && [ -d "$HERE/usr/lib/ssl/certs" ]; then
+  export SSL_CERT_DIR="$HERE/usr/lib/ssl/certs"
+fi
+
 # -B: do not write .pyc into a read-only AppImage mount
 exec "$PYTHON" -B -m ready2rip.main "$@"

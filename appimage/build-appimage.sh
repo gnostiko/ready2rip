@@ -444,6 +444,32 @@ done
 
 ensure_soname_links
 
+# ---------------------------------------------------------------------------
+# CA certificates for bundled OpenSSL / Python ssl
+# Ubuntu OpenSSL looks for /usr/lib/ssl/cert.pem — ship the host CA bundle there.
+# ---------------------------------------------------------------------------
+echo "==> bundling CA certificates for TLS"
+mkdir -p "${APPDIR}/usr/lib/ssl/certs"
+CA_SRC=""
+for cand in \
+  /etc/ssl/certs/ca-certificates.crt \
+  /etc/pki/tls/certs/ca-bundle.crt \
+  /etc/pki/tls/cert.pem
+do
+  if [ -f "$cand" ]; then
+    CA_SRC="$cand"
+    break
+  fi
+done
+if [ -z "$CA_SRC" ]; then
+  echo "error: no CA certificate bundle on build host (install ca-certificates)" >&2
+  exit 1
+fi
+install -D -m644 "$CA_SRC" "${APPDIR}/usr/lib/ssl/cert.pem"
+# Also expose under OPENSSLDIR-style paths used by some builds.
+ln -sfn cert.pem "${APPDIR}/usr/lib/ssl/cert.pem.bundle" 2>/dev/null || true
+echo "    CA bundle from $CA_SRC → usr/lib/ssl/cert.pem"
+
 HOST_PYTHON="$(readlink -f "$(command -v python3)")"
 PY_VER="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 copy_bin_with_libs "$HOST_PYTHON" "python3" || true
@@ -741,6 +767,20 @@ assert cp, "cdparanoia not found on PATH inside AppDir"
 assert "AppDir" in cp or "build-appimage" in cp or cp.startswith("/tmp"), cp
 print("ok: Gtk/Adw/mutagen/ready2rip/cdparanoia", cp, file=sys.stderr)
 print("ok: stdlib", stdlib, file=sys.stderr)
+
+# TLS: bundled OpenSSL must find a CA bundle (usr/lib/ssl/cert.pem).
+ca = Path(sys.prefix) / "lib" / "ssl" / "cert.pem"
+assert ca.is_file() and ca.stat().st_size > 1000, f"CA bundle missing/empty: {ca}"
+import os
+os.environ.setdefault("SSL_CERT_FILE", str(ca))
+import ssl
+import urllib.request
+ctx = ssl.create_default_context()
+with urllib.request.urlopen(
+    "https://musicbrainz.org/ws/2/", timeout=20, context=ctx
+) as resp:
+    assert resp.status == 200, resp.status
+print("ok: TLS CA + MusicBrainz HTTPS", ca, file=sys.stderr)
 PY
 )
 SMOKE=$?

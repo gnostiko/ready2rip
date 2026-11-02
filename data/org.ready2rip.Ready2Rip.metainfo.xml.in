@@ -26,10 +26,18 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-11-01">
+    <release version="@APPLICATION_VERSION@" date="2026-11-02">
       <description>
         <p>
-          0.4.9: Facing UI layout (art 1/3 + album 2/3, flat editors,
+          0.4.10: Bundle CA certificates in the AppImage so HTTPS
+          metadata and artwork lookups work with the bundled OpenSSL.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.9" date="2026-11-01">
+      <description>
+        <p>
+          Facing UI layout (art 1/3 + album 2/3, flat editors,
           header actions); MusicBrainz top genre; remove in-app CD
           playback; sharper HiDPI cover art.
         </p>

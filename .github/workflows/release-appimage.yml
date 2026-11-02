@@ -3,7 +3,7 @@
 #
 # Usage:
 #   1. Bump version in meson.build (and friends) on main.
-#   2. git tag v0.4.9 && git push origin v0.4.9
+#   2. git tag v0.4.10 && git push origin v0.4.10
 #   3. This workflow builds and uploads:
 #        ready2rip-VERSION-x86_64.AppImage
 #        ready2rip-VERSION-x86_64.AppImage.zsync
@@ -63,6 +63,7 @@ jobs:
             ffmpeg \
             opus-tools \
             zsync \
+            ca-certificates \
             gir1.2-girepository-2.0 \
             libfuse2 \
             desktop-file-utils
