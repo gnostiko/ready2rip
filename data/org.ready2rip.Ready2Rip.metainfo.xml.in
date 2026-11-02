@@ -29,7 +29,14 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-02">
       <description>
         <p>
-          0.4.10: Bundle CA certificates in the AppImage so HTTPS
+          0.4.11: Track list layout polish.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.10" date="2026-11-02">
+      <description>
+        <p>
+          Bundle CA certificates in the AppImage so HTTPS
           metadata and artwork lookups work with the bundled OpenSSL.
         </p>
       </description>
