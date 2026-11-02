@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Build a portable ready2rip AppImage (x86_64).
+# Build a portable ready2rip AppImage (x86_64 or aarch64).
 #
 # Usage (from repo root):
 #   ./appimage/build-appimage.sh
 #
 # Output:
-#   dist/ready2rip-VERSION-x86_64.AppImage
+#   dist/ready2rip-VERSION-<arch>.AppImage
 #
 # Build-host requirements:
 #   python3, pip, meson, ninja, gcc, curl
@@ -20,6 +20,14 @@ APP_ID="org.ready2rip.Ready2Rip"
 APP_NAME="ready2rip"
 VERSION="$(grep -E "version: '" meson.build | head -1 | sed -E "s/.*version: '([^']+)'.*/\1/")"
 ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64) MULTIARCH_LIB="x86_64-linux-gnu" ;;
+  aarch64) MULTIARCH_LIB="aarch64-linux-gnu" ;;
+  *)
+    echo "error: unsupported architecture ${ARCH} (need x86_64 or aarch64)" >&2
+    exit 1
+    ;;
+esac
 APPDIR="${ROOT}/build-appimage/AppDir"
 DIST="${ROOT}/dist"
 TOOLS="${ROOT}/.tools"
@@ -77,19 +85,14 @@ download() {
   chmod +x "$dest"
 }
 
-if [ "$ARCH" != "x86_64" ]; then
-  echo "error: x86_64 AppImages only (got ${ARCH})" >&2
-  exit 1
-fi
-
 download \
-  "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage" \
+  "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${ARCH}.AppImage" \
   "${TOOLS}/linuxdeploy"
 download \
   "https://github.com/linuxdeploy/linuxdeploy-plugin-gtk/raw/master/linuxdeploy-plugin-gtk.sh" \
   "${TOOLS}/linuxdeploy-plugin-gtk.sh"
 download \
-  "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage" \
+  "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${ARCH}.AppImage" \
   "${TOOLS}/appimagetool"
 
 # Build-tool only (do not leak into the final AppImage runtime).
@@ -175,7 +178,7 @@ TYPELIB_DIRS=()
 for d in \
   /usr/lib/girepository-1.0 \
   /usr/lib64/girepository-1.0 \
-  /usr/lib/x86_64-linux-gnu/girepository-1.0
+  "/usr/lib/${MULTIARCH_LIB}/girepository-1.0"
 do
   [ -d "$d" ] && TYPELIB_DIRS+=("$d")
 done
@@ -268,7 +271,7 @@ resolve_soname() {
   for cand in \
     "/usr/lib/${soname}" \
     "/usr/lib64/${soname}" \
-    "/usr/lib/x86_64-linux-gnu/${soname}" \
+    "/usr/lib/${MULTIARCH_LIB}/${soname}" \
     "/usr/lib/glibc-hwcaps/x86-64-v3/${soname}" \
     "/usr/lib/glibc-hwcaps/x86-64-v2/${soname}"
   do
@@ -511,7 +514,8 @@ for tool in flac lame ffmpeg eject opusenc; do
 done
 
 # libdiscid optional (MusicBrainz discid put path)
-for lib in /usr/lib/libdiscid.so* /usr/lib64/libdiscid.so* /usr/lib/x86_64-linux-gnu/libdiscid.so*; do
+for lib in /usr/lib/libdiscid.so* /usr/lib64/libdiscid.so* \
+  "/usr/lib/${MULTIARCH_LIB}"/libdiscid.so*; do
   [ -f "$lib" ] || continue
   install -D -m755 "$lib" "${APPDIR}/usr/lib/$(basename "$lib")" 2>/dev/null || true
 done
@@ -539,7 +543,7 @@ done
 # GdkPixbuf loaders (PNG/JPEG often built-in; ship any host plugins + cache)
 echo "==> bundling gdk-pixbuf loaders"
 for pbdir in /usr/lib/gdk-pixbuf-2.0 /usr/lib64/gdk-pixbuf-2.0 \
-  /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0; do
+  "/usr/lib/${MULTIARCH_LIB}/gdk-pixbuf-2.0"; do
   if [ -d "$pbdir" ]; then
     mkdir -p "${APPDIR}/usr/lib"
     cp -a "$pbdir" "${APPDIR}/usr/lib/" 2>/dev/null || true

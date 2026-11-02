@@ -18,15 +18,17 @@ Secure CD ripper for Linux — cdparanoia extraction, AccurateRip + CTDB verific
 
 ## Install (AppImage)
 
-1. Download the latest `ready2rip-*-x86_64.AppImage` from [Releases](https://github.com/gnostiko/ready2rip/releases).
+1. Download the matching AppImage from [Releases](https://github.com/gnostiko/ready2rip/releases):
+   - `ready2rip-*-x86_64.AppImage` — Intel/AMD
+   - `ready2rip-*-aarch64.AppImage` — ARM64
 2. Run it:
 
 ```bash
-chmod +x ready2rip-0.4.11-x86_64.AppImage
+chmod +x ready2rip-0.4.11-x86_64.AppImage   # or …-aarch64.AppImage
 ./ready2rip-0.4.11-x86_64.AppImage
 ```
 
-**Host needs:** x86_64 Linux, a new enough glibc for the build, FUSE (`libfuse2`), an optical drive (user in `cdrom`), and a normal GPU/display stack.
+**Host needs:** Linux matching the AppImage arch, a new enough glibc for the build, FUSE (`libfuse2`), an optical drive (user in `cdrom`), and a normal GPU/display stack.
 
 For icons, menus, and GitHub update checks, use **[Gear Lever](https://flathub.org/apps/it.mijorus.gearlever)**:
 

@@ -1,12 +1,12 @@
-# Build a portable x86_64 AppImage on Ubuntu 26.04 and attach it to the
-# GitHub Release for the matching tag.
+# Build portable AppImages (x86_64 + aarch64) on Ubuntu 26.04 and attach
+# them to the GitHub Release for the matching tag.
 #
 # Usage:
 #   1. Bump version in meson.build (and friends) on main.
-#   2. git tag v0.4.10 && git push origin v0.4.10
+#   2. git tag vX.Y.Z && git push origin vX.Y.Z
 #   3. This workflow builds and uploads:
-#        ready2rip-VERSION-x86_64.AppImage
-#        ready2rip-VERSION-x86_64.AppImage.zsync
+#        ready2rip-VERSION-x86_64.AppImage (+ .zsync)
+#        ready2rip-VERSION-aarch64.AppImage (+ .zsync)
 #
 # Manual dry-run (artifact only unless publish_release is on):
 #   Actions → Release AppImage → Run workflow
@@ -32,7 +32,17 @@ permissions:
 
 jobs:
   appimage:
-    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-26.04
+          - arch: aarch64
+            runner: ubuntu-26.04-arm
+
+    name: AppImage ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - uses: actions/checkout@v4
@@ -73,6 +83,8 @@ jobs:
       - name: Verify encoder / extract tools on PATH
         run: |
           set -euo pipefail
+          echo "runner arch=$(uname -m) expected=${{ matrix.arch }}"
+          test "$(uname -m)" = "${{ matrix.arch }}"
           for t in python3 meson ninja gcc curl cdparanoia flac lame ffmpeg opusenc zsyncmake; do
             command -v "$t"
           done
@@ -98,10 +110,10 @@ jobs:
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ready2rip-appimage
+          name: ready2rip-appimage-${{ matrix.arch }}
           path: |
-            dist/ready2rip-*-x86_64.AppImage
-            dist/ready2rip-*-x86_64.AppImage.zsync
+            dist/ready2rip-*-${{ matrix.arch }}.AppImage
+            dist/ready2rip-*-${{ matrix.arch }}.AppImage.zsync
           if-no-files-found: error
 
       - name: Publish to GitHub Release
@@ -113,9 +125,10 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          assets=(dist/ready2rip-*-x86_64.AppImage dist/ready2rip-*-x86_64.AppImage.zsync)
+          arch="${{ matrix.arch }}"
+          assets=(dist/ready2rip-*-"${arch}".AppImage dist/ready2rip-*-"${arch}".AppImage.zsync)
           if [ "${#assets[@]}" -lt 1 ]; then
-            echo "error: no AppImage assets in dist/" >&2
+            echo "error: no AppImage assets in dist/ for ${arch}" >&2
             exit 1
           fi
           VERSION="$(grep -E "version: '" meson.build | head -1 | sed -E "s/.*version: '([^']+)'.*/\1/")"
@@ -128,9 +141,11 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --clobber
           else
+            # First arch to finish creates the release; the other uploads with --clobber.
             gh release create "$tag" "${assets[@]}" \
               --title "$title" \
               --generate-notes \
-              --target "${GITHUB_SHA}"
+              --target "${GITHUB_SHA}" \
+              || gh release upload "$tag" "${assets[@]}" --clobber
           fi
           gh release view "$tag"
