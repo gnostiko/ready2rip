@@ -35,6 +35,10 @@ ignore = [
   "RUF012", # ClassVar for mutable defaults — noisy with dataclasses
 ]
 
+# Vendored EAC Rijndael port: keep upstream shape; dels after table init trip F821.
+[tool.ruff.lint.per-file-ignores]
+"src/ready2rip/eac_rijndael.py" = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
