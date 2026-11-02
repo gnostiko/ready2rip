@@ -6,9 +6,8 @@ It focuses on careful archival extraction with full cdparanoia, AccurateRip and
 CTDB verification, MusicBrainz metadata, and modern tagging — presented as a
 GTK 4 / libadwaita GNOME application.
 
-<img width="1024" alt="Main window with album art" src="docs/screenshots/01-main-window.png" />
-<img width="1024" alt="Choose release dialog from MusicBrainz" src="docs/screenshots/02-choose-release.png" />
-<img width="1024" alt="Ripping in progress" src="docs/screenshots/03-ripping.png" />
+<img width="1050" height="750" alt="ready2rip" src="https://github.com/user-attachments/assets/fd305067-6bb0-426e-b712-7b2b62b59e5d" />
+
 
 ## What it does
 
