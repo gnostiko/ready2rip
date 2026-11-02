@@ -16,12 +16,7 @@ from ready2rip.icons import register_application_icons
 from ready2rip.settings import SettingsStore
 from ready2rip.setup_dialog import DriveSetupDialog
 from ready2rip.shortcuts import present_keyboard_shortcuts
-from ready2rip.theme import (
-    COLOR_SCHEME_LABELS,
-    COLOR_SCHEMES,
-    apply_color_scheme,
-    normalize_color_scheme,
-)
+from ready2rip.theme import apply_color_scheme
 
 
 class Application(Adw.Application):
@@ -93,49 +88,17 @@ class Application(Adw.Application):
             ['<primary>question', '<shift><primary>slash'],
         )
 
-        scheme = normalize_color_scheme(self.store.get().color_scheme)
-        color = Gio.SimpleAction.new_stateful(
-            'color-scheme',
-            GLib.VariantType.new('s'),
-            GLib.Variant.new_string(scheme),
-        )
-        color.connect('activate', self.on_color_scheme)
-        self.add_action(color)
-
         self.set_accels_for_action('win.close', ['<primary>w'])
         self.set_accels_for_action('win.rip', ['<primary>r'])
         self.set_accels_for_action('win.eject', ['<primary>e'])
         self.set_accels_for_action('win.preferences', ['<primary>comma'])
-        self.set_accels_for_action('win.play-toggle', ['<primary>p', 'AudioPlay'])
-        self.set_accels_for_action('win.play-next', ['AudioNext', '<alt>Right'])
-        self.set_accels_for_action('win.play-previous', ['AudioPrev', '<alt>Left'])
 
     def build_primary_menu(self) -> Gio.Menu:
-        """Hamburger menu: settings, appearance, shortcuts, about."""
+        """About menu: keyboard shortcuts and about."""
         menu = Gio.Menu()
-
-        prefs = Gio.Menu()
-        prefs.append('Settings', 'win.preferences')
-        menu.append_section(None, prefs)
-
-        appearance = Gio.Menu()
-        for key in COLOR_SCHEMES:
-            appearance.append(COLOR_SCHEME_LABELS[key], f'app.color-scheme::{key}')
-        menu.append_section('Appearance', appearance)
-
-        help_section = Gio.Menu()
-        help_section.append('Keyboard Shortcuts', 'app.shortcuts')
-        help_section.append(f'About {config.APPLICATION_NAME}', 'app.about')
-        menu.append_section(None, help_section)
+        menu.append('Keyboard Shortcuts', 'app.shortcuts')
+        menu.append(f'About {config.APPLICATION_NAME}', 'app.about')
         return menu
-
-    def on_color_scheme(self, action: Gio.SimpleAction, param: GLib.Variant | None) -> None:
-        if param is None:
-            return
-        scheme = normalize_color_scheme(param.get_string())
-        action.set_state(GLib.Variant.new_string(scheme))
-        self.store.update(color_scheme=scheme)
-        apply_color_scheme(scheme)
 
     def on_shortcuts(self, *_args) -> None:
         present_keyboard_shortcuts(self.props.active_window)
@@ -151,7 +114,7 @@ class Application(Adw.Application):
             license_type=Gtk.License.GPL_3_0,
             comments=(
                 'Secure CD ripper for Linux. Ready2Rip uses full cdparanoia, '
-                'secure extraction, test & copy, cache defeat, AccurateRip, '
+                'secure extraction, test and copy, cache defeat, AccurateRip, '
                 'CTDB, MusicBrainz metadata, ReplayGain, and album art.'
             ),
             website='https://github.com/gnostiko/ready2rip',

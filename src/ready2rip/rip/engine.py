@@ -248,8 +248,6 @@ class RipEngine:
 
     def run(self, job: RipJob, on_progress: ProgressCallback | None = None) -> RipResult:
         self._cancelled = False
-        # Settle after in-app playback: GStreamer may still be releasing /dev/srN.
-        time.sleep(0.35)
         tracks = sorted(n for n in job.track_numbers if n > 0)
         if not tracks and not job.rip_htoa and not job.copy_image:
             return RipResult(success=False, error='No tracks selected')

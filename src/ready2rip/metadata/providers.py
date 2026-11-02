@@ -128,7 +128,10 @@ class MusicBrainzProvider(MetadataProvider):
         self.last_error = None
         params = {
             'fmt': 'json',
-            'inc': 'artists+recordings+release-groups+labels+artist-credits',
+            'inc': (
+                'artists+recordings+release-groups+labels'
+                '+artist-credits+genres'
+            ),
         }
         url = (
             f'{MB_BASE}/discid/{urllib.parse.quote(discid)}'
@@ -189,7 +192,10 @@ class MusicBrainzProvider(MetadataProvider):
     ) -> AlbumMetadata | None:
         params = {
             'fmt': 'json',
-            'inc': 'artists+recordings+release-groups+labels+artist-credits+media',
+            'inc': (
+                'artists+recordings+release-groups+labels'
+                '+artist-credits+media+genres'
+            ),
         }
         url = f'{MB_BASE}/release/{urllib.parse.quote(release_id)}?{urllib.parse.urlencode(params)}'
         data = self._get_json(url)
@@ -305,6 +311,8 @@ class MusicBrainzProvider(MetadataProvider):
 
         rg = release.get('release-group') or {}
         rg_id = rg.get('id') or ''
+        # Genres live mainly on the release-group; fall back to release.
+        genre = _mb_primary_genre(rg) or _mb_primary_genre(release)
         # Prefer the most complete of release date vs RG first-release-date
         # (YYYY / YYYY-MM / YYYY-MM-DD).
         date = normalize_release_date(
@@ -370,6 +378,7 @@ class MusicBrainzProvider(MetadataProvider):
             title=title,
             artist=artist,
             date=date,
+            genre=genre,
             barcode=barcode,
             label=label,
             catalog_number=catalog,
@@ -603,6 +612,33 @@ def _short_network_error(exc: BaseException) -> str:
     return str(exc)
 
 
+def _mb_primary_genre(entity: dict[str, Any] | None) -> str:
+    """Return the single highest-voted MusicBrainz genre name, or empty.
+
+    MusicBrainz stores genres lowercase; we title-case for tags/UI
+    (e.g. ``indie rock`` → ``Indie Rock``).
+    """
+    if not entity:
+        return ''
+    best_name = ''
+    best_count = -1
+    for entry in entity.get('genres') or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get('name') or '').strip()
+        if not name:
+            continue
+        try:
+            count = int(entry.get('count') or 0)
+        except (TypeError, ValueError):
+            count = 0
+        # Highest vote wins; alphabetical tie-break for stability.
+        if count > best_count or (count == best_count and name < best_name):
+            best_count = count
+            best_name = name
+    return best_name.title() if best_name else ''
+
+
 def _artist_credit(credit: Any) -> str:
     """Build a multi-artist string from MusicBrainz artist-credit.
 
@@ -718,7 +754,8 @@ def _parse_cddb_entry(
         return None
 
     # Prefer DGENRE; fall back to the CDDB category (rock, jazz, …).
-    genre = dgenre or (category.strip().title() if category else '')
+    raw_genre = (dgenre or category or '').strip()
+    genre = raw_genre.title() if raw_genre else ''
 
     return AlbumMetadata(
         title=title.strip(),

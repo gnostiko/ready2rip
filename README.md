@@ -5,7 +5,7 @@
 A CD ripper focused on careful archival extraction with full cdparanoia,
 AccurateRip verification, modern metadata, and various tag options, utilizing GNOME design.
 
-<img width="1024" height="731" alt="Main window with album art and playback" src="docs/screenshots/01-main-window.png" />
+<img width="1024" height="731" alt="Main window with album art" src="docs/screenshots/01-main-window.png" />
 <img width="1024" height="731" alt="Choose release dialog from MusicBrainz" src="docs/screenshots/02-choose-release.png" />
 <img width="1024" height="731" alt="Editable track list" src="docs/screenshots/03-tracks.png" />
 <img width="1024" height="731" alt="Metadata settings" src="docs/screenshots/06-metadata-settings.png" />
@@ -139,8 +139,6 @@ What the AppImage **tries to ship** (so you usually need zero encode packages):
 | **cdparanoia** | Yes (build fails without it) |
 | **flac**, **lame**, **ffmpeg**, **opusenc** | **Only if present on the build host** — otherwise omitted |
 
-Optional: **GStreamer** CDDA plugins for in-app playback; ripping does not need them.
-
 ### Develop / run from source
 
 | Dependency | Role |
@@ -153,7 +151,6 @@ Optional: **GStreamer** CDDA plugins for in-app playback; ripping does not need 
 | **lame** | MP3 encode |
 | **ffmpeg** | AAC (M4A) encode, ReplayGain analysis (`ebur128`); Opus fallback |
 | **opusenc** | Opus encode (preferred over ffmpeg for Opus) |
-| **GStreamer** 1.x + `cdiocddasrc` or `cdparanoiasrc` | In-app CD playback (optional) |
 | Meson, Ninja, gcc | Install / AppImage packaging |
 
 ```bash
@@ -173,11 +170,11 @@ Example system packages (names vary by distro):
 ```bash
 # Fedora
 sudo dnf install python3-gobject gtk4 libadwaita python3-mutagen python3-pillow \
-  cdparanoia flac lame ffmpeg opus-tools gstreamer1-plugins-good
+  cdparanoia flac lame ffmpeg opus-tools
 
 # Debian / Ubuntu
 sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 python3-mutagen python3-pil \
-  cdparanoia flac lame ffmpeg opus-tools gstreamer1.0-plugins-good
+  cdparanoia flac lame ffmpeg opus-tools
 ```
 
 ### Build host (AppImage packaging)
@@ -231,8 +228,8 @@ Check your system glibc with `ldd --version`. If the AppImage fails with `GLIBC_
 2. Make it executable and start it:
 
 ```bash
-chmod +x ready2rip-0.4.8-x86_64.AppImage
-./ready2rip-0.4.8-x86_64.AppImage
+chmod +x ready2rip-0.4.9-x86_64.AppImage
+./ready2rip-0.4.9-x86_64.AppImage
 ```
 
 ### Recommended: manage with Gear Lever

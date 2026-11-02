@@ -520,7 +520,7 @@ def pixbuf_from_artwork(image: ArtworkImage, display_max: int = 256):
         pixbuf = pixbuf.scale_simple(
             max(1, int(w * scale)),
             max(1, int(h * scale)),
-            GdkPixbuf.InterpType.BILINEAR,
+            GdkPixbuf.InterpType.HYPER,
         )
     return pixbuf
 
@@ -565,14 +565,17 @@ def cover_texture_from_artwork(image: ArtworkImage, edge: int = 240):
     """Square, center-cropped texture at *edge*×*edge* for a fixed cover widget.
 
     Pre-sizing avoids ``Gtk.Picture`` expanding to the image's natural size.
+    Pass *edge* in **device pixels** (logical size × scale factor) for sharp
+    HiDPI output.
     """
     import gi
 
     gi.require_version('GdkPixbuf', '2.0')
     from gi.repository import GdkPixbuf
 
-    # Decode at a generous cap so crop source stays sharp on HiDPI.
-    pixbuf = pixbuf_from_artwork(image, display_max=max(edge * 3, 1024))
+    edge = max(1, int(edge))
+    # Decode well above the target so HYPER downscale stays sharp.
+    pixbuf = pixbuf_from_artwork(image, display_max=max(edge * 3, 2048))
     if pixbuf is None:
         return texture_from_artwork(image, display_max=edge)
 
@@ -584,7 +587,9 @@ def cover_texture_from_artwork(image: ArtworkImage, edge: int = 240):
     scale = max(edge / w, edge / h)
     nw = max(edge, round(w * scale))
     nh = max(edge, round(h * scale))
-    scaled = pixbuf.scale_simple(nw, nh, GdkPixbuf.InterpType.BILINEAR)
+    # HYPER is slower but much cleaner than BILINEAR for downscales.
+    interp = GdkPixbuf.InterpType.HYPER
+    scaled = pixbuf.scale_simple(nw, nh, interp)
     if scaled is None:
         return None
 
@@ -601,14 +606,49 @@ def cover_texture_from_artwork(image: ArtworkImage, edge: int = 240):
     return _texture_from_pixbuf(cropped)
 
 
+def blank_cover_texture(edge: int, *, scale: int = 1):
+    """Transparent *edge*×*edge* (× scale) texture to hold the cover slot size.
+
+    An empty ``Gtk.Picture`` collapses without a paintable; this keeps the
+    placeholder frame the same size as real artwork.
+    """
+    import gi
+
+    gi.require_version('GdkPixbuf', '2.0')
+    from gi.repository import GdkPixbuf
+
+    px = max(1, int(edge) * max(1, int(scale)))
+    pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, True, 8, px, px)
+    if pixbuf is None:
+        return None
+    pixbuf.fill(0x00000000)
+    return _texture_from_pixbuf(pixbuf)
+
+
 def apply_artwork_to_picture(
     picture_widget, image: ArtworkImage, *, edge: int = 240
 ) -> bool:
-    """Show *image* full-bleed on a fixed-size ``Gtk.Picture`` cover."""
-    texture = cover_texture_from_artwork(image, edge=edge)
+    """Show *image* full-bleed on a fixed-size ``Gtk.Picture`` cover.
+
+    *edge* is the logical CSS-pixel size of the cover widget. The texture is
+    built at ``edge × scale_factor`` so HiDPI displays stay sharp.
+    """
+    scale = 1
+    try:
+        scale = max(1, int(picture_widget.get_scale_factor()))
+    except Exception:
+        pass
+    texture = cover_texture_from_artwork(image, edge=max(1, int(edge) * scale))
     if texture is None:
         return False
     picture_widget.set_paintable(texture)
+    # Already cropped square — avoid another soft COVER resample.
+    try:
+        from gi.repository import Gtk
+
+        picture_widget.set_content_fit(Gtk.ContentFit.FILL)
+    except Exception:
+        pass
     return True
 
 

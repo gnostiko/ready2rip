@@ -10,6 +10,7 @@ __all__ = [
     'ArtworkImage',
     'ArtworkSourceOptions',
     'apply_artwork_to_picture',
+    'blank_cover_texture',
 ]
 
 

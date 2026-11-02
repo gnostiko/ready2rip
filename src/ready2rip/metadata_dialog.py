@@ -8,7 +8,7 @@ import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 
-from gi.repository import Adw, Gtk
+from gi.repository import Adw, GLib, Gtk
 
 from ready2rip.metadata.providers import AlbumMetadata
 
@@ -52,9 +52,10 @@ class MetadataPickerDialog(Adw.Dialog):
 
         group_root: Gtk.CheckButton | None = None
         for i, album in enumerate(self._candidates):
+            # ActionRow title/subtitle are Pango markup (& in labels breaks otherwise).
             row = Adw.ActionRow(
-                title=album.title or 'Unknown Album',
-                subtitle=self._subtitle(album),
+                title=GLib.markup_escape_text(album.title or 'Unknown Album'),
+                subtitle=GLib.markup_escape_text(self._subtitle(album)),
                 activatable=True,
             )
             check = Gtk.CheckButton()

@@ -18,7 +18,7 @@ _GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ('Close window', '<primary>w'),
             ('Settings', '<primary>comma'),
             ('Keyboard shortcuts', '<primary>question'),
-            ('Main menu', 'F10'),
+            ('About menu', 'F10'),
         ),
     ),
     (
@@ -26,9 +26,6 @@ _GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             ('Rip', '<primary>r'),
             ('Eject', '<primary>e'),
-            ('Play / Pause', '<primary>p'),
-            ('Next track', '<alt>Right'),
-            ('Previous track', '<alt>Left'),
         ),
     ),
 )

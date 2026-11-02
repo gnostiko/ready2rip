@@ -14,32 +14,19 @@ log = logging.getLogger(__name__)
 
 # Preferred → fallback names for themes that rename Adwaita symbols.
 ICON_FALLBACKS: dict[str, tuple[str, ...]] = {
-    'open-menu-symbolic': (
-        'open-menu-symbolic',
-        'application-menu-symbolic',
-        'view-more-symbolic',
+    'help-about-symbolic': (
+        'help-about-symbolic',
+        'dialog-information-symbolic',
+        'info-symbolic',
+    ),
+    'preferences-system-symbolic': (
+        'preferences-system-symbolic',
+        'emblem-system-symbolic',
+        'applications-system-symbolic',
     ),
     'media-eject-symbolic': (
         'media-eject-symbolic',
         'media-optical-symbolic',
-    ),
-    'media-playback-start-symbolic': (
-        'media-playback-start-symbolic',
-        'media-playback-start',
-    ),
-    'media-playback-pause-symbolic': (
-        'media-playback-pause-symbolic',
-        'media-playback-pause',
-    ),
-    'media-skip-backward-symbolic': (
-        'media-skip-backward-symbolic',
-        'media-seek-backward-symbolic',
-        'go-previous-symbolic',
-    ),
-    'media-skip-forward-symbolic': (
-        'media-skip-forward-symbolic',
-        'media-seek-forward-symbolic',
-        'go-next-symbolic',
     ),
     'folder-music-symbolic': (
         'folder-music-symbolic',
