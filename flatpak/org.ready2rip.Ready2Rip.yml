@@ -75,27 +75,19 @@ modules:
         url: https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz
         sha256: ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e
 
-  - name: python3-mutagen
+  # Network pip is fine for GitHub Release bundles (not a Flathub submission).
+  # Pillow's sdist needs pybind11 / build isolation that offline installs miss.
+  - name: python3-deps
     buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network
     build-commands:
-      - pip3 install --verbose --exists-action=i --no-index
-        --find-links="file://${PWD}" --prefix=${FLATPAK_DEST}
-        --no-build-isolation mutagen
+      - pip3 install --verbose --prefix=${FLATPAK_DEST}
+        'mutagen==1.48.1' 'Pillow==13.0.0'
     sources:
       - type: file
-        url: https://files.pythonhosted.org/packages/df/70/1675da133ea92227da41bf5b24e1c66be597ff736a1533ade41da986852f/mutagen-1.48.1.tar.gz
-        sha256: 8f95637ab9f6f305cec6bd1294e197debe207998e3e068596563c74f86b0a173
-
-  - name: python3-pillow
-    buildsystem: simple
-    build-commands:
-      - pip3 install --verbose --exists-action=i --no-index
-        --find-links="file://${PWD}" --prefix=${FLATPAK_DEST}
-        --no-build-isolation pillow
-    sources:
-      - type: file
-        url: https://files.pythonhosted.org/packages/ce/a4/9cc30690a394a8305e8be4c9036aa16d0dfddadd09079860b582f562496d/pillow-13.0.0.tar.gz
-        sha256: cdcd1ba258178f7356d74170c9a81ba4eab6a5d55748bc402a5a2a6fe6be3510
+        path: org.ready2rip.Ready2Rip.yml
 
   - name: ready2rip
     buildsystem: meson
