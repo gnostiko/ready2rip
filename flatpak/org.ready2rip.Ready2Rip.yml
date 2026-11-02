@@ -21,11 +21,8 @@ finish-args:
   - --filesystem=xdg-music
   - --talk-name=org.freedesktop.Notifications
   - --system-talk-name=org.freedesktop.UDisks2
-add-extensions:
-  org.freedesktop.Platform.ffmpeg-full:
-    directory: lib/ffmpeg
-    version: '25.08'
-    add-ld-path: .
+# GNOME 49 / Freedesktop 25.08 ships ffmpeg via the codecs-extra extension
+# (auto-installed with the runtime). Do not declare ffmpeg-full.
 cleanup:
   - /include
   - /lib/pkgconfig
@@ -70,6 +67,9 @@ modules:
     config-opts:
       - --disable-static
       - --disable-gtktest
+    # Modern ncurses splits termcap helpers into libtinfo.
+    build-options:
+      ldflags: -ltinfo
     sources:
       - type: archive
         url: https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz

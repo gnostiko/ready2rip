@@ -43,9 +43,7 @@ flatpak remote-add --user --if-not-exists flathub \
   https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install -y --user flathub \
   org.gnome.Platform//49 \
-  org.gnome.Sdk//49 \
-  org.freedesktop.Platform.ffmpeg-full//25.08 \
-  || true
+  org.gnome.Sdk//49
 
 echo "==> flatpak-builder (${ARCH})"
 rm -rf "$BUILD_DIR" "$REPO_DIR"

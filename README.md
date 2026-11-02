@@ -172,7 +172,7 @@ flatpak run org.ready2rip.Ready2Rip
 ```
 
 The bundle targets GNOME Platform 49, ships libcdio-paranoia / flac / lame, and
-uses the `org.freedesktop.Platform.ffmpeg-full` extension for AAC and Opus.
+uses the runtime’s codecs-extra stack (includes ffmpeg) for AAC and Opus.
 
 ## Dependencies
 
