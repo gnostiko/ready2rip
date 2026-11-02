@@ -2846,6 +2846,22 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         group.set_title(f'Tracks · {info.track_count}')
         self._apply_tracks_edit_mode()
 
+    @staticmethod
+    def _make_title_artist_grid(title: Gtk.Widget, artist: Gtk.Widget) -> Gtk.Grid:
+        """Homogeneous 2-col grid: Title and Artist each take half."""
+        grid = Gtk.Grid()
+        grid.set_column_homogeneous(True)
+        grid.set_column_spacing(12)
+        grid.set_hexpand(True)
+        grid.set_halign(Gtk.Align.FILL)
+        title.set_hexpand(True)
+        title.set_halign(Gtk.Align.FILL)
+        artist.set_hexpand(True)
+        artist.set_halign(Gtk.Align.FILL)
+        grid.attach(title, 0, 0, 1, 1)
+        grid.attach(artist, 1, 0, 1, 1)
+        return grid
+
     def _make_track_column_header(self) -> Gtk.ListBoxRow:
         """Column titles so Title / Artist line up with track cells."""
         row = Gtk.ListBoxRow()
@@ -2880,9 +2896,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         title_h.add_css_class('heading')
         title_h.set_halign(Gtk.Align.START)
         title_h.set_xalign(0.0)
-        title_h.set_hexpand(True)
         self._track_title_size.add_widget(title_h)
-        box.append(title_h)
 
         artist_h = Gtk.Label(label='Artist')
         artist_h.add_css_class('caption')
@@ -2891,10 +2905,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         artist_h.add_css_class('ready2rip-track-artist')
         artist_h.set_halign(Gtk.Align.START)
         artist_h.set_xalign(0.0)
-        artist_h.set_hexpand(False)
-        artist_h.set_size_request(160, -1)
         self._track_artist_size.add_widget(artist_h)
-        box.append(artist_h)
+        box.append(self._make_title_artist_grid(title_h, artist_h))
 
         dur_h = Gtk.Label(label='Time')
         dur_h.add_css_class('ready2rip-track-dur')
@@ -2917,7 +2929,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         """Flat track row: checkbox · # · title · artist · status · time.
 
         View mode shows labels; Edit mode swaps in entries for title/artist.
-        Size groups keep Title / Artist columns aligned under the header.
+        Title/Artist share remaining width equally (1/2 each).
         """
         row = Gtk.ListBoxRow()
         row.set_activatable(False)
@@ -2945,10 +2957,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         lead.append(num)
         box.append(lead)
 
-        # Title takes remaining width; artist stays a fixed column.
         title_stack = Gtk.Stack()
-        title_stack.set_hexpand(True)
-        title_stack.set_halign(Gtk.Align.FILL)
         title_stack.set_transition_type(Gtk.StackTransitionType.NONE)
 
         title_label = Gtk.Label(label=title or f'Track {number:02d}')
@@ -2974,13 +2983,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         title_stack.add_named(title_entry, 'edit')
         title_stack.set_visible_child_name('view')
         self._track_title_size.add_widget(title_stack)
-        box.append(title_stack)
 
         artist_stack = Gtk.Stack()
         artist_stack.add_css_class('ready2rip-track-artist')
-        artist_stack.set_hexpand(False)
-        artist_stack.set_halign(Gtk.Align.FILL)
-        artist_stack.set_size_request(160, -1)
         artist_stack.set_transition_type(Gtk.StackTransitionType.NONE)
 
         artist_label = Gtk.Label(label=artist or '—')
@@ -3009,7 +3014,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         artist_stack.add_named(artist_entry, 'edit')
         artist_stack.set_visible_child_name('view')
         self._track_artist_size.add_widget(artist_stack)
-        box.append(artist_stack)
+        box.append(self._make_title_artist_grid(title_stack, artist_stack))
 
         status = Gtk.Label(label='')
         status.add_css_class('caption')
