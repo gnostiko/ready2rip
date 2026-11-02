@@ -10,5 +10,6 @@ __pycache__/
 .mesonpy*
 *.egg-info/
 .ruff_cache/
+.pytest_cache/
 gschemas.compiled
 **/gschemas.compiled
