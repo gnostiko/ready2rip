@@ -1,0 +1,180 @@
+# Build .deb / .rpm (nfpm) and .flatpak bundles for x86_64 + aarch64.
+# Publishes to the GitHub Release for the matching tag (or meson version).
+
+name: Release Packages
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Upload packages to the GitHub Release for this meson version'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  deb-rpm:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-26.04
+          - arch: aarch64
+            runner: ubuntu-26.04-arm
+
+    name: deb/rpm ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential \
+            curl \
+            ninja-build \
+            python3 \
+            python3-pip \
+            gettext-base \
+            rpm \
+            file
+          python3 -m pip install --user 'meson>=1.3,<2'
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Check tag matches meson version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          VERSION="$(grep -E "version: '" meson.build | head -1 | sed -E "s/.*version: '([^']+)'.*/\1/")"
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "$VERSION" != "$TAG" ]; then
+            echo "error: meson.build version (${VERSION}) must match tag (${TAG})" >&2
+            exit 1
+          fi
+
+      - name: Build deb + rpm
+        run: |
+          chmod +x packaging/build-deb-rpm.sh packaging/postinst.sh packaging/postrm.sh
+          ./packaging/build-deb-rpm.sh
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ready2rip-deb-rpm-${{ matrix.arch }}
+          path: |
+            dist/*.deb
+            dist/*.rpm
+          if-no-files-found: error
+
+      - name: Publish to GitHub Release
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(dist/*.deb dist/*.rpm)
+          VERSION="$(grep -E "version: '" meson.build | head -1 | sed -E "s/.*version: '([^']+)'.*/\1/")"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="v${VERSION}"
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --title "ready2rip ${tag#v}" \
+              --generate-notes \
+              --target "${GITHUB_SHA}" \
+              || gh release upload "$tag" "${assets[@]}" --clobber
+          fi
+
+  flatpak:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-26.04
+          - arch: aarch64
+            runner: ubuntu-26.04-arm
+
+    name: flatpak ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            flatpak \
+            flatpak-builder \
+            ostree \
+            elfutils \
+            ca-certificates \
+            curl \
+            git \
+            patch \
+            python3 \
+            python3-pip
+
+      - name: Check tag matches meson version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          VERSION="$(grep -E "version: '" meson.build | head -1 | sed -E "s/.*version: '([^']+)'.*/\1/")"
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "$VERSION" != "$TAG" ]; then
+            echo "error: meson.build version (${VERSION}) must match tag (${TAG})" >&2
+            exit 1
+          fi
+
+      - name: Build Flatpak bundle
+        run: |
+          chmod +x packaging/build-flatpak.sh
+          ./packaging/build-flatpak.sh
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ready2rip-flatpak-${{ matrix.arch }}
+          path: dist/*.flatpak
+          if-no-files-found: error
+
+      - name: Publish to GitHub Release
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(dist/*.flatpak)
+          VERSION="$(grep -E "version: '" meson.build | head -1 | sed -E "s/.*version: '([^']+)'.*/\1/")"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="v${VERSION}"
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --title "ready2rip ${tag#v}" \
+              --generate-notes \
+              --target "${GITHUB_SHA}" \
+              || gh release upload "$tag" "${assets[@]}" --clobber
+          fi

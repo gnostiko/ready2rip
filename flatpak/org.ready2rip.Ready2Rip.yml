@@ -1,0 +1,106 @@
+# Flatpak manifest for ready2rip (GitHub Release .flatpak bundles).
+# Build from repo root:
+#   flatpak-builder --user --force-clean --repo=flatpak-repo \
+#     build-flatpak flatpak/org.ready2rip.Ready2Rip.yml
+#   flatpak build-bundle flatpak-repo dist/ready2rip-VERSION-ARCH.flatpak \
+#     org.ready2rip.Ready2Rip
+
+id: org.ready2rip.Ready2Rip
+runtime: org.gnome.Platform
+runtime-version: '49'
+sdk: org.gnome.Sdk
+command: ready2rip
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --device=all
+  - --filesystem=home
+  - --filesystem=xdg-music
+  - --talk-name=org.freedesktop.Notifications
+  - --system-talk-name=org.freedesktop.UDisks2
+add-extensions:
+  org.freedesktop.Platform.ffmpeg-full:
+    directory: lib/ffmpeg
+    version: '25.08'
+    add-ld-path: .
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/man
+  - /share/doc
+  - '*.a'
+  - '*.la'
+modules:
+  - name: libcdio
+    buildsystem: autotools
+    config-opts:
+      - --disable-static
+      - --disable-example-progs
+    sources:
+      - type: archive
+        url: https://ftp.gnu.org/gnu/libcdio/libcdio-2.1.0.tar.bz2
+        sha256: 8550e9589dbd594bfac93b81ecf129b1dc9d0d51e90f9696f1b2f9b2af32712b
+
+  - name: libcdio-paranoia
+    buildsystem: autotools
+    config-opts:
+      - --disable-static
+      - --disable-example-progs
+    sources:
+      - type: archive
+        url: https://ftp.gnu.org/gnu/libcdio/libcdio-paranoia-10.2+2.0.2.tar.bz2
+        sha256: 186892539dedd661276014d71318c8c8f97ecb1250a86625256abd4defbf0d0c
+
+  - name: flac
+    buildsystem: autotools
+    config-opts:
+      - --disable-static
+      - --disable-examples
+      - --disable-thorough-tests
+    sources:
+      - type: archive
+        url: https://ftp.osuosl.org/pub/xiph/releases/flac/flac-1.4.3.tar.xz
+        sha256: 6c58e69cd22348f441b861092b825e591d0b822e106de6eb0ee4d05d27205b70
+
+  - name: lame
+    buildsystem: autotools
+    config-opts:
+      - --disable-static
+      - --disable-gtktest
+    sources:
+      - type: archive
+        url: https://sourceforge.net/projects/lame/files/lame/3.100/lame-3.100.tar.gz/download
+        sha256: ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e
+
+  - name: python3-mutagen
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index
+        --find-links="file://${PWD}" --prefix=${FLATPAK_DEST}
+        --no-build-isolation mutagen
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/df/70/1675da133ea92227da41bf5b24e1c66be597ff736a1533ade41da986852f/mutagen-1.48.1.tar.gz
+        sha256: 8f95637ab9f6f305cec6bd1294e197debe207998e3e068596563c74f86b0a173
+
+  - name: python3-pillow
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index
+        --find-links="file://${PWD}" --prefix=${FLATPAK_DEST}
+        --no-build-isolation pillow
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/ce/a4/9cc30690a394a8305e8be4c9036aa16d0dfddadd09079860b582f562496d/pillow-13.0.0.tar.gz
+        sha256: cdcd1ba258178f7356d74170c9a81ba4eab6a5d55748bc402a5a2a6fe6be3510
+
+  - name: ready2rip
+    buildsystem: meson
+    config-opts:
+      - --prefix=/app
+    sources:
+      - type: dir
+        path: ..

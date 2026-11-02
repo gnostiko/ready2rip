@@ -834,16 +834,29 @@ fi
 
 # -u embeds .upd_info (read by Gear Lever + AppImageUpdate) and, when
 # zsyncmake is available, writes a sibling .zsync next to the AppImage.
+# Optional GPG signing: SIGN=1, SIGN_KEY=<fpr>, APPIMAGETOOL_SIGN_PASSPHRASE.
+SIGN_ARGS=()
+if [ "${SIGN:-0}" = "1" ]; then
+  need gpg
+  SIGN_ARGS+=(--sign)
+  if [ -n "${SIGN_KEY:-}" ]; then
+    SIGN_ARGS+=(--sign-key "$SIGN_KEY")
+  fi
+  echo "    signing with GPG key ${SIGN_KEY:-default}"
+fi
+
 set +e
 ARCH="$ARCH" "${TOOLS}/appimagetool" \
   --no-appstream \
   -u "${UPDATE_INFORMATION}" \
+  "${SIGN_ARGS[@]}" \
   "$APPDIR" \
   "${DIST}/${OUT_NAME}"
 AT_RC=$?
 if [ "$AT_RC" -ne 0 ]; then
   echo "warning: appimagetool with -u failed; retrying without update info" >&2
   ARCH="$ARCH" "${TOOLS}/appimagetool" --no-appstream \
+    "${SIGN_ARGS[@]}" \
     "$APPDIR" "${DIST}/${OUT_NAME}"
   AT_RC=$?
 fi
@@ -851,6 +864,10 @@ set -e
 if [ "$AT_RC" -ne 0 ]; then
   echo "error: appimagetool failed" >&2
   exit 1
+fi
+
+if [ "${SIGN:-0}" = "1" ]; then
+  echo "    GPG signing requested (APPIMAGETOOL_FORCE_SIGN=${APPIMAGETOOL_FORCE_SIGN:-0})"
 fi
 
 chmod +x "${DIST}/${OUT_NAME}"

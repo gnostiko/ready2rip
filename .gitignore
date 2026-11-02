@@ -1,6 +1,9 @@
 /.cache/
 /build/
 /build-appimage/
+/build-packages/
+/build-flatpak/
+/flatpak-repo/
 /dist/
 /.tools/
 /install/
