@@ -7,7 +7,7 @@
 
 id: org.ready2rip.Ready2Rip
 runtime: org.gnome.Platform
-runtime-version: '49'
+runtime-version: '51'
 sdk: org.gnome.Sdk
 command: ready2rip
 finish-args:
@@ -21,8 +21,8 @@ finish-args:
   - --filesystem=xdg-music
   - --talk-name=org.freedesktop.Notifications
   - --system-talk-name=org.freedesktop.UDisks2
-# GNOME 49 / Freedesktop 25.08 ships ffmpeg via the codecs-extra extension
-# (auto-installed with the runtime). Do not declare ffmpeg-full.
+# GNOME 51 ships ffmpeg via the codecs-extra extension (auto-installed with
+# the runtime). Do not declare ffmpeg-full.
 cleanup:
   - /include
   - /lib/pkgconfig
@@ -87,7 +87,7 @@ modules:
         'mutagen==1.48.1' 'Pillow==13.0.0'
     sources:
       - type: file
-        path: org.ready2rip.Ready2Rip.yml
+        path: python-deps.marker
 
   - name: ready2rip
     buildsystem: meson

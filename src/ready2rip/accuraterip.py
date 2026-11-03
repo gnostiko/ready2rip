@@ -388,7 +388,7 @@ class AccurateRipVerifier:
             and self.sample_offset == 0
         ):
             result.message = (
-                f'{result.message} · try setting Drive sample offset in Rip options '
+                f'{result.message} · try Detect sample offset in Settings → Drive '
                 f'(accuraterip.com/driveoffsets.htm)'
             )
         return result

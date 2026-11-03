@@ -29,7 +29,16 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-02">
       <description>
         <p>
-          0.4.11: Track list layout polish.
+          0.4.12: Artwork hover actions, naming scheme presets,
+          nested sample-offset settings, GNOME 51 Flatpak, and UI
+          capitalization cleanup. Remove dual-encode option.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.11" date="2026-11-02">
+      <description>
+        <p>
+          Track list layout polish.
         </p>
       </description>
     </release>

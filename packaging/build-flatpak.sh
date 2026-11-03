@@ -38,12 +38,12 @@ need flatpak-builder
 
 mkdir -p "$DIST"
 
-echo "==> ensure Flathub remote + GNOME 49 SDK"
+echo "==> ensure Flathub remote + GNOME 51 SDK"
 flatpak remote-add --user --if-not-exists flathub \
   https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install -y --user flathub \
-  org.gnome.Platform//49 \
-  org.gnome.Sdk//49
+  org.gnome.Platform//51 \
+  org.gnome.Sdk//51
 
 echo "==> flatpak-builder (${ARCH})"
 rm -rf "$BUILD_DIR" "$REPO_DIR"

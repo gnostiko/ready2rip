@@ -11,6 +11,11 @@ from pathlib import Path
 
 from gi.repository import Gio, GLib
 
+from ready2rip.paths import (
+    DEFAULT_ALBUM_FOLDER_TEMPLATE,
+    DEFAULT_FILENAME_TEMPLATE,
+)
+
 log = logging.getLogger(__name__)
 
 SCHEMA_ID = 'org.ready2rip.Ready2Rip'
@@ -28,15 +33,15 @@ ENCODER_IDS = frozenset(e[0] for e in ENCODERS)
 
 # FLAC compression levels shown in the Encoding panel.
 FLAC_LEVELS = (
-    (0, 'Fastest'),
+    (0, '0 (Fastest)'),
     (1, '1'),
     (2, '2'),
     (3, '3'),
     (4, '4'),
-    (5, 'Default'),
+    (5, '5 (default)'),
     (6, '6'),
     (7, '7'),
-    (8, 'Smallest'),
+    (8, '8 (smallest)'),
 )
 
 # LAME presets: VBR (-V n) and CBR (-b n). Default V0 matches common archival rips.
@@ -58,18 +63,18 @@ MP3_QUALITY_IDS = frozenset(q[0] for q in MP3_QUALITIES)
 # Opus VBR target bitrates (kbps) — compact preset list.
 OPUS_BITRATES = (96, 128, 160, 192, 256)
 
-# Fraunhofer FDK AAC presets (VBR 1–5) + CBR — same style as MP3_QUALITIES.
+# Fraunhofer FDK AAC presets (VBR 1–5) + CBR — smallest quality → largest.
 # Native ffmpeg ``aac`` maps VBR presets to approximate CBR when FDK is absent.
 AAC_QUALITIES = (
-    ('vbr5', 'VBR 5 (highest)'),
-    ('vbr4', 'VBR 4'),
-    ('vbr3', 'VBR 3'),
-    ('vbr2', 'VBR 2'),
     ('vbr1', 'VBR 1'),
-    ('cbr320', '320 kbps CBR'),
-    ('cbr256', '256 kbps CBR'),
-    ('cbr192', '192 kbps CBR'),
+    ('vbr2', 'VBR 2'),
+    ('vbr3', 'VBR 3'),
+    ('vbr4', 'VBR 4'),
+    ('vbr5', 'VBR 5 (highest)'),
     ('cbr128', '128 kbps CBR'),
+    ('cbr192', '192 kbps CBR'),
+    ('cbr256', '256 kbps CBR'),
+    ('cbr320', '320 kbps CBR'),
 )
 
 AAC_QUALITY_IDS = frozenset(q[0] for q in AAC_QUALITIES)
@@ -149,54 +154,11 @@ def opus_bitrate_label(bitrate: int) -> str:
     return f'{int(bitrate)} kbps VBR'
 
 
-@dataclass(frozen=True)
-class EncodeTarget:
-    """One encode destination: format plus optional output folder.
-
-    Empty *directory* means “use the primary Output folder”.
-    """
-
-    format: str
-    directory: str = ''
-
-
-def encode_target_to_spec(target: EncodeTarget) -> str:
-    return f'{target.format}|{target.directory}'
-
-
-def encode_target_from_spec(spec: str) -> EncodeTarget | None:
-    raw = (spec or '').strip()
-    if not raw:
-        return None
-    if '|' in raw:
-        fmt, _, directory = raw.partition('|')
-    else:
-        fmt, directory = raw, ''
-    fmt = fmt.strip().lower()
-    if fmt not in ENCODER_IDS:
-        return None
-    return EncodeTarget(format=fmt, directory=directory.strip())
-
-
-def encode_targets_from_specs(specs: list[str] | tuple[str, ...]) -> tuple[EncodeTarget, ...]:
-    out: list[EncodeTarget] = []
-    seen: set[tuple[str, str]] = set()
-    for spec in specs:
-        target = encode_target_from_spec(spec)
-        if target is None:
-            continue
-        key = (target.format, target.directory)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(target)
-    return tuple(out)
-
 # 0 = keep full downloaded resolution when embedding
 ARTWORK_SIZES = (
     (300, '300 px'),
     (500, '500 px'),
-    (600, '600 px (default)'),
+    (600, '600 px'),
     (800, '800 px'),
     (1000, '1000 px'),
     (1200, '1200 px'),
@@ -208,7 +170,7 @@ _ARTWORK_SIZE_ALIASES = {
     720: 800,
 }
 
-DEFAULT_ALBUM_FOLDER_TEMPLATE = '{album_artist}/{dated_album}/{disc_folder}'
+# Re-exported for callers; canonical definitions live in ready2rip.paths.
 _LEGACY_ALBUM_FOLDER_TEMPLATES = {
     '{album_artist}/{album}/{disc_folder}',
     '{album_artist}/{album}',
@@ -244,13 +206,6 @@ def _get_int(settings: Gio.Settings, key: str, default: int) -> int:
         return int(settings.get_int(key))
     except Exception:
         return default
-
-
-def _get_strv(settings: Gio.Settings, key: str) -> list[str]:
-    try:
-        return list(settings.get_strv(key) or [])
-    except Exception:
-        return []
 
 
 def _load_mp3_quality(settings: Gio.Settings) -> str:
@@ -319,8 +274,6 @@ class AppSettings:
     color_scheme: str = 'default'
     output_directory: str = ''  # empty → default_output_directory() (Music)
     encode_format: str = 'flac'
-    # Extra formats beyond encode_format; empty directory → primary Output.
-    extra_encode_targets: tuple[EncodeTarget, ...] = ()
     flac_compression: int = 5
     # LAME preset id: v0–v5 or cbr128/192/256/320.
     mp3_quality: str = 'v0'
@@ -337,9 +290,9 @@ class AppSettings:
     use_musicbrainz: bool = True
     use_freedb: bool = True
     auto_lookup_metadata: bool = True
-    filename_template: str = '{track:02d} - {title}'
+    filename_template: str = DEFAULT_FILENAME_TEMPLATE
     # {disc_folder} expands to CD1, CD2, … only when total discs > 1.
-    album_folder_template: str = '{album_artist}/{dated_album}/{disc_folder}'
+    album_folder_template: str = DEFAULT_ALBUM_FOLDER_TEMPLATE
     verify_accuraterip: bool = True
     verify_ctdb: bool = True
     submit_ctdb: bool = False
@@ -365,27 +318,6 @@ class AppSettings:
         if raw:
             return Path(raw).expanduser()
         return default_music_directory()
-
-    def resolved_encode_targets(self) -> list[tuple[str, Path]]:
-        """``(format, base_dir)`` list: primary first, then extras (no dupes)."""
-        primary_fmt = (self.encode_format or 'flac').strip().lower()
-        if primary_fmt not in ENCODER_IDS:
-            primary_fmt = 'flac'
-        primary_dir = self.resolved_output_directory()
-        targets: list[tuple[str, Path]] = [(primary_fmt, primary_dir)]
-        seen = {(primary_fmt, str(primary_dir))}
-        for extra in self.extra_encode_targets:
-            fmt = (extra.format or '').strip().lower()
-            if fmt not in ENCODER_IDS:
-                continue
-            raw = (extra.directory or '').strip()
-            base = Path(raw).expanduser() if raw else primary_dir
-            key = (fmt, str(base))
-            if key in seen:
-                continue
-            seen.add(key)
-            targets.append((fmt, base))
-        return targets
 
 
 def _checkout_schema_xml() -> Path | None:
@@ -486,9 +418,6 @@ class SettingsStore:
                 color_scheme=scheme,
                 output_directory=s.get_string('output-directory') or '',
                 encode_format=s.get_string('encode-format') or 'flac',
-                extra_encode_targets=encode_targets_from_specs(
-                    _get_strv(s, 'extra-encode-targets')
-                ),
                 flac_compression=s.get_int('flac-compression'),
                 mp3_quality=_load_mp3_quality(s),
                 aac_quality=(aq := _load_aac_quality(s)),
@@ -508,7 +437,7 @@ class SettingsStore:
                 use_freedb=s.get_boolean('use-freedb'),
                 auto_lookup_metadata=s.get_boolean('auto-lookup-metadata'),
                 filename_template=s.get_string('filename-template')
-                or '{track:02d} - {title}',
+                or DEFAULT_FILENAME_TEMPLATE,
                 album_folder_template=_migrate_album_folder_template(
                     s.get_string('album-folder-template')
                 ),
@@ -562,7 +491,6 @@ class SettingsStore:
             'color_scheme': ('color-scheme', 'string'),
             'output_directory': ('output-directory', 'string'),
             'encode_format': ('encode-format', 'string'),
-            'extra_encode_targets': ('extra-encode-targets', 'strv'),
             'flac_compression': ('flac-compression', 'int'),
             'mp3_quality': ('mp3-quality', 'string'),
             'aac_quality': ('aac-quality', 'string'),
@@ -622,13 +550,4 @@ class SettingsStore:
                 s.set_int(gkey, int(value))
             elif kind == 'bool':
                 s.set_boolean(gkey, bool(value))
-            elif kind == 'strv':
-                if attr == 'extra_encode_targets':
-                    specs = [
-                        encode_target_to_spec(t)
-                        for t in (value or ())
-                    ]
-                    s.set_strv(gkey, specs)
-                else:
-                    s.set_strv(gkey, list(value or []))
         return current

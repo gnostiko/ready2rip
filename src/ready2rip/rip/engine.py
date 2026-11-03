@@ -30,7 +30,11 @@ from ready2rip.disc.htoa import (
 )
 from ready2rip.disc.probe import DiscInfo, attach_mmc_toc
 from ready2rip.metadata.providers import AlbumMetadata
-from ready2rip.paths import build_output_paths
+from ready2rip.paths import (
+    DEFAULT_ALBUM_FOLDER_TEMPLATE,
+    DEFAULT_FILENAME_TEMPLATE,
+    build_output_paths,
+)
 from ready2rip.replaygain import apply_replaygain
 from ready2rip.rip.cue import (
     cue_file_type_for_extension,
@@ -108,8 +112,6 @@ class RipJob:
     track_numbers: list[int]
     output_directory: Path
     encode_format: str = 'flac'  # flac | mp3 | aac | opus | wav
-    # Extra (format, base_dir) encodes after the primary; empty → primary only.
-    encode_targets: list[tuple[str, Path]] = field(default_factory=list)
     flac_compression: int = 5
     mp3_quality: str = 'v0'  # LAME v0–v5 or cbr128/192/256/320
     aac_quality: str = 'cbr256'  # FDK VBR 1–5 or cbr128/192/256/320
@@ -122,8 +124,8 @@ class RipJob:
     # Full-resolution image saved as cover.jpg/png in the album folder.
     folder_artwork: ArtworkImage | None = None
     album: AlbumMetadata | None = None
-    filename_template: str = '{track:02d} - {title}'
-    album_folder_template: str = '{album_artist}/{dated_album}'
+    filename_template: str = DEFAULT_FILENAME_TEMPLATE
+    album_folder_template: str = DEFAULT_ALBUM_FOLDER_TEMPLATE
     save_cover_file: bool = True
     verify_accuraterip: bool = True
     verify_ctdb: bool = True
@@ -263,34 +265,22 @@ class RipEngine:
         except ValueError as exc:
             return RipResult(success=False, error=str(exc))
 
-        targets = self._normalize_encode_targets(job)
-        if not targets:
-            return RipResult(success=False, error='No encode targets configured')
+        fmt = (job.encode_format or 'flac').strip().lower()
+        if fmt not in self.EXTENSIONS:
+            fmt = 'flac'
+        base = Path(job.output_directory).expanduser().resolve()
 
         # CD images + CUE need a lossless/container format (WAV/FLAC).
-        if job.copy_image:
-            fixed: list[tuple[str, Path]] = []
-            for enc_fmt, enc_base in targets:
-                if enc_fmt not in ('flac', 'wav'):
-                    log.info(
-                        'Copy Image mode: using FLAC instead of %s', enc_fmt
-                    )
-                    enc_fmt = 'flac'
-                fixed.append((enc_fmt, enc_base))
-            targets = self._dedupe_encode_targets(fixed)
-            job.encode_format = targets[0][0]
-            job.encode_targets = list(targets)
+        if job.copy_image and fmt not in ('flac', 'wav'):
+            log.info('Copy Image mode: using FLAC instead of %s', fmt)
+            fmt = 'flac'
 
-        for enc_fmt, _enc_base in targets:
-            missing = self._missing_encoder(enc_fmt)
-            if missing:
-                return RipResult(success=False, error=missing)
+        missing = self._missing_encoder(fmt)
+        if missing:
+            return RipResult(success=False, error=missing)
 
-        fmt = targets[0][0]
-        base = targets[0][1]
         job.encode_format = fmt
         job.output_directory = base
-        job.encode_targets = list(targets)
 
         layout_notes = self._detect_disc_layout(job, on_progress)
 
@@ -1053,7 +1043,7 @@ class RipEngine:
             return None
 
         basename = multi_file_cue_basename(job.album, job.disc_info)
-        # Include format so Encode Twice → same folder does not overwrite cues.
+        # Include format in the CUE basename for clarity next to audio files.
         fmt = (ext or pairs[0][1].suffix).lstrip('.').lower() or 'audio'
         cue_path = album_dir / f'{basename}.{fmt}.cue'
         write_multi_file_cue_sheet(
@@ -1232,39 +1222,6 @@ class RipEngine:
             return 'opusenc or ffmpeg required for Opus'
         return None
 
-    @staticmethod
-    def _normalize_encode_targets(job: RipJob) -> list[tuple[str, Path]]:
-        """Primary + extras as ``(format, resolved_base_dir)``."""
-        raw: list[tuple[str, Path]] = []
-        if job.encode_targets:
-            for enc_fmt, enc_base in job.encode_targets:
-                fmt = (enc_fmt or '').strip().lower()
-                if fmt not in RipEngine.EXTENSIONS:
-                    continue
-                raw.append((fmt, Path(enc_base).expanduser()))
-        if not raw:
-            fmt = (job.encode_format or 'flac').strip().lower()
-            if fmt not in RipEngine.EXTENSIONS:
-                fmt = 'flac'
-            raw.append((fmt, Path(job.output_directory).expanduser()))
-        return RipEngine._dedupe_encode_targets(
-            [(f, b.resolve()) for f, b in raw]
-        )
-
-    @staticmethod
-    def _dedupe_encode_targets(
-        targets: list[tuple[str, Path]],
-    ) -> list[tuple[str, Path]]:
-        out: list[tuple[str, Path]] = []
-        seen: set[tuple[str, str]] = set()
-        for fmt, base in targets:
-            key = (fmt, str(base))
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append((fmt, base))
-        return out
-
     def _destinations_for_track(
         self,
         job: RipJob,
@@ -1272,35 +1229,36 @@ class RipEngine:
         *,
         filename: str | None = None,
     ) -> list[_EncodeDest]:
-        """Resolve every encode target to album folder + output path."""
-        dests: list[_EncodeDest] = []
-        for enc_fmt, enc_base in self._normalize_encode_targets(job):
-            enc_ext = self.EXTENSIONS[enc_fmt]
-            album_dir, templated = build_output_paths(
-                base_dir=enc_base,
-                album_folder_template=job.album_folder_template,
-                filename_template=job.filename_template,
-                album=job.album,
-                track_number=max(1, track_number),
-                extension=enc_ext,
-            )
-            if filename:
-                stem = Path(filename).name
-                if stem.lower().endswith(enc_ext.lower()):
-                    out_path = album_dir / stem
-                else:
-                    out_path = album_dir / f'{stem}{enc_ext}'
+        """Resolve album folder + output path for the job's encode format."""
+        enc_fmt = (job.encode_format or 'flac').strip().lower()
+        if enc_fmt not in self.EXTENSIONS:
+            enc_fmt = 'flac'
+        enc_base = Path(job.output_directory).expanduser().resolve()
+        enc_ext = self.EXTENSIONS[enc_fmt]
+        album_dir, templated = build_output_paths(
+            base_dir=enc_base,
+            album_folder_template=job.album_folder_template,
+            filename_template=job.filename_template,
+            album=job.album,
+            track_number=max(1, track_number),
+            extension=enc_ext,
+        )
+        if filename:
+            stem = Path(filename).name
+            if stem.lower().endswith(enc_ext.lower()):
+                out_path = album_dir / stem
             else:
-                out_path = templated
-            dests.append(
-                _EncodeDest(
-                    format=enc_fmt,
-                    base_dir=enc_base,
-                    album_dir=album_dir,
-                    out_path=out_path,
-                )
+                out_path = album_dir / f'{stem}{enc_ext}'
+        else:
+            out_path = templated
+        return [
+            _EncodeDest(
+                format=enc_fmt,
+                base_dir=enc_base,
+                album_dir=album_dir,
+                out_path=out_path,
             )
-        return dests
+        ]
 
     def _ensure_destination_dirs(self, dests: list[_EncodeDest]) -> None:
         """Create every destination album folder (and its base) up front."""
@@ -1321,7 +1279,7 @@ class RipEngine:
         write_cover: bool = True,
         on_progress: Callable[[int, str, Path], None] | None = None,
     ) -> list[Path]:
-        """Encode *wav_path* to every destination; return output paths in order.
+        """Encode *wav_path* to the destination(s); return output paths in order.
 
         Tags and optional embedded art are applied after each encode. Folder
         cover is written once per album directory when missing.

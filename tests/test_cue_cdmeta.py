@@ -73,3 +73,15 @@ def test_mb_primary_genre_picks_highest_count() -> None:
     }
     assert _mb_primary_genre(entity) == 'Indie Rock'
     assert _mb_primary_genre({}) == ''
+
+
+def test_mb_primary_genre_falls_back_to_tags() -> None:
+    entity = {
+        'genres': [],
+        'tags': [
+            {'name': '1997', 'count': 9},
+            {'name': 'shoegaze', 'count': 4},
+            {'name': 'dream pop', 'count': 6},
+        ],
+    }
+    assert _mb_primary_genre(entity) == 'Dream Pop'

@@ -35,7 +35,7 @@ def present_keyboard_shortcuts(parent: Gtk.Window | None) -> None:
     """Show a compact shortcuts dialog (no search bar)."""
     # Prefer a Preferences-style dialog: Adw.ShortcutsDialog always includes a
     # search entry, which is noise for this small shortcut set.
-    dialog = Adw.Dialog(title='Keyboard Shortcuts')
+    dialog = Adw.Dialog(title='Keyboard shortcuts')
     dialog.set_content_width(420)
     dialog.set_follows_content_size(True)
 

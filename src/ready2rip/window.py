@@ -44,17 +44,24 @@ from ready2rip.metadata.providers import (
     parse_musicbrainz_release_id,
 )
 from ready2rip.metadata_dialog import MetadataPickerDialog
-from ready2rip.paths import track_meta_for
+from ready2rip.paths import (
+    DEFAULT_ALBUM_FOLDER_TEMPLATE,
+    DEFAULT_FILENAME_TEMPLATE,
+    FILENAME_SCHEMES,
+    FILENAME_TEMPLATE_HELP,
+    FOLDER_SCHEMES,
+    FOLDER_TEMPLATE_HELP,
+    scheme_index,
+    track_meta_for,
+)
 from ready2rip.rip.engine import RipEngine, RipJob, RipProgress, RipResult, RipState
 from ready2rip.settings import (
     AAC_QUALITIES,
     ARTWORK_SIZES,
-    DEFAULT_ALBUM_FOLDER_TEMPLATE,
     ENCODERS,
     FLAC_LEVELS,
     MP3_QUALITIES,
     OPUS_BITRATES,
-    EncodeTarget,
     SettingsStore,
     default_output_directory,
     normalize_aac_quality,
@@ -120,17 +127,17 @@ def _empty_tray_copy(state: DriveTrayState, device: str) -> tuple[str, str] | No
     """Status-page title and description for an empty or missing drive."""
     if state is DriveTrayState.TRAY_OPEN:
         return (
-            'Tray Open',
+            'Tray open',
             f'The drive tray is open on {device}. Insert a disc and close the tray.',
         )
     if state is DriveTrayState.NO_DISC:
         return (
-            'No Disc',
+            'No disc',
             f'Tray is closed but no disc is in {device}. Insert an audio CD.',
         )
     if state is DriveTrayState.MISSING:
         return (
-            'Drive Not Found',
+            'Drive not found',
             f'Cannot open {device}. Check the optical device path in Settings.',
         )
     return None
@@ -198,9 +205,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._track_artist_button: Gtk.Button | None = None
         self._track_select_all: Gtk.CheckButton | None = None
         self._syncing_select_all = False
-        # Align title / artist columns across all track rows.
-        self._track_title_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
-        self._track_artist_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        # Keep checkbox/# · Title|Artist · status · time columns locked across rows.
+        self._track_lead_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        self._track_fields_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        self._track_status_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        self._track_dur_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
         self._album_field_rows: list[Gtk.Widget] = []
         self._album_title_row: Adw.EntryRow | None = None
         self._album_artist_row: Adw.EntryRow | None = None
@@ -263,7 +272,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._aac_qualities = [qid for qid, _label in AAC_QUALITIES]
         self._opus_values = list(OPUS_BITRATES)
         self._quality_kind: str | None = None
-        self._also_quality_kind: str | None = None
 
         self._setup_window_actions()
         self._setup_header_icons()
@@ -271,7 +279,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._setup_settings_dialog()
         self._setup_cover_widget()
         self._setup_progress_styles()
-        self._build_calibration_row()
         self._build_options_rows()
         self._build_metadata_rows()
         self._build_album_edit_rows()
@@ -300,8 +307,18 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._rebuild_drive_rows(device, allow_optical=False)
         except Exception:
             pass
+        # Album EntryRows must not open in edit mode on launch.
+        self._clear_window_focus()
         self._start_async_probe(device, reason='startup')
         return GLib.SOURCE_REMOVE
+
+    def _clear_window_focus(self) -> bool:
+        """Drop keyboard focus so Adw.EntryRow does not look like it is editing."""
+        self.set_focus(None)
+        return GLib.SOURCE_REMOVE
+
+    def _defer_clear_window_focus(self) -> None:
+        GLib.idle_add(self._clear_window_focus)
 
     def _start_async_probe(
         self,
@@ -525,16 +542,16 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if hasattr(self.cover_picture, 'set_can_shrink'):
             self.cover_picture.set_can_shrink(True)
 
-        self.cover_actions.set_opacity(0.0)
+        # Opacity on the actions box (+ buttons) — leave can_target on so
+        # hover→click does not race with leave/hide (last working release).
+        # Not focusable: avoids tab-focus leaving icons stuck visible.
+        self._set_cover_actions_visible(False)
         for button in (
             self.search_art_button,
             self.choose_art_button,
             self.clear_art_button,
         ):
-            button.connect(
-                'notify::has-focus',
-                self._on_cover_button_focus_changed,
-            )
+            button.set_focusable(False)
         self._show_placeholder_cover()
         self._sync_cover_action_sensitivity()
 
@@ -543,7 +560,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         motion.connect('leave', self._on_cover_pointer_leave)
         self.cover_frame.add_controller(motion)
 
-        # Homogeneous 3-column grid: Artwork spans 1, Album spans 2 → 1/3 + 2/3.
         self._attach_art_album_grid()
         self.art_album_row.connect('notify::width', self._on_art_album_row_width)
 
@@ -632,38 +648,36 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
     def _set_cover_actions_visible(self, visible: bool) -> None:
         # Opacity only — leave can_target enabled so moving onto the buttons
-        # does not race with leave/hide before click.
-        self.cover_actions.set_opacity(1.0 if visible else 0.0)
-
-    def _cover_action_has_focus(self) -> bool:
-        return (
-            self.search_art_button.has_focus()
-            or self.choose_art_button.has_focus()
-            or self.clear_art_button.has_focus()
-        )
+        # does not race with leave/hide before click. Also set each button so
+        # OSD styling cannot leave icons stuck visible/invisible.
+        opacity = 1.0 if visible else 0.0
+        self.cover_actions.set_opacity(opacity)
+        for button in (
+            self.search_art_button,
+            self.choose_art_button,
+            self.clear_art_button,
+        ):
+            button.set_opacity(opacity)
 
     def _on_cover_pointer_enter(self, *_args) -> None:
         self._set_cover_actions_visible(True)
 
     def _on_cover_pointer_leave(self, *_args) -> None:
-        if not self._cover_action_has_focus():
-            self._set_cover_actions_visible(False)
-
-    def _on_cover_button_focus_changed(self, button: Gtk.Button, *_args) -> None:
-        # Keyboard focus: show while focused, hide when focus leaves (unless hovered).
-        if self._cover_action_has_focus():
-            self._set_cover_actions_visible(True)
-        else:
-            self._set_cover_actions_visible(False)
+        self._set_cover_actions_visible(False)
 
     def _sync_cover_action_sensitivity(self) -> None:
         self.clear_art_button.set_sensitive(self._artwork is not None)
+
+    def _set_cover_frame_empty(self, empty: bool) -> None:
+        if empty:
+            self.cover_frame.add_css_class('ready2rip-cover-empty')
+        else:
+            self.cover_frame.remove_css_class('ready2rip-cover-empty')
 
     def _show_placeholder_cover(self) -> None:
         """Show the music icon in a cover slot the same size as real artwork."""
         size = getattr(self, '_cover_display_size', self._COVER_SIZE)
         self._apply_cover_display_size(size)
-        # Transparent square paintable — empty Picture collapses otherwise.
         self._apply_blank_cover_paintable(size)
 
         apply_icon(
@@ -671,10 +685,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         )
         self.cover_placeholder.add_css_class('ready2rip-cover-placeholder')
         self.cover_placeholder.set_visible(True)
-        # Ensure the icon paints above an empty GtkPicture in all themes.
         self.cover_placeholder.set_opacity(1.0)
+        self._set_cover_frame_empty(True)
         self._update_cover_size_label()
-        # Re-measure after map so the empty slot matches the Artwork column.
         self._fit_cover_to_column()
 
     def _update_cover_size_label(self) -> None:
@@ -699,11 +712,13 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     # —— Settings groups (Preferences dialog) ——
 
     def _build_calibration_row(self) -> None:
-        """Calibrate drive row on the Drive page."""
-        self._setup_row = Adw.ActionRow(
-            title='Calibrate drive',
-            activatable=True,
+        """Detect row on the Drive page; Sample offset nests inside the expander."""
+        settings = self.store.get()
+        self._setup_row = Adw.ExpanderRow(title='Detect sample offset')
+        self._setup_row.set_tooltip_text(
+            'Measure the AccurateRip sample offset for this drive'
         )
+
         # Status checkmark when calibrated (GNOME: symbolic + success).
         self._setup_ok_icon = Gtk.Image()
         apply_icon(self._setup_ok_icon, 'emblem-ok-symbolic', display=self.get_display())
@@ -713,17 +728,36 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._setup_row.add_suffix(self._setup_ok_icon)
 
         # Action: text button, or compact grey optical icon when complete.
-        self._setup_btn = Gtk.Button(label='Calibrate')
+        self._setup_btn = Gtk.Button(label='Detect')
         self._setup_btn.set_valign(Gtk.Align.CENTER)
         self._setup_btn.connect('clicked', self._on_run_drive_setup)
         self._setup_row.add_suffix(self._setup_btn)
-        self._setup_row.set_activatable_widget(self._setup_btn)
-        # First row on the Drive page.
+
+        status = (
+            f'Configured for {settings.drive_offset_device or "this drive"}'
+            if settings.drive_offset_configured
+            else 'Not calibrated yet'
+        )
+        self._offset_row = Adw.SpinRow(
+            title='Sample offset',
+            adjustment=Gtk.Adjustment(
+                value=settings.drive_sample_offset,
+                lower=-2000,
+                upper=2000,
+                step_increment=1,
+                page_increment=10,
+            ),
+            digits=0,
+        )
+        self._offset_row.set_tooltip_text(status)
+        self._offset_row.connect('changed', self._on_offset_changed)
+        self._setup_row.add_row(self._offset_row)
+
         self.device_group.add(self._setup_row)
         self._update_calibration_row()
 
     def _update_calibration_row(self) -> None:
-        """Refresh calibration row: check + compact grey icon button when done."""
+        """Refresh detect expander: title, check, and detect button style."""
         settings = self.store.get()
         done = bool(settings.drive_offset_configured)
         btn = self._setup_btn
@@ -735,24 +769,28 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if done:
             device = settings.drive_offset_device or settings.device or 'this drive'
             offset = settings.drive_sample_offset
-            row.set_title('Calibrated')
-            row.set_subtitle('')
+            row.set_title('Sample offset detected')
+            row.set_subtitle(f'{offset:+d} samples')
             row.set_tooltip_text(f'{offset:+d} samples · {device}')
             self._setup_ok_icon.set_visible(True)
             apply_icon(btn, 'media-optical-symbolic', display=self.get_display())
             btn.add_css_class('flat')
             btn.add_css_class('circular')
             btn.add_css_class('ready2rip-setup-icon')
-            btn.set_tooltip_text('Recalibrate drive')
+            btn.set_tooltip_text('Detect sample offset again')
+            self._offset_row.set_tooltip_text(f'Configured for {device}')
         else:
-            row.set_title('Calibrate Drive')
+            row.set_title('Detect sample offset')
             row.set_subtitle('')
-            row.set_tooltip_text('Sample offset calibration')
+            row.set_tooltip_text(
+                'Measure the AccurateRip sample offset for this drive'
+            )
             self._setup_ok_icon.set_visible(False)
             btn.set_icon_name('')
-            btn.set_label('Calibrate')
+            btn.set_label('Detect')
             btn.add_css_class('suggested-action')
-            btn.set_tooltip_text('Calibrate this drive')
+            btn.set_tooltip_text('Detect sample offset for this drive')
+            self._offset_row.set_tooltip_text('Not calibrated yet')
 
     def _add_option_row(
         self,
@@ -772,37 +810,16 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         settings = self.store.get()
         default_out = default_output_directory()
         ids = [e[0] for e in ENCODERS]
-        extras = settings.extra_encode_targets
-        extra0 = extras[0] if extras else None
 
-        # —— Drive page: device + offset ——
+        # —— Drive page: Device → detect offset (Sample offset nested) ——
         self._device_row = Adw.EntryRow(title='Device')
         self._device_row.set_text(settings.device or '/dev/sr0')
-        self._device_row.set_tooltip_text('Optical device, e.g. /dev/sr0')
+        self._device_row.set_tooltip_text('Optical device, for example /dev/sr0')
         self._device_row.connect('changed', self._on_device_path_changed)
         self._add_option_row(self._device_row, self.device_group)
+        self._build_calibration_row()
 
-        status = (
-            f'{settings.drive_offset_device or "This drive"}'
-            if settings.drive_offset_configured
-            else 'Not calibrated'
-        )
-        self._offset_row = Adw.SpinRow(
-            title='Sample Offset',
-            adjustment=Gtk.Adjustment(
-                value=settings.drive_sample_offset,
-                lower=-2000,
-                upper=2000,
-                step_increment=1,
-                page_increment=10,
-            ),
-            digits=0,
-        )
-        self._offset_row.set_tooltip_text(status)
-        self._offset_row.connect('changed', self._on_offset_changed)
-        self._add_option_row(self._offset_row, self.device_group)
-
-        # —— Encoding page: format + quality + optional second encode ——
+        # —— Encoding page: format + quality ——
         self._encoder_row = Adw.ComboRow(title='Format')
         self._encoder_row.set_model(
             Gtk.StringList.new([label for _id, label in ENCODERS])
@@ -817,59 +834,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._quality_row = Adw.ComboRow(title='Quality')
         self._quality_row.connect('notify::selected', self._on_quality_changed)
         self._add_option_row(self._quality_row, self.encoding_group)
-
-        self._also_encode_row = Adw.ExpanderRow(title='Encode Twice')
-        self._also_encode_row.set_tooltip_text(
-            'Save a second format to the same or another folder'
-        )
-        self._also_encode_row.set_show_enable_switch(True)
-        self._also_encode_row.set_enable_expansion(extra0 is not None)
-        self._also_encode_row.set_expanded(extra0 is not None)
-        self._also_encode_row.connect(
-            'notify::enable-expansion', self._on_also_encode_toggled
-        )
-
-        self._also_encoder_row = Adw.ComboRow(title='Format')
-        self._also_encoder_row.set_model(
-            Gtk.StringList.new([label for _id, label in ENCODERS])
-        )
-        also_fmt = extra0.format if extra0 is not None else 'mp3'
-        try:
-            self._also_encoder_row.set_selected(ids.index(also_fmt))
-        except ValueError:
-            self._also_encoder_row.set_selected(1 if len(ids) > 1 else 0)
-        self._also_encoder_row.connect(
-            'notify::selected', self._on_also_encoder_changed
-        )
-        self._also_encode_row.add_row(self._also_encoder_row)
-
-        self._also_quality_row = Adw.ComboRow(title='Quality')
-        self._also_quality_row.connect(
-            'notify::selected', self._on_also_quality_changed
-        )
-        self._also_encode_row.add_row(self._also_quality_row)
-
-        self._also_output_row = Adw.EntryRow(title='Folder')
-        self._also_output_row.set_text(extra0.directory if extra0 else '')
-        self._also_output_row.set_tooltip_text(
-            'Leave empty to use the Output folder above'
-        )
-        self._also_output_row.connect('changed', self._on_also_output_changed)
-        also_folder_btn = Gtk.Button()
-        apply_icon(also_folder_btn, 'folder-open-symbolic', display=self.get_display())
-        also_folder_btn.add_css_class('flat')
-        also_folder_btn.set_valign(Gtk.Align.CENTER)
-        also_folder_btn.set_tooltip_text('Choose folder')
-        also_folder_btn.connect('clicked', self._on_choose_also_output_folder)
-        self._also_output_row.add_suffix(also_folder_btn)
-        self._also_encode_row.add_row(self._also_output_row)
-        self._add_option_row(self._also_encode_row, self.encoding_group)
         self._sync_encoding_ui()
 
         # —— Encoding page: files ——
-        self._output_row = Adw.EntryRow(title='Output Folder')
+        self._output_row = Adw.EntryRow(title='Output folder')
         self._output_row.set_text(settings.output_directory or default_out)
-        self._output_row.set_tooltip_text(f'Default: {default_out}')
+        self._output_row.set_tooltip_text(default_out)
         self._output_row.connect('changed', self._on_output_changed)
         folder_btn = Gtk.Button()
         apply_icon(folder_btn, 'folder-open-symbolic', display=self.get_display())
@@ -880,25 +850,54 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._output_row.add_suffix(folder_btn)
         self._add_option_row(self._output_row, self.files_group)
 
-        self._folder_template_row = Adw.EntryRow(title='Album Folder')
-        self._folder_template_row.set_text(settings.album_folder_template)
-        self._folder_template_row.set_tooltip_text(
-            '{album_artist}/{dated_album}/{disc_folder}'
+        self._folder_scheme_row = Adw.ComboRow(title='Album folder scheme')
+        self._folder_scheme_row.set_model(
+            Gtk.StringList.new([s.label for s in FOLDER_SCHEMES])
         )
+        self._folder_scheme_row.set_selected(
+            scheme_index(FOLDER_SCHEMES, settings.album_folder_template)
+        )
+        self._folder_scheme_row.set_tooltip_text(
+            'Folder layout under the output folder. Custom unlocks the template.'
+        )
+        self._folder_scheme_row.connect(
+            'notify::selected', self._on_folder_scheme_changed
+        )
+        self._add_option_row(self._folder_scheme_row, self.files_group)
+
+        self._folder_template_row = Adw.EntryRow(title='Album folder template')
+        self._folder_template_row.set_text(settings.album_folder_template)
+        self._folder_template_row.set_tooltip_text(FOLDER_TEMPLATE_HELP)
         self._folder_template_row.connect(
             'changed', self._on_folder_template_changed
         )
         self._add_option_row(self._folder_template_row, self.files_group)
 
-        self._filename_row = Adw.EntryRow(title='Track Filename')
+        self._filename_scheme_row = Adw.ComboRow(title='Track filename scheme')
+        self._filename_scheme_row.set_model(
+            Gtk.StringList.new([s.label for s in FILENAME_SCHEMES])
+        )
+        self._filename_scheme_row.set_selected(
+            scheme_index(FILENAME_SCHEMES, settings.filename_template)
+        )
+        self._filename_scheme_row.set_tooltip_text(
+            'Track file naming. Custom unlocks the template.'
+        )
+        self._filename_scheme_row.connect(
+            'notify::selected', self._on_filename_scheme_changed
+        )
+        self._add_option_row(self._filename_scheme_row, self.files_group)
+
+        self._filename_row = Adw.EntryRow(title='Track filename template')
         self._filename_row.set_text(settings.filename_template)
-        self._filename_row.set_tooltip_text('{track:02d} - {title}')
+        self._filename_row.set_tooltip_text(FILENAME_TEMPLATE_HELP)
         self._filename_row.connect('changed', self._on_filename_changed)
         self._add_option_row(self._filename_row, self.files_group)
+        self._sync_naming_template_sensitivity()
 
         # —— Ripping page: extraction ——
         self._test_copy_row = Adw.SwitchRow(
-            title='Test and Copy',
+            title='Test and copy',
             active=settings.test_and_copy,
         )
         self._test_copy_row.set_tooltip_text('Rip twice and require matching CRCs')
@@ -906,7 +905,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._add_option_row(self._test_copy_row, self.extraction_group)
 
         self._copy_image_row = Adw.SwitchRow(
-            title='Copy Image',
+            title='Copy image',
             active=settings.copy_image,
         )
         self._copy_image_row.set_tooltip_text(
@@ -916,7 +915,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._add_option_row(self._copy_image_row, self.extraction_group)
 
         self._htoa_row = Adw.SwitchRow(
-            title='Hidden Track (HTOA)',
+            title='Hidden track (HTOA)',
             active=settings.rip_htoa,
         )
         self._htoa_row.set_tooltip_text('Save non-silent audio before track 1')
@@ -924,7 +923,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._add_option_row(self._htoa_row, self.extraction_group)
 
         self._data_tracks_row = Adw.SwitchRow(
-            title='Data Tracks',
+            title='Data tracks',
             active=settings.rip_data_tracks,
         )
         self._data_tracks_row.set_tooltip_text(
@@ -960,7 +959,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._add_option_row(self._submit_ctdb_row, self.extraction_group)
 
         self._burst_row = Adw.SwitchRow(
-            title='Burst Fallback',
+            title='Burst fallback',
             active=settings.burst_fallback,
         )
         self._burst_row.set_tooltip_text(
@@ -970,7 +969,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._add_option_row(self._burst_row, self.extraction_group)
 
         self._log_row = Adw.SwitchRow(
-            title='Write Log',
+            title='Write log',
             active=settings.write_rip_log,
         )
         self._log_row.set_tooltip_text('Save a detailed rip log in the album folder')
@@ -978,7 +977,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._add_option_row(self._log_row, self.extraction_group)
 
         self._cue_row = Adw.SwitchRow(
-            title='Write CUE Sheet',
+            title='Write CUE sheet',
             active=settings.write_cue_file,
         )
         self._cue_row.set_tooltip_text('Create a .cue file for the rip')
@@ -1007,7 +1006,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _build_metadata_rows(self) -> None:
         settings = self.store.get()
 
-        self._auto_lookup_row = Adw.ExpanderRow(title='Look Up Automatically')
+        self._auto_lookup_row = Adw.ExpanderRow(title='Look up automatically')
         self._auto_lookup_row.set_tooltip_text(
             'Fetch metadata when a disc is detected'
         )
@@ -1037,7 +1036,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._add_metadata_row(self._auto_lookup_row, self.lookup_group)
         self._sync_lookup_source_sensitivity(settings.auto_lookup_metadata)
 
-        self._fetch_art_row = Adw.ExpanderRow(title='Download Artwork')
+        self._fetch_art_row = Adw.ExpanderRow(title='Download artwork')
         self._fetch_art_row.set_tooltip_text(
             'Fetch the highest-quality cover available'
         )
@@ -1067,14 +1066,14 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._add_metadata_row(self._fetch_art_row, self.artwork_group)
 
         self._embed_art_row = Adw.SwitchRow(
-            title='Embed Artwork',
+            title='Embed artwork',
             active=settings.embed_artwork,
         )
         self._embed_art_row.set_tooltip_text('Write the cover into ripped files')
         self._embed_art_row.connect('notify::active', self._on_embed_art_toggled)
         self._add_metadata_row(self._embed_art_row, self.artwork_group)
 
-        self._art_size_row = Adw.ComboRow(title='Embed Size')
+        self._art_size_row = Adw.ComboRow(title='Embed size')
         self._art_size_values = [px for px, _label in ARTWORK_SIZES]
         self._art_size_row.set_model(
             Gtk.StringList.new([label for _px, label in ARTWORK_SIZES])
@@ -1110,14 +1109,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         handlers = [
             (self._output_row, self._on_output_changed),
             (self._device_row, self._on_device_path_changed),
+            (self._folder_scheme_row, self._on_folder_scheme_changed),
             (self._folder_template_row, self._on_folder_template_changed),
+            (self._filename_scheme_row, self._on_filename_scheme_changed),
             (self._filename_row, self._on_filename_changed),
             (self._encoder_row, self._on_encoder_changed),
             (self._quality_row, self._on_quality_changed),
-            (self._also_encode_row, self._on_also_encode_toggled),
-            (self._also_encoder_row, self._on_also_encoder_changed),
-            (self._also_quality_row, self._on_also_quality_changed),
-            (self._also_output_row, self._on_also_output_changed),
             (self._offset_row, self._on_offset_changed),
             (self._test_copy_row, self._on_test_copy_toggled),
             (self._htoa_row, self._on_htoa_toggled),
@@ -1147,32 +1144,23 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._output_row.set_text(settings.output_directory or default_out)
             self._device_row.set_text(settings.device or '/dev/sr0')
             self._folder_template_row.set_text(settings.album_folder_template)
+            self._folder_scheme_row.set_selected(
+                scheme_index(FOLDER_SCHEMES, settings.album_folder_template)
+            )
             self._filename_row.set_text(settings.filename_template)
+            self._filename_scheme_row.set_selected(
+                scheme_index(FILENAME_SCHEMES, settings.filename_template)
+            )
+            self._sync_naming_template_sensitivity()
             try:
                 self._encoder_row.set_selected(ids.index(settings.encode_format))
             except ValueError:
                 pass
-            extras = settings.extra_encode_targets
-            extra0 = extras[0] if extras else None
-            self._also_encode_row.set_enable_expansion(extra0 is not None)
-            self._also_encode_row.set_expanded(extra0 is not None)
-            also_fmt = extra0.format if extra0 is not None else 'mp3'
-            try:
-                self._also_encoder_row.set_selected(ids.index(also_fmt))
-            except ValueError:
-                pass
-            self._also_output_row.set_text(extra0.directory if extra0 else '')
-            # Force quality combos to reload from store values.
+            # Force quality combo to reload from store values.
             self._quality_kind = None
-            self._also_quality_kind = None
             self._sync_encoding_ui()
             self._offset_row.set_value(settings.drive_sample_offset)
-            status = (
-                f'Configured for {settings.drive_offset_device or "this drive"}'
-                if settings.drive_offset_configured
-                else 'Not calibrated — run Drive setup in the Drive panel'
-            )
-            self._offset_row.set_tooltip_text(status)
+            self._update_calibration_row()
             self._test_copy_row.set_active(settings.test_and_copy)
             self._htoa_row.set_active(settings.rip_htoa)
             self._data_tracks_row.set_active(settings.rip_data_tracks)
@@ -1222,14 +1210,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if 0 <= idx < len(ENCODERS):
             return ENCODERS[idx][0]
         return (self.store.get().encode_format or 'flac').strip().lower()
-
-    def _also_encode_format(self) -> str | None:
-        if not self._also_encode_row.get_enable_expansion():
-            return None
-        idx = self._also_encoder_row.get_selected()
-        if 0 <= idx < len(ENCODERS):
-            return ENCODERS[idx][0]
-        return None
 
     def _quality_model_for(self, fmt: str) -> tuple[list[str], int]:
         """Return (labels, selected_index) for a codec quality combo."""
@@ -1297,35 +1277,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             row.handler_unblock_by_func(handler)
 
     def _sync_encoding_ui(self) -> None:
-        primary = self._primary_encode_format()
-        also = self._also_encode_format()
         self._fill_quality_combo(
             self._quality_row,
-            primary,
+            self._primary_encode_format(),
             kind_attr='_quality_kind',
             handler=self._on_quality_changed,
         )
-        # Second quality only when encoding a different lossy/lossless format.
-        if also and also != primary and also != 'wav':
-            self._fill_quality_combo(
-                self._also_quality_row,
-                also,
-                kind_attr='_also_quality_kind',
-                handler=self._on_also_quality_changed,
-            )
-        else:
-            self._also_quality_row.set_visible(False)
-            self._also_quality_kind = None
-
-        if also:
-            also_label = next(
-                (label for fid, label in ENCODERS if fid == also), also.upper()
-            )
-            self._also_encode_row.set_tooltip_text(also_label.split(' (')[0])
-        else:
-            self._also_encode_row.set_tooltip_text(
-                'Save a second format to the same or another folder'
-            )
 
     def _apply_quality_selection(self, fmt: str, index: int) -> None:
         if fmt == 'flac' and 0 <= index < len(self._flac_levels):
@@ -1336,38 +1293,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self.store.update(aac_quality=self._aac_qualities[index])
         elif fmt == 'opus' and 0 <= index < len(self._opus_values):
             self.store.update(opus_bitrate=self._opus_values[index])
-
-    def _persist_also_encode(self) -> None:
-        if not self._also_encode_row.get_enable_expansion():
-            self.store.update(extra_encode_targets=())
-            self._sync_encoding_ui()
-            return
-        idx = self._also_encoder_row.get_selected()
-        fmt = ENCODERS[idx][0] if 0 <= idx < len(ENCODERS) else 'mp3'
-        directory = self._also_output_row.get_text().strip()
-        if directory:
-            directory = str(Path(directory).expanduser())
-        self.store.update(
-            extra_encode_targets=(EncodeTarget(format=fmt, directory=directory),)
-        )
-        self._sync_encoding_ui()
-
-    def _on_also_encode_toggled(self, row: Adw.ExpanderRow, *_args) -> None:
-        self._persist_also_encode()
-        if row.get_enable_expansion() and not row.get_expanded():
-            row.set_expanded(True)
-
-    def _on_also_encoder_changed(self, *_args) -> None:
-        self._persist_also_encode()
-
-    def _on_also_output_changed(self, *_args) -> None:
-        self._persist_also_encode()
-
-    def _on_also_quality_changed(self, row: Adw.ComboRow, *_args) -> None:
-        fmt = self._also_quality_kind or self._also_encode_format()
-        if not fmt:
-            return
-        self._apply_quality_selection(fmt, row.get_selected())
 
     def _choose_folder(
         self,
@@ -1395,19 +1320,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             on_path(path)
 
         dialog.select_folder(self, None, on_done)
-
-    def _on_choose_also_output_folder(self, *_args) -> None:
-        current = (
-            self._also_output_row.get_text().strip()
-            or self._output_row.get_text().strip()
-            or default_output_directory()
-        )
-
-        def on_path(path: str) -> None:
-            self._also_output_row.set_text(path)
-            self._persist_also_encode()
-
-        self._choose_folder('Second encode folder', current, on_path)
 
     def _on_output_changed(self, row: Adw.EntryRow) -> None:
         text = row.get_text().strip()
@@ -1441,16 +1353,89 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         # Full TOC probe off the UI thread when the user changes the device path.
         self._refresh_disc(from_monitor=False)
 
-    def _on_folder_template_changed(self, row: Adw.EntryRow) -> None:
-        self.store.update(
-            album_folder_template=row.get_text().strip()
-            or DEFAULT_ALBUM_FOLDER_TEMPLATE
+    def _sync_naming_template_sensitivity(self) -> None:
+        """Template entries are editable only while Scheme is Custom."""
+        folder_idx = self._folder_scheme_row.get_selected()
+        folder_custom = (
+            0 <= folder_idx < len(FOLDER_SCHEMES)
+            and FOLDER_SCHEMES[folder_idx].id == 'custom'
         )
+        self._folder_template_row.set_sensitive(folder_custom)
+
+        file_idx = self._filename_scheme_row.get_selected()
+        file_custom = (
+            0 <= file_idx < len(FILENAME_SCHEMES)
+            and FILENAME_SCHEMES[file_idx].id == 'custom'
+        )
+        self._filename_row.set_sensitive(file_custom)
+
+    def _on_folder_scheme_changed(self, row: Adw.ComboRow, *_args) -> None:
+        idx = row.get_selected()
+        if not (0 <= idx < len(FOLDER_SCHEMES)):
+            return
+        scheme = FOLDER_SCHEMES[idx]
+        if scheme.id != 'custom' and scheme.template:
+            if self._folder_template_row.get_text().strip() != scheme.template:
+                self._folder_template_row.handler_block_by_func(
+                    self._on_folder_template_changed
+                )
+                try:
+                    self._folder_template_row.set_text(scheme.template)
+                finally:
+                    self._folder_template_row.handler_unblock_by_func(
+                        self._on_folder_template_changed
+                    )
+                self.store.update(album_folder_template=scheme.template)
+        self._sync_naming_template_sensitivity()
+
+    def _on_folder_template_changed(self, row: Adw.EntryRow) -> None:
+        text = row.get_text().strip() or DEFAULT_ALBUM_FOLDER_TEMPLATE
+        self.store.update(album_folder_template=text)
+        idx = scheme_index(FOLDER_SCHEMES, text)
+        if self._folder_scheme_row.get_selected() != idx:
+            self._folder_scheme_row.handler_block_by_func(
+                self._on_folder_scheme_changed
+            )
+            try:
+                self._folder_scheme_row.set_selected(idx)
+            finally:
+                self._folder_scheme_row.handler_unblock_by_func(
+                    self._on_folder_scheme_changed
+                )
+        self._sync_naming_template_sensitivity()
+
+    def _on_filename_scheme_changed(self, row: Adw.ComboRow, *_args) -> None:
+        idx = row.get_selected()
+        if not (0 <= idx < len(FILENAME_SCHEMES)):
+            return
+        scheme = FILENAME_SCHEMES[idx]
+        if scheme.id != 'custom' and scheme.template:
+            if self._filename_row.get_text().strip() != scheme.template:
+                self._filename_row.handler_block_by_func(self._on_filename_changed)
+                try:
+                    self._filename_row.set_text(scheme.template)
+                finally:
+                    self._filename_row.handler_unblock_by_func(
+                        self._on_filename_changed
+                    )
+                self.store.update(filename_template=scheme.template)
+        self._sync_naming_template_sensitivity()
 
     def _on_filename_changed(self, row: Adw.EntryRow) -> None:
-        self.store.update(
-            filename_template=row.get_text().strip() or '{track:02d} - {title}'
-        )
+        text = row.get_text().strip() or DEFAULT_FILENAME_TEMPLATE
+        self.store.update(filename_template=text)
+        idx = scheme_index(FILENAME_SCHEMES, text)
+        if self._filename_scheme_row.get_selected() != idx:
+            self._filename_scheme_row.handler_block_by_func(
+                self._on_filename_scheme_changed
+            )
+            try:
+                self._filename_scheme_row.set_selected(idx)
+            finally:
+                self._filename_scheme_row.handler_unblock_by_func(
+                    self._on_filename_scheme_changed
+                )
+        self._sync_naming_template_sensitivity()
 
     def _on_encoder_changed(self, row: Adw.ComboRow, *_args) -> None:
         idx = row.get_selected()
@@ -1474,7 +1459,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             Gio.Settings.sync()
         except Exception:
             pass
-        row.set_tooltip_text(f'Configured for {device}')
+        self._update_calibration_row()
 
     def _on_mb_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(use_musicbrainz=row.get_active())
@@ -1505,7 +1490,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _on_copy_image_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(copy_image=row.get_active())
         if row.get_active():
-            self._toast('Copy Image on — rip will write one continuous disc image')
+            self._toast('Copy image on — rip will write one continuous disc image')
 
     def _on_rg_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(apply_replaygain=row.get_active())
@@ -1765,7 +1750,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             track_numbers=track_numbers,
             output_directory=settings.resolved_output_directory(),
             encode_format=settings.encode_format,
-            encode_targets=settings.resolved_encode_targets(),
             flac_compression=settings.flac_compression,
             mp3_quality=settings.mp3_quality,
             aac_quality=settings.aac_quality,
@@ -1799,8 +1783,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._ripping = True
         self._rip_engine = RipEngine()
         self._set_ripping_ui(True)
-        targets = job.encode_targets or [(job.encode_format, job.output_directory)]
-        fmt = ' + '.join(t[0].upper() for t in targets)
+        fmt = (job.encode_format or 'flac').upper()
         n = len(job.track_numbers)
         self.rip_title_label.set_label('Ripping disc')
         if job.copy_image:
@@ -1970,12 +1953,31 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._set_action_enabled('rip', sensitive)
 
     def _set_ripping_ui(self, active: bool) -> None:
+        idle = not active
         if active:
             self._show_progress_panel(title='Ripping disc')
-        self.eject_button.set_sensitive(not active)
-        self.empty_eject_button.set_sensitive(not active)
-        self._set_action_enabled('eject', not active)
-        self._set_lookup_controls_sensitive(not active and self._disc is not None)
+            if self._tracks_editing:
+                self._tracks_editing = False
+                self._apply_tracks_edit_mode()
+
+        self.eject_button.set_sensitive(idle)
+        self.empty_eject_button.set_sensitive(idle)
+        self._set_action_enabled('eject', idle)
+        self._set_lookup_controls_sensitive(idle and self._disc is not None)
+        self.settings_button.set_sensitive(idle)
+        self._set_action_enabled('preferences', idle)
+        if self._track_edit_button is not None:
+            self._track_edit_button.set_sensitive(idle)
+        if self._track_artist_button is not None:
+            self._track_artist_button.set_sensitive(idle)
+
+        self.search_art_button.set_sensitive(idle)
+        self.choose_art_button.set_sensitive(idle)
+        if idle:
+            self._sync_cover_action_sensitivity()
+        else:
+            self.clear_art_button.set_sensitive(False)
+
         if active:
             self.rip_button.set_label('Cancel')
             self._set_rip_sensitive(True)
@@ -2336,6 +2338,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
         self._ids = ids if ids is not None else identifiers_from_disc(info)
         self.stack.set_visible_child_name('disc')
+        # Switching to the disc page focuses the first EntryRow otherwise.
+        self._defer_clear_window_focus()
         self._set_rip_sensitive(not self._ripping)
         self._set_lookup_controls_sensitive(not self._ripping and not self._looking_up)
 
@@ -2650,6 +2654,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self.album_edit_group.add(disc_row)
         self._album_field_rows.append(disc_row)
         self._album_disc_row = disc_row
+        # Building rows can steal focus into Title; drop it until the user clicks.
+        self._defer_clear_window_focus()
 
     def _blank_album_for_disc(self, info: DiscInfo) -> AlbumMetadata:
         tracks = [
@@ -2783,9 +2789,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._track_header_suffix = None
         # New disc/list always starts in view mode.
         self._tracks_editing = False
-        # Fresh size groups so rebuilt widgets align cleanly.
-        self._track_title_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
-        self._track_artist_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        self._track_lead_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        self._track_fields_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        self._track_status_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        self._track_dur_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
 
         if info is None:
             group.set_title('Tracks')
@@ -2854,13 +2861,82 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         grid.set_column_spacing(12)
         grid.set_hexpand(True)
         grid.set_halign(Gtk.Align.FILL)
-        title.set_hexpand(True)
-        title.set_halign(Gtk.Align.FILL)
-        artist.set_hexpand(True)
-        artist.set_halign(Gtk.Align.FILL)
+        for child in (title, artist):
+            child.set_hexpand(True)
+            child.set_halign(Gtk.Align.FILL)
         grid.attach(title, 0, 0, 1, 1)
         grid.attach(artist, 1, 0, 1, 1)
         return grid
+
+    @staticmethod
+    def _track_caption(
+        text: str,
+        *extra_classes: str,
+        xalign: float = 0.0,
+    ) -> Gtk.Label:
+        label = Gtk.Label(label=text)
+        label.add_css_class('caption')
+        label.add_css_class('dim-label')
+        for name in extra_classes:
+            label.add_css_class(name)
+        label.set_xalign(xalign)
+        return label
+
+    def _make_track_status_slot(self, *, interactive: bool) -> Gtk.Label:
+        """Status column placeholder — always allocated so Artist stays aligned."""
+        status = Gtk.Label(label='')
+        status.add_css_class('ready2rip-track-status')
+        status.set_hexpand(False)
+        if interactive:
+            status.add_css_class('caption')
+            status.add_css_class('dim-label')
+            status.set_ellipsize(Pango.EllipsizeMode.END)
+            status.set_max_width_chars(12)
+            status.set_xalign(1.0)
+            status.set_valign(Gtk.Align.CENTER)
+            status.set_opacity(0.0)
+        self._track_status_size.add_widget(status)
+        return status
+
+    def _make_track_field_stack(
+        self,
+        *,
+        number: int,
+        value: str,
+        empty_display: str,
+        placeholder: str,
+        tooltip: str,
+        css_class: str | None = None,
+    ) -> tuple[Gtk.Stack, Gtk.Label, Gtk.Entry]:
+        stack = Gtk.Stack()
+        stack.set_transition_type(Gtk.StackTransitionType.NONE)
+        if css_class:
+            stack.add_css_class(css_class)
+
+        display = value or empty_display
+        label = Gtk.Label(label=display)
+        label.set_hexpand(True)
+        label.set_halign(Gtk.Align.START)
+        label.set_xalign(0.0)
+        label.set_ellipsize(Pango.EllipsizeMode.END)
+        label.set_valign(Gtk.Align.CENTER)
+        if not value:
+            label.add_css_class('dim-label')
+        stack.add_named(label, 'view')
+
+        entry = Gtk.Entry()
+        entry.set_text(value)
+        entry.set_placeholder_text(placeholder)
+        entry.set_hexpand(True)
+        entry.add_css_class('ready2rip-track-entry')
+        entry.set_tooltip_text(tooltip)
+        entry.connect(
+            'changed',
+            lambda *_a, n=number: self._on_track_field_changed(n),
+        )
+        stack.add_named(entry, 'edit')
+        stack.set_visible_child_name('view')
+        return stack, label, entry
 
     def _make_track_column_header(self) -> Gtk.ListBoxRow:
         """Column titles so Title / Artist line up with track cells."""
@@ -2873,7 +2949,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         box.add_css_class('ready2rip-track-row')
         box.set_hexpand(True)
 
-        # Master checkbox toggles rip selection for all tracks.
         lead = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         lead.add_css_class('ready2rip-track-lead')
         select_all = Gtk.CheckButton(active=True)
@@ -2881,38 +2956,23 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         select_all.set_tooltip_text('Select or deselect all tracks for ripping')
         select_all.connect('toggled', self._on_select_all_toggled)
         self._track_select_all = select_all
-        num_ph = Gtk.Label(label='#')
-        num_ph.add_css_class('ready2rip-track-num')
-        num_ph.add_css_class('caption')
-        num_ph.add_css_class('dim-label')
-        num_ph.set_xalign(0.5)
+        num_ph = self._track_caption('#', 'ready2rip-track-num', xalign=0.5)
         lead.append(select_all)
         lead.append(num_ph)
+        self._track_lead_size.add_widget(lead)
         box.append(lead)
 
-        title_h = Gtk.Label(label='Title')
-        title_h.add_css_class('caption')
-        title_h.add_css_class('dim-label')
-        title_h.add_css_class('heading')
+        title_h = self._track_caption('Title', 'heading')
         title_h.set_halign(Gtk.Align.START)
-        title_h.set_xalign(0.0)
-        self._track_title_size.add_widget(title_h)
-
-        artist_h = Gtk.Label(label='Artist')
-        artist_h.add_css_class('caption')
-        artist_h.add_css_class('dim-label')
-        artist_h.add_css_class('heading')
-        artist_h.add_css_class('ready2rip-track-artist')
+        artist_h = self._track_caption('Artist', 'heading', 'ready2rip-track-artist')
         artist_h.set_halign(Gtk.Align.START)
-        artist_h.set_xalign(0.0)
-        self._track_artist_size.add_widget(artist_h)
-        box.append(self._make_title_artist_grid(title_h, artist_h))
-
-        dur_h = Gtk.Label(label='Time')
-        dur_h.add_css_class('ready2rip-track-dur')
-        dur_h.add_css_class('caption')
-        dur_h.add_css_class('dim-label')
-        dur_h.set_xalign(1.0)
+        fields = self._make_title_artist_grid(title_h, artist_h)
+        fields.add_css_class('ready2rip-track-title-artist')
+        self._track_fields_size.add_widget(fields)
+        box.append(fields)
+        box.append(self._make_track_status_slot(interactive=False))
+        dur_h = self._track_caption('Time', 'ready2rip-track-dur', xalign=1.0)
+        self._track_dur_size.add_widget(dur_h)
         box.append(dur_h)
 
         row.set_child(box)
@@ -2926,11 +2986,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         artist: str,
         duration_label: str,
     ) -> Gtk.ListBoxRow:
-        """Flat track row: checkbox · # · title · artist · status · time.
-
-        View mode shows labels; Edit mode swaps in entries for title/artist.
-        Title/Artist share remaining width equally (1/2 each).
-        """
+        """Track row: checkbox · # · title · artist · status · time."""
         row = Gtk.ListBoxRow()
         row.set_activatable(False)
         row.set_selectable(False)
@@ -2942,98 +2998,50 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
         lead = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         lead.add_css_class('ready2rip-track-lead')
-
         check = Gtk.CheckButton(active=True)
         check.set_valign(Gtk.Align.CENTER)
         check.set_tooltip_text(f'Include track {number:02d} in the rip')
         check.connect('toggled', self._on_track_check_toggled)
-        lead.append(check)
-
         num = Gtk.Label(label=f'{number:02d}')
         num.add_css_class('ready2rip-track-num')
         num.add_css_class('dim-label')
         num.set_valign(Gtk.Align.CENTER)
         num.set_xalign(0.5)
+        lead.append(check)
         lead.append(num)
+        self._track_lead_size.add_widget(lead)
         box.append(lead)
 
-        title_stack = Gtk.Stack()
-        title_stack.set_transition_type(Gtk.StackTransitionType.NONE)
-
-        title_label = Gtk.Label(label=title or f'Track {number:02d}')
-        title_label.set_hexpand(True)
-        title_label.set_halign(Gtk.Align.START)
-        title_label.set_xalign(0.0)
-        title_label.set_ellipsize(Pango.EllipsizeMode.END)
-        title_label.set_valign(Gtk.Align.CENTER)
-        if not title:
-            title_label.add_css_class('dim-label')
-        title_stack.add_named(title_label, 'view')
-
-        title_entry = Gtk.Entry()
-        title_entry.set_text(title)
-        title_entry.set_placeholder_text(f'Track {number:02d} title')
-        title_entry.set_hexpand(True)
-        title_entry.add_css_class('ready2rip-track-entry')
-        title_entry.set_tooltip_text(f'Title for track {number:02d}')
-        title_entry.connect(
-            'changed',
-            lambda *_a, n=number: self._on_track_field_changed(n),
+        title_stack, title_label, title_entry = self._make_track_field_stack(
+            number=number,
+            value=title,
+            empty_display=f'Track {number:02d}',
+            placeholder=f'Track {number:02d} title',
+            tooltip=f'Title for track {number:02d}',
         )
-        title_stack.add_named(title_entry, 'edit')
-        title_stack.set_visible_child_name('view')
-        self._track_title_size.add_widget(title_stack)
-
-        artist_stack = Gtk.Stack()
-        artist_stack.add_css_class('ready2rip-track-artist')
-        artist_stack.set_transition_type(Gtk.StackTransitionType.NONE)
-
-        artist_label = Gtk.Label(label=artist or '—')
-        artist_label.set_hexpand(True)
-        artist_label.set_halign(Gtk.Align.START)
-        artist_label.set_xalign(0.0)
-        artist_label.set_ellipsize(Pango.EllipsizeMode.END)
-        artist_label.set_valign(Gtk.Align.CENTER)
-        if not artist:
-            artist_label.add_css_class('dim-label')
-        artist_stack.add_named(artist_label, 'view')
-
-        artist_entry = Gtk.Entry()
-        artist_entry.set_text(artist)
-        artist_entry.set_placeholder_text('Artist One; Artist Two')
-        artist_entry.set_hexpand(True)
-        artist_entry.add_css_class('ready2rip-track-entry')
-        artist_entry.set_tooltip_text(
-            f'Artist for track {number:02d}. '
-            'Multiple artists: separate with a semicolon (e.g. A; B)'
+        artist_stack, artist_label, artist_entry = self._make_track_field_stack(
+            number=number,
+            value=artist,
+            empty_display='—',
+            placeholder='Artist One; Artist Two',
+            tooltip=(
+                f'Artist for track {number:02d}. '
+                'Multiple artists: separate with a semicolon (e.g. A; B)'
+            ),
+            css_class='ready2rip-track-artist',
         )
-        artist_entry.connect(
-            'changed',
-            lambda *_a, n=number: self._on_track_field_changed(n),
-        )
-        artist_stack.add_named(artist_entry, 'edit')
-        artist_stack.set_visible_child_name('view')
-        self._track_artist_size.add_widget(artist_stack)
-        box.append(self._make_title_artist_grid(title_stack, artist_stack))
+        fields = self._make_title_artist_grid(title_stack, artist_stack)
+        fields.add_css_class('ready2rip-track-title-artist')
+        self._track_fields_size.add_widget(fields)
+        box.append(fields)
 
-        status = Gtk.Label(label='')
-        status.add_css_class('caption')
-        status.add_css_class('dim-label')
-        status.add_css_class('ready2rip-track-status')
-        status.set_ellipsize(Pango.EllipsizeMode.END)
-        status.set_max_width_chars(12)
-        status.set_xalign(1.0)
-        status.set_valign(Gtk.Align.CENTER)
-        status.set_visible(False)
+        status = self._make_track_status_slot(interactive=True)
         box.append(status)
 
-        dur = Gtk.Label(label=duration_label)
-        dur.add_css_class('ready2rip-track-dur')
-        dur.add_css_class('dim-label')
-        dur.add_css_class('caption')
+        dur = self._track_caption(duration_label, 'ready2rip-track-dur', xalign=1.0)
         dur.set_valign(Gtk.Align.CENTER)
-        dur.set_xalign(1.0)
         dur.set_tooltip_text(f'Duration {duration_label}')
+        self._track_dur_size.add_widget(dur)
         box.append(dur)
 
         row.set_child(box)
@@ -3223,7 +3231,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             msg = ' · '.join(parts)
             label.set_text(msg)
             label.set_tooltip_text(msg)
-            label.set_visible(bool(msg))
+            label.set_opacity(1.0 if msg else 0.0)
 
     # —— Metadata lookup ——
 
@@ -3463,7 +3471,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._toast('Insert a disc or look up metadata first')
             return
         if not settings.fetch_artwork or not self._artwork_source_options().any_enabled:
-            self._toast('Enable Download artwork and at least one source')
+            self._toast('Enable Download artwork and at least one source.')
             return
         self._start_artwork_fetch(album)
         self._toast('Searching for artwork…')
@@ -3606,8 +3614,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._sync_cover_action_sensitivity()
             return
 
-        # Hide the dimmed music glyph once real art is loaded.
         self.cover_placeholder.set_visible(False)
+        self._set_cover_frame_empty(False)
         self._update_cover_size_label()
         self._sync_cover_action_sensitivity()
         if announce:

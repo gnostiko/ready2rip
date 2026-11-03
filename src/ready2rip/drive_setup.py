@@ -96,7 +96,7 @@ def calibrate_drive_offset(
         return CalibrationResult(
             success=False,
             message=(
-                f'Calibration timed out after {int(CALIBRATION_BUDGET_SEC)}s. '
+                f'Sample offset detection timed out after {int(CALIBRATION_BUDGET_SEC)}s. '
                 'Try again or enter offset manually.'
             ),
         )
@@ -150,7 +150,7 @@ def calibrate_drive_offset(
             )
             progress(
                 f'Extracting track {track.number} ({track.duration_label}) '
-                f'for calibration (burst, ≤{extract_timeout}s)…',
+                f'for detection (burst, ≤{extract_timeout}s)…',
                 0.22,
             )
             wav_path = tmp_path / f'cal{track.number}.wav'
@@ -221,7 +221,7 @@ def calibrate_drive_offset(
         return CalibrationResult(
             success=False,
             message=(
-                f'Calibration stopped after {int(CALIBRATION_BUDGET_SEC)}s without a match. '
+                f'Detection stopped after {int(CALIBRATION_BUDGET_SEC)}s without a match. '
                 'Try another commercial CD, or enter an offset manually '
                 '(see accuraterip.com drive offsets).'
             ),

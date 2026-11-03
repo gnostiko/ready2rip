@@ -96,7 +96,7 @@ class Application(Adw.Application):
     def build_primary_menu(self) -> Gio.Menu:
         """About menu: keyboard shortcuts and about."""
         menu = Gio.Menu()
-        menu.append('Keyboard Shortcuts', 'app.shortcuts')
+        menu.append('Keyboard shortcuts', 'app.shortcuts')
         menu.append(f'About {config.APPLICATION_NAME}', 'app.about')
         return menu
 

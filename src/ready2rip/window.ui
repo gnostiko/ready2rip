@@ -89,7 +89,7 @@
                             <property name="child">
                               <object class="AdwStatusPage" id="status_page">
                                 <property name="icon-name">media-optical-symbolic</property>
-                                <property name="title" translatable="yes">No Disc</property>
+                                <property name="title" translatable="yes">No disc</property>
                                 <property name="description" translatable="yes">Insert an audio CD.</property>
                                 <child>
                                   <object class="GtkButton" id="empty_eject_button">
@@ -149,8 +149,9 @@
                                             <property name="hexpand">true</property>
                                             <property name="valign">start</property>
                                             <child>
-                                              <object class="AdwPreferencesGroup" id="art_group">
-                                                <property name="title" translatable="yes">Artwork</property>
+                                              <object class="GtkBox" id="art_group">
+                                                <property name="orientation">vertical</property>
+                                                <property name="spacing">6</property>
                                                 <property name="halign">fill</property>
                                                 <property name="hexpand">true</property>
                                                 <property name="valign">start</property>
@@ -158,123 +159,127 @@
                                                   <class name="ready2rip-art-group"/>
                                                 </style>
                                                 <child>
-                                                  <object class="GtkListBoxRow" id="art_row">
-                                                    <property name="activatable">false</property>
-                                                    <property name="selectable">false</property>
+                                                  <object class="GtkLabel" id="art_title">
+                                                    <property name="label" translatable="yes">Artwork</property>
+                                                    <property name="xalign">0</property>
+                                                    <property name="halign">start</property>
+                                                    <property name="valign">center</property>
                                                     <style>
-                                                      <class name="ready2rip-art-row"/>
+                                                      <class name="heading"/>
                                                     </style>
+                                                  </object>
+                                                </child>
+                                                <child>
+                                                  <object class="GtkBox" id="art_column">
+                                                    <property name="orientation">vertical</property>
+                                                    <property name="spacing">6</property>
+                                                    <property name="halign">fill</property>
+                                                    <property name="hexpand">true</property>
                                                     <child>
-                                                      <object class="GtkBox" id="art_column">
+                                                      <object class="GtkBox" id="cover_frame">
                                                         <property name="orientation">vertical</property>
-                                                        <property name="spacing">6</property>
-                                                        <property name="halign">fill</property>
-                                                        <property name="hexpand">true</property>
+                                                        <property name="halign">center</property>
+                                                        <property name="hexpand">false</property>
+                                                        <property name="width-request">180</property>
+                                                        <property name="height-request">180</property>
+                                                        <style>
+                                                          <class name="card"/>
+                                                          <class name="ready2rip-cover-frame"/>
+                                                          <class name="ready2rip-cover-empty"/>
+                                                        </style>
                                                         <child>
-                                                          <object class="GtkBox" id="cover_frame">
-                                                            <property name="orientation">vertical</property>
-                                                            <property name="halign">center</property>
-                                                            <property name="hexpand">false</property>
-                                                            <property name="width-request">180</property>
-                                                            <property name="height-request">180</property>
-                                                            <style>
-                                                              <class name="ready2rip-cover-frame"/>
-                                                            </style>
+                                                          <object class="GtkOverlay" id="cover_overlay">
+                                                            <property name="hexpand">true</property>
+                                                            <property name="vexpand">true</property>
+                                                            <property name="overflow">hidden</property>
                                                             <child>
-                                                              <object class="GtkOverlay" id="cover_overlay">
+                                                              <object class="GtkPicture" id="cover_picture">
                                                                 <property name="hexpand">true</property>
                                                                 <property name="vexpand">true</property>
-                                                                <property name="overflow">hidden</property>
+                                                                <property name="can-shrink">true</property>
+                                                                <property name="content-fit">cover</property>
+                                                                <property name="tooltip-text" translatable="yes">Album artwork</property>
+                                                                <style>
+                                                                  <class name="ready2rip-cover-picture"/>
+                                                                </style>
+                                                              </object>
+                                                            </child>
+                                                            <child type="overlay">
+                                                              <object class="GtkImage" id="cover_placeholder">
+                                                                <property name="icon-name">folder-music-symbolic</property>
+                                                                <property name="pixel-size">48</property>
+                                                                <property name="halign">center</property>
+                                                                <property name="valign">center</property>
+                                                                <property name="can-target">false</property>
+                                                                <style>
+                                                                  <class name="ready2rip-cover-placeholder"/>
+                                                                </style>
+                                                              </object>
+                                                            </child>
+                                                            <child type="overlay">
+                                                              <object class="GtkBox" id="cover_actions">
+                                                                <property name="orientation">horizontal</property>
+                                                                <property name="spacing">6</property>
+                                                                <property name="halign">center</property>
+                                                                <property name="valign">center</property>
+                                                                <property name="opacity">0</property>
                                                                 <child>
-                                                                  <object class="GtkPicture" id="cover_picture">
-                                                                    <property name="hexpand">true</property>
-                                                                    <property name="vexpand">true</property>
-                                                                    <property name="can-shrink">true</property>
-                                                                    <property name="content-fit">cover</property>
-                                                                    <property name="tooltip-text" translatable="yes">Album artwork</property>
+                                                                  <object class="GtkButton" id="search_art_button">
+                                                                    <property name="icon-name">system-search-symbolic</property>
+                                                                    <property name="tooltip-text" translatable="yes">Search for artwork</property>
                                                                     <style>
-                                                                      <class name="ready2rip-cover-picture"/>
+                                                                      <class name="circular"/>
+                                                                      <class name="osd"/>
+                                                                      <class name="ready2rip-cover-button"/>
                                                                     </style>
+                                                                    <signal name="clicked" handler="_on_search_art_clicked"/>
                                                                   </object>
                                                                 </child>
-                                                                <child type="overlay">
-                                                                  <object class="GtkImage" id="cover_placeholder">
-                                                                    <property name="icon-name">folder-music-symbolic</property>
-                                                                    <property name="pixel-size">48</property>
-                                                                    <property name="halign">center</property>
-                                                                    <property name="valign">center</property>
-                                                                    <property name="can-target">false</property>
+                                                                <child>
+                                                                  <object class="GtkButton" id="choose_art_button">
+                                                                    <property name="icon-name">folder-symbolic</property>
+                                                                    <property name="tooltip-text" translatable="yes">Choose image from file</property>
                                                                     <style>
-                                                                      <class name="ready2rip-cover-placeholder"/>
+                                                                      <class name="circular"/>
+                                                                      <class name="osd"/>
+                                                                      <class name="ready2rip-cover-button"/>
                                                                     </style>
+                                                                    <signal name="clicked" handler="_on_choose_art_clicked"/>
                                                                   </object>
                                                                 </child>
-                                                                <child type="overlay">
-                                                                  <object class="GtkBox" id="cover_actions">
-                                                                    <property name="orientation">horizontal</property>
-                                                                    <property name="spacing">6</property>
-                                                                    <property name="halign">center</property>
-                                                                    <property name="valign">center</property>
-                                                                    <property name="opacity">0</property>
-                                                                    <child>
-                                                                      <object class="GtkButton" id="search_art_button">
-                                                                        <property name="icon-name">system-search-symbolic</property>
-                                                                        <property name="tooltip-text" translatable="yes">Search for artwork</property>
-                                                                        <style>
-                                                                          <class name="circular"/>
-                                                                          <class name="osd"/>
-                                                                          <class name="ready2rip-cover-button"/>
-                                                                        </style>
-                                                                        <signal name="clicked" handler="_on_search_art_clicked"/>
-                                                                      </object>
-                                                                    </child>
-                                                                    <child>
-                                                                      <object class="GtkButton" id="choose_art_button">
-                                                                        <property name="icon-name">folder-symbolic</property>
-                                                                        <property name="tooltip-text" translatable="yes">Choose image from file</property>
-                                                                        <style>
-                                                                          <class name="circular"/>
-                                                                          <class name="osd"/>
-                                                                          <class name="ready2rip-cover-button"/>
-                                                                        </style>
-                                                                        <signal name="clicked" handler="_on_choose_art_clicked"/>
-                                                                      </object>
-                                                                    </child>
-                                                                    <child>
-                                                                      <object class="GtkButton" id="clear_art_button">
-                                                                        <property name="icon-name">user-trash-symbolic</property>
-                                                                        <property name="tooltip-text" translatable="yes">Remove artwork</property>
-                                                                        <style>
-                                                                          <class name="circular"/>
-                                                                          <class name="osd"/>
-                                                                          <class name="destructive-action"/>
-                                                                          <class name="ready2rip-cover-button"/>
-                                                                          <class name="ready2rip-cover-trash"/>
-                                                                        </style>
-                                                                        <signal name="clicked" handler="_on_clear_art_clicked"/>
-                                                                      </object>
-                                                                    </child>
+                                                                <child>
+                                                                  <object class="GtkButton" id="clear_art_button">
+                                                                    <property name="icon-name">user-trash-symbolic</property>
+                                                                    <property name="tooltip-text" translatable="yes">Remove artwork</property>
+                                                                    <style>
+                                                                      <class name="circular"/>
+                                                                      <class name="osd"/>
+                                                                      <class name="destructive-action"/>
+                                                                      <class name="ready2rip-cover-button"/>
+                                                                      <class name="ready2rip-cover-trash"/>
+                                                                    </style>
+                                                                    <signal name="clicked" handler="_on_clear_art_clicked"/>
                                                                   </object>
                                                                 </child>
                                                               </object>
                                                             </child>
                                                           </object>
                                                         </child>
-                                                        <child>
-                                                          <object class="GtkLabel" id="cover_size_label">
-                                                            <property name="visible">false</property>
-                                                            <property name="halign">center</property>
-                                                            <property name="justify">center</property>
-                                                            <property name="xalign">0.5</property>
-                                                            <property name="wrap">true</property>
-                                                            <property name="max-width-chars">18</property>
-                                                            <style>
-                                                              <class name="caption"/>
-                                                              <class name="dim-label"/>
-                                                              <class name="ready2rip-cover-size"/>
-                                                            </style>
-                                                          </object>
-                                                        </child>
+                                                      </object>
+                                                    </child>
+                                                    <child>
+                                                      <object class="GtkLabel" id="cover_size_label">
+                                                        <property name="visible">false</property>
+                                                        <property name="halign">center</property>
+                                                        <property name="justify">center</property>
+                                                        <property name="xalign">0.5</property>
+                                                        <property name="wrap">true</property>
+                                                        <property name="max-width-chars">18</property>
+                                                        <style>
+                                                          <class name="caption"/>
+                                                          <class name="dim-label"/>
+                                                          <class name="ready2rip-cover-size"/>
+                                                        </style>
                                                       </object>
                                                     </child>
                                                   </object>

@@ -42,17 +42,6 @@
       <summary>Primary encoder / output format</summary>
     </key>
 
-    <key name="extra-encode-targets" type="as">
-      <default>[]</default>
-      <summary>Additional encode targets (format|directory)</summary>
-      <description>
-        Extra formats beyond the primary encoder. Each entry is
-        ``format|directory`` (e.g. ``mp3|/home/user/Music/mp3``). An empty
-        directory uses the primary Output folder so two formats can share one
-        folder or use different ones.
-      </description>
-    </key>
-
     <key name="flac-compression" type="i">
       <range min="0" max="8"/>
       <default>5</default>
@@ -166,7 +155,9 @@
       <default>'{track:02d} - {title}'</default>
       <summary>Track filename template</summary>
       <description>
-        Placeholders: {track}, {title}, {artist}, {album}, {disc}, {totaldiscs}
+        Placeholders: {track}, {title}, {artist}, {album_artist}, {album},
+        {year}, {date}, {genre}, {disc}, {totaldiscs}. Settings offers common
+        presets; Custom keeps a freeform template.
       </description>
     </key>
 
@@ -175,8 +166,9 @@
       <summary>Album folder template under the output directory</summary>
       <description>
         Placeholders: {album_artist}, {album}, {dated_album} ((YYYY-MM-DD) - album),
-        {date}, {year}, {disc}, {totaldiscs}, {disc_folder} (CD1/CD2 only when
-        total discs &gt; 1; empty otherwise).
+        {date}, {year}, {genre}, {label}, {disc}, {totaldiscs}, {disc_folder}
+        (CD1/CD2 only when total discs &gt; 1; empty otherwise). Settings offers
+        common presets; Custom keeps a freeform template.
       </description>
     </key>
 

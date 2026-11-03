@@ -22,11 +22,11 @@ from ready2rip.settings import SettingsStore
 
 
 class DriveSetupDialog(Adw.Dialog):
-    """Calibrate AccurateRip offset and analyze drive features (compact UI)."""
+    """Detect AccurateRip sample offset and analyze drive features (compact UI)."""
 
     def __init__(self, store: SettingsStore, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.set_title('Drive setup')
+        self.set_title('Detect sample offset')
         # Compact fixed dialog — content is designed to fit without scrolling.
         self.set_content_width(420)
         self.set_content_height(380)
@@ -59,7 +59,7 @@ class DriveSetupDialog(Adw.Dialog):
         icon.set_halign(Gtk.Align.CENTER)
         intro.append(icon)
 
-        title = Gtk.Label(label='Calibrate CD drive')
+        title = Gtk.Label(label='Detect sample offset')
         title.add_css_class('title-3')
         title.set_halign(Gtk.Align.CENTER)
         intro.append(title)
@@ -84,7 +84,7 @@ class DriveSetupDialog(Adw.Dialog):
         device_group.add(self._device_row)
         intro.append(device_group)
 
-        start_btn = Gtk.Button(label='Start calibration')
+        start_btn = Gtk.Button(label='Start detection')
         start_btn.add_css_class('suggested-action')
         start_btn.add_css_class('pill')
         start_btn.set_halign(Gtk.Align.CENTER)
@@ -108,7 +108,7 @@ class DriveSetupDialog(Adw.Dialog):
             margin_start=20,
             margin_end=20,
         )
-        self._prog_title = Gtk.Label(label='Calibrating…')
+        self._prog_title = Gtk.Label(label='Detecting sample offset…')
         self._prog_title.add_css_class('title-3')
         self._prog_title.set_halign(Gtk.Align.CENTER)
         self._prog_status = Gtk.Label(
@@ -228,7 +228,7 @@ class DriveSetupDialog(Adw.Dialog):
         device = self._device_row.get_text().strip() or '/dev/sr0'
         self._busy = True
         self._stack.set_visible_child_name('progress')
-        self._prog_title.set_label('Calibrating…')
+        self._prog_title.set_label('Detecting sample offset…')
         self._prog_bar.set_fraction(0.0)
         self._prog_status.set_label('Starting…')
 
@@ -263,14 +263,14 @@ class DriveSetupDialog(Adw.Dialog):
         if result.success and result.offset is not None:
             _save_result(self._store, device, result, offset=result.offset)
             apply_icon(self._result_icon, 'emblem-ok-symbolic')
-            self._result_title.set_label('Drive calibrated')
+            self._result_title.set_label('Sample offset detected')
             self._result_desc.set_label(f'{result.message}\nSaved for {device}.')
             self._manual_btn.set_visible(False)
         else:
             apply_icon(self._result_icon, 'dialog-warning-symbolic')
-            self._result_title.set_label('Calibration incomplete')
+            self._result_title.set_label('Detection incomplete')
             self._result_desc.set_label(
-                f'{result.message or "Calibration failed."}\n'
+                f'{result.message or "Could not detect sample offset."}\n'
                 'Enter an offset manually or skip.'
             )
             self._manual_btn.set_visible(True)

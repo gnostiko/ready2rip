@@ -17,34 +17,23 @@ def window_css(*, cover_size: int) -> str:
     """Compact app CSS aligned with Adwaita spacing."""
     size = int(cover_size)
     return f"""
-/* Artwork group: no list chrome around the cover + actions. */
-.ready2rip-art-group list {{
-    background: transparent;
-    border: none;
-    box-shadow: none;
-    border-radius: 12px;
-    padding: 0;
+/* Artwork: plain titled column; Adwaita .card only on the cover. */
+.ready2rip-art-group {{
+    margin: 0;
 }}
-.ready2rip-art-group row,
-.ready2rip-art-row {{
-    padding: 0;
-    min-height: 0;
-    border: none;
-    background: transparent;
-    box-shadow: none;
-}}
-.ready2rip-art-group row:hover {{
-    background: transparent;
+.ready2rip-art-group > label.heading {{
+    /* Match AdwPreferencesGroup single-line header above the Album list. */
+    font-weight: 600;
+    min-height: 34px;
 }}
 
+/* Size only — .card supplies Adwaita rim + elevation without padding. */
 .ready2rip-cover-frame {{
     min-width: {size}px;
     min-height: {size}px;
-    border-radius: 12px;
+}}
+.ready2rip-cover-frame.ready2rip-cover-empty {{
     background-color: alpha(@window_fg_color, 0.06);
-    box-shadow:
-        0 0 0 1px alpha(black, 0.06),
-        0 1px 2px alpha(black, 0.08);
 }}
 .ready2rip-cover-picture {{
     border-radius: 12px;
@@ -80,6 +69,7 @@ button.ready2rip-setup-icon:hover {{
     opacity: 1;
 }}
 
+/* Cover action icons — visibility is cover_actions opacity (hover/focus). */
 button.ready2rip-cover-button {{
     min-width: 32px;
     min-height: 32px;
@@ -92,9 +82,6 @@ button.ready2rip-cover-trash:active {{
     color: @destructive_fg_color;
     border: none;
     box-shadow: none;
-}}
-button.ready2rip-cover-trash:disabled {{
-    opacity: 0.4;
 }}
 
 /* Match AdwActionRow rhythm inside PreferencesGroup lists. */
@@ -119,8 +106,10 @@ button.ready2rip-cover-trash:disabled {{
     opacity: 0.7;
 }}
 .ready2rip-track-artist {{
-    /* Width comes from the equal Title|Artist grid; keep a soft floor. */
     min-width: 96px;
+}}
+.ready2rip-track-status {{
+    min-width: 7em;
 }}
 .ready2rip-track-dur {{
     min-width: 3em;

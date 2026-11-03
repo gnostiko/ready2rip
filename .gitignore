@@ -1,4 +1,5 @@
 /.cache/
+/.cursor-preview/
 /build/
 /build-appimage/
 /build-packages/

@@ -130,7 +130,7 @@ class MusicBrainzProvider(MetadataProvider):
             'fmt': 'json',
             'inc': (
                 'artists+recordings+release-groups+labels'
-                '+artist-credits+genres'
+                '+artist-credits+genres+tags'
             ),
         }
         url = (
@@ -148,7 +148,19 @@ class MusicBrainzProvider(MetadataProvider):
             album = self._release_to_album(release, discid)
             if album is not None:
                 albums.append(album)
+        self._fill_missing_genres(albums)
         return albums
+
+    def _fill_missing_genres(self, albums: list[AlbumMetadata]) -> None:
+        """One release-group genres fetch per unique RG when nested data omitted it."""
+        cache: dict[str, str] = {}
+        for album in albums:
+            if album.genre or not album.musicbrainz_release_group_id:
+                continue
+            rg_id = album.musicbrainz_release_group_id
+            if rg_id not in cache:
+                cache[rg_id] = self.get_release_group_genre(rg_id)
+            album.genre = cache[rg_id]
 
     def search(
         self, artist: str, album_title: str, limit: int = 10
@@ -194,18 +206,36 @@ class MusicBrainzProvider(MetadataProvider):
             'fmt': 'json',
             'inc': (
                 'artists+recordings+release-groups+labels'
-                '+artist-credits+media+genres'
+                '+artist-credits+media+genres+tags'
             ),
         }
         url = f'{MB_BASE}/release/{urllib.parse.quote(release_id)}?{urllib.parse.urlencode(params)}'
         data = self._get_json(url)
         if not data:
             return None
-        return self._release_to_album(
+        album = self._release_to_album(
             data,
             discid=discid,
             preferred_track_count=preferred_track_count,
         )
+        # Nested release-group payloads sometimes omit genres; one extra call.
+        if album is not None and not album.genre and album.musicbrainz_release_group_id:
+            album.genre = self.get_release_group_genre(
+                album.musicbrainz_release_group_id
+            )
+        return album
+
+    def get_release_group_genre(self, release_group_id: str) -> str:
+        """Fetch the top genre for a release-group (dedicated genres+tags call)."""
+        if not release_group_id:
+            return ''
+        params = {'fmt': 'json', 'inc': 'genres+tags'}
+        url = (
+            f'{MB_BASE}/release-group/{urllib.parse.quote(release_group_id)}'
+            f'?{urllib.parse.urlencode(params)}'
+        )
+        data = self._get_json(url)
+        return _mb_primary_genre(data) if data else ''
 
     def _throttle(self) -> None:
         """Respect MusicBrainz anonymous rate limit (≈1 req/s)."""
@@ -311,7 +341,7 @@ class MusicBrainzProvider(MetadataProvider):
 
         rg = release.get('release-group') or {}
         rg_id = rg.get('id') or ''
-        # Genres live mainly on the release-group; fall back to release.
+        # Genres live mainly on the release-group; fall back to release (+ tags).
         genre = _mb_primary_genre(rg) or _mb_primary_genre(release)
         # Prefer the most complete of release date vs RG first-release-date
         # (YYYY / YYYY-MM / YYYY-MM-DD).
@@ -615,18 +645,38 @@ def _short_network_error(exc: BaseException) -> str:
 def _mb_primary_genre(entity: dict[str, Any] | None) -> str:
     """Return the single highest-voted MusicBrainz genre name, or empty.
 
-    MusicBrainz stores genres lowercase; we title-case for tags/UI
-    (e.g. ``indie rock`` → ``Indie Rock``).
+    Prefers official ``genres``; falls back to ``tags`` when genres are absent
+    (skipping year-like tags). MusicBrainz stores names lowercase; we
+    title-case for tags/UI (e.g. ``indie rock`` → ``Indie Rock``).
     """
     if not entity:
         return ''
+    best = _mb_best_named_count(entity.get('genres') or [])
+    if not best:
+        best = _mb_best_named_count(
+            entity.get('tags') or [],
+            skip_years=True,
+        )
+    return best.title() if best else ''
+
+
+def _mb_best_named_count(
+    entries: Any,
+    *,
+    skip_years: bool = False,
+) -> str:
+    """Highest-count ``name`` from a MusicBrainz genres/tags list."""
+    if not isinstance(entries, list):
+        return ''
     best_name = ''
     best_count = -1
-    for entry in entity.get('genres') or []:
+    for entry in entries:
         if not isinstance(entry, dict):
             continue
         name = str(entry.get('name') or '').strip()
         if not name:
+            continue
+        if skip_years and re.fullmatch(r'\d{4}', name):
             continue
         try:
             count = int(entry.get('count') or 0)
@@ -636,7 +686,7 @@ def _mb_primary_genre(entity: dict[str, Any] | None) -> str:
         if count > best_count or (count == best_count and name < best_name):
             best_count = count
             best_name = name
-    return best_name.title() if best_name else ''
+    return best_name
 
 
 def _artist_credit(credit: Any) -> str:

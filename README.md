@@ -29,7 +29,7 @@ GTK 4 / libadwaita GNOME application.
 2. **Insert an audio CD.** ready2rip detects the disc, reads the TOC, and shows tracks.
 3. **Drive setup** (first run, or when you change drives): calibrate **sample offset**.
 4. **Metadata** (optional): auto-lookup when a disc is detected, or open **Lookup → By disc ID** and pick a release. If the wrong album is matched, use **Lookup → MusicBrainz link…** and paste a `musicbrainz.org/release/…` URL or release UUID. Edit album/track fields if needed. Cover art can be fetched, chosen from disk, or cleared.
-5. **Settings**: choose encoder, test & copy, CUE/log, Copy Image, HTOA, and related options. Defaults already match a secure archival setup.
+5. **Settings**: choose encoder, test & copy, CUE/log, Copy image, HTOA, and related options. Defaults already match a secure archival setup.
 6. Press **Rip CD**. Progress appears in the bottom banner (status line shows track detail).
 7. Files land under your **output folder** using the album/track templates — audio, optional `cover`, `.log`, and `.cue`.
 
@@ -48,7 +48,7 @@ ready2rip aims for secure archival ripping on Linux via cdparanoia / libcdio-par
 | Error logging | Parses cdparanoia progress into quality / fixups / skips / suspicious positions |
 | Burst fallback | Off by default. Optional insecure `-Z` recovery after secure retries fail — noted in the log |
 
-**Copy Image** mode rips one continuous disc image (FLAC/WAV) instead of per-track files; enable **Write .cue file** for a matching image CUE. Per-track rips use a multi-file CUE with INDEX 00 pregaps appended to the previous track (EAC-style). Mixed-mode and CD-Extra data tracks are saved as raw `.bin` files (MODE1/2352 or MODE2/2352).
+**Copy image** mode rips one continuous disc image (FLAC/WAV) instead of per-track files; enable **Write CUE sheet** for a matching image CUE. Per-track rips use a multi-file CUE with INDEX 00 pregaps appended to the previous track (EAC-style). Mixed-mode and CD-Extra data tracks are saved as raw `.bin` files (MODE1/2352 or MODE2/2352).
 
 ## Options
 
@@ -58,8 +58,8 @@ ready2rip aims for secure archival ripping on Linux via cdparanoia / libcdio-par
 |--------|-----------------|
 | **Optical device** | Usually `/dev/sr0` |
 | **Output folder** | `~/Music` |
-| **Album folder template** | `{album_artist}/{album}/{disc_folder}` — also `{year}`, `{disc}`, `{totaldiscs}` |
-| **Track filename template** | `{track:02d} - {title}` — also `{artist}`, `{album}`, `{disc}`, `{totaldiscs}` |
+| **Album folder scheme** | Presets (default `Artist / (Date) - Album`) or Custom template — `{album_artist}`, `{dated_album}`, `{album}`, `{year}`, `{date}`, `{genre}`, `{label}`, `{disc_folder}`, … |
+| **Track filename scheme** | Presets (default `01 - Title`) or Custom — `{track:02d}`, `{title}`, `{artist}`, `{album}`, `{disc}`, … |
 
 ### Encoder
 
@@ -71,14 +71,14 @@ ready2rip aims for secure archival ripping on Linux via cdparanoia / libcdio-par
 | **AAC quality** | FDK VBR 1–5 or 128–320 kbps CBR (`libfdk_aac` when available) |
 | **Opus bitrate** | VBR kbps (typical 96–256) |
 
-Copy Image forces a lossless container (FLAC or WAV; other formats fall back to FLAC).
+Copy image forces a lossless container (FLAC or WAV; other formats fall back to FLAC).
 
 ### Extraction
 
 | Option | Default | Notes |
 |--------|---------|-------|
 | **Test and copy** | On | Two secure passes; matching CRCs required (retries on mismatch) |
-| **Copy Image** | Off | One continuous image instead of separate tracks |
+| **Copy image** | Off | One continuous image instead of separate tracks |
 | **Pregap / HTOA** | On | Ignore ≤2s track-1 pause; longer non-silent pregap → track `00`; track 1 starts at index 01. Inter-track INDEX 00 is detected at rip start (cdrdao, else Q-subchannel) and written into the CUE |
 | **Data tracks** | On | Mixed-mode / CD-Extra data as raw 2352-byte `.bin` with test & copy when that option is on; listed in the CUE. Failed data extract fails the rip |
 | **AccurateRip** | On | Online CRC verification |
@@ -86,7 +86,7 @@ Copy Image forces a lossless container (FLAC or WAV; other formats fall back to 
 | **Submit to CTDB** | Off | Confirm a full-disc match, or submit new parity when unmatched and quality is 100 |
 | **Burst fallback** | Off | Optional insecure `-Z` recovery after secure retries fail |
 | **Write rip log** | On | Detailed status log in the album folder |
-| **Write .cue file** | On | Multi-file CUE with INDEX 00 in the previous file, or image CUE when Copy Image is on |
+| **Write CUE sheet** | On | Multi-file CUE with INDEX 00 in the previous file, or image CUE when Copy image is on |
 | **Auto-rip** | Off | Start rip shortly after a new disc is detected |
 | **Auto-eject** | Off | Open tray after a successful rip |
 
@@ -118,8 +118,8 @@ Release assets are published for **x86_64** and **aarch64** on
 ### AppImage (recommended)
 
 ```bash
-chmod +x ready2rip-0.4.11-x86_64.AppImage   # or …-aarch64.AppImage
-./ready2rip-0.4.11-x86_64.AppImage
+chmod +x ready2rip-0.4.12-x86_64.AppImage   # or …-aarch64.AppImage
+./ready2rip-0.4.12-x86_64.AppImage
 ```
 
 The AppImage needs a matching CPU architecture, a host **glibc** new enough for
@@ -149,7 +149,7 @@ Release AppImages are GPG-signed. Import the project key from
 ### Debian / Ubuntu
 
 ```bash
-sudo apt install ./ready2rip_0.4.11-1_amd64.deb   # or _arm64.deb
+sudo apt install ./ready2rip_0.4.12-1_amd64.deb   # or _arm64.deb
 ```
 
 Depends on distro packages for GTK 4 / libadwaita, mutagen, Pillow, cdparanoia,
@@ -158,7 +158,7 @@ flac, lame, ffmpeg, and opus-tools.
 ### Fedora / RPM
 
 ```bash
-sudo dnf install ./ready2rip-0.4.11-1.x86_64.rpm   # or .aarch64.rpm
+sudo dnf install ./ready2rip-0.4.12-1.x86_64.rpm   # or .aarch64.rpm
 ```
 
 Same runtime idea as the `.deb`: system UI stack and encoders, ready2rip itself
@@ -167,11 +167,11 @@ from the package.
 ### Flatpak
 
 ```bash
-flatpak install --user ./ready2rip-0.4.11-x86_64.flatpak
+flatpak install --user ./ready2rip-0.4.12-x86_64.flatpak
 flatpak run org.ready2rip.Ready2Rip
 ```
 
-The bundle targets GNOME Platform 49, ships libcdio-paranoia / flac / lame, and
+The bundle targets GNOME Platform 51, ships libcdio-paranoia / flac / lame, and
 uses the runtime’s codecs-extra stack (includes ffmpeg) for AAC and Opus.
 
 ## Dependencies
