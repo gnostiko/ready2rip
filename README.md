@@ -3,8 +3,7 @@
 **ready2rip is a secure CD ripper for Linux.**
 
 It focuses on careful archival extraction with full cdparanoia, AccurateRip and
-CTDB verification, MusicBrainz metadata, and modern tagging — presented as a
-GTK 4 / libadwaita GNOME application.
+CTDB verification, MusicBrainz metadata, and modern tagging
 
 <img width="1050" height="750" alt="ready2rip" src="https://github.com/user-attachments/assets/fd305067-6bb0-426e-b712-7b2b62b59e5d" />
 
