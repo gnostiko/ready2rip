@@ -13,25 +13,35 @@ from gi.repository import Gtk
 _EASE = 'cubic-bezier(0.33, 1, 0.68, 1)'
 
 
-def window_css(*, cover_size: int) -> str:
-    """Compact app CSS aligned with Adwaita spacing."""
-    size = int(cover_size)
+def window_css() -> str:
+    """Compact app CSS aligned with Adwaita spacing.
+
+    Cover size is set via widget size_request, not CSS, so resize does not
+    force a stylesheet reload.
+    """
     return f"""
-/* Artwork: plain titled column; Adwaita .card only on the cover. */
 .ready2rip-art-group {{
     margin: 0;
 }}
-.ready2rip-art-group > label.heading {{
-    /* Match AdwPreferencesGroup single-line header above the Album list. */
-    font-weight: 600;
-    min-height: 34px;
+.ready2rip-art-group list.boxed-list {{
+    background-color: transparent;
+    box-shadow: none;
+    border-radius: 0;
+}}
+.ready2rip-art-group row {{
+    padding: 0;
+    min-height: 0;
+    background-color: transparent;
+    box-shadow: none;
+    border: none;
+}}
+.ready2rip-art-group row:hover,
+.ready2rip-art-group row:active,
+.ready2rip-art-group row:selected {{
+    background-color: transparent;
+    box-shadow: none;
 }}
 
-/* Size only — .card supplies Adwaita rim + elevation without padding. */
-.ready2rip-cover-frame {{
-    min-width: {size}px;
-    min-height: {size}px;
-}}
 .ready2rip-cover-frame.ready2rip-cover-empty {{
     background-color: alpha(@window_fg_color, 0.06);
 }}
@@ -41,8 +51,21 @@ def window_css(*, cover_size: int) -> str:
 image.ready2rip-cover-placeholder {{
     color: alpha(@window_fg_color, 0.35);
 }}
-label.ready2rip-cover-size {{
-    line-height: 1.25;
+label.ready2rip-cover-bubble {{
+    background-color: alpha(black, 0.55);
+    color: white;
+    border-radius: 999px;
+    padding: 3px 10px;
+    min-height: 22px;
+}}
+.ready2rip-album-locked {{
+    opacity: 1;
+}}
+.ready2rip-album-group row {{
+    min-height: 36px;
+}}
+.ready2rip-album-group row entry {{
+    min-height: 28px;
 }}
 
 .ready2rip-rip-bar {{
@@ -69,7 +92,6 @@ button.ready2rip-setup-icon:hover {{
     opacity: 1;
 }}
 
-/* Cover action icons — visibility is cover_actions opacity (hover/focus). */
 button.ready2rip-cover-button {{
     min-width: 32px;
     min-height: 32px;
@@ -84,7 +106,6 @@ button.ready2rip-cover-trash:active {{
     box-shadow: none;
 }}
 
-/* Match AdwActionRow rhythm inside PreferencesGroup lists. */
 .ready2rip-track-row {{
     padding: 10px 12px;
     min-height: 44px;
@@ -106,7 +127,6 @@ button.ready2rip-cover-trash:active {{
     opacity: 0.7;
 }}
 .ready2rip-track-artist {{
-    /* Width comes from the equal Title|Artist grid; keep a soft floor. */
     min-width: 96px;
 }}
 .ready2rip-track-dur {{
@@ -121,13 +141,14 @@ entry.ready2rip-track-entry {{
 
 
 def banner_fill_css(fraction: float) -> str:
-    """GNOME success-green fill for the Ripping disc banner."""
+    """GNOME success-green left-to-right fill for rip + offset banners."""
+    selector = '.ready2rip-rip-bar'
     percent = max(0.0, min(100.0, fraction * 100.0))
     if percent <= 0.05:
-        return '.ready2rip-rip-bar { background-image: none; }'
+        return f'{selector} {{ background-image: none; }}'
     edge = max(0.0, percent - 2.5)
     return f"""
-.ready2rip-rip-bar {{
+{selector} {{
     background-image: linear-gradient(
         to right,
         alpha(@success_bg_color, 0.72) 0%,
@@ -139,26 +160,19 @@ def banner_fill_css(fraction: float) -> str:
 """
 
 
+
 _window_provider: Gtk.CssProvider | None = None
-_window_cover_size: int | None = None
 
 
-def install_window_styles(
-    display: Gtk.Display, *, cover_size: int
-) -> Gtk.CssProvider:
+def install_window_styles(display: Gtk.Display) -> Gtk.CssProvider:
     """Install application-priority CSS for *display* (once per process)."""
-    global _window_provider, _window_cover_size
-    css = window_css(cover_size=cover_size)
+    global _window_provider
     if _window_provider is not None:
-        if _window_cover_size != cover_size:
-            _window_provider.load_from_string(css)
-            _window_cover_size = cover_size
         return _window_provider
     provider = Gtk.CssProvider()
-    provider.load_from_string(css)
+    provider.load_from_string(window_css())
     Gtk.StyleContext.add_provider_for_display(
         display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
     )
     _window_provider = provider
-    _window_cover_size = cover_size
     return provider

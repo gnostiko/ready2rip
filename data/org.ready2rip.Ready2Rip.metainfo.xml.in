@@ -29,8 +29,18 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-02">
       <description>
         <p>
-          0.4.12: Artwork hover actions, naming scheme presets,
-          nested sample-offset settings, GNOME 51 Flatpak, and UI
+          0.4.13: Rework sample-offset detection popup, grow cover art
+          to match the Album block, defer metadata until setup finishes,
+          and remove the top lookup progress bar. Snappier disc and
+          tray updates; ready2rip branding in UI copy.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.12" date="2026-11-02">
+      <description>
+        <p>
+          Artwork hover actions, naming scheme presets, nested
+          sample-offset settings, GNOME 51 Flatpak, and UI
           capitalization cleanup. Remove dual-encode option. Album
           fields grey out while ripping; track Title/Artist spacing
           restored.

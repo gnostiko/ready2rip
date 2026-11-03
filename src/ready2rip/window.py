@@ -87,7 +87,6 @@ _ADW_TEMPLATE_TYPES = (
     'Clamp',
     'PreferencesGroup',
     'ActionRow',
-    'ButtonRow',
     'ComboRow',
     'EntryRow',
     'SpinRow',
@@ -148,7 +147,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     __gtype_name__ = 'Ready2RipWindow'
 
     toast_overlay = Gtk.Template.Child()
-    window_overlay = Gtk.Template.Child()
     flash_veil = Gtk.Template.Child()
     toolbar_view = Gtk.Template.Child()
     window_title = Gtk.Template.Child()
@@ -164,26 +162,26 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     empty_eject_button = Gtk.Template.Child()
     art_album_row = Gtk.Template.Child()
     art_group = Gtk.Template.Child()
-    art_column = Gtk.Template.Child()
+    art_cover_row = Gtk.Template.Child()
     cover_frame = Gtk.Template.Child()
     cover_overlay = Gtk.Template.Child()
     cover_picture = Gtk.Template.Child()
     cover_placeholder = Gtk.Template.Child()
+    cover_hover = Gtk.Template.Child()
     cover_actions = Gtk.Template.Child()
     cover_size_label = Gtk.Template.Child()
+    cover_embed_label = Gtk.Template.Child()
     search_art_button = Gtk.Template.Child()
     choose_art_button = Gtk.Template.Child()
     clear_art_button = Gtk.Template.Child()
-    lookup_progress = Gtk.Template.Child()
     rip_revealer = Gtk.Template.Child()
     rip_banner = Gtk.Template.Child()
     rip_title_label = Gtk.Template.Child()
     rip_status_label = Gtk.Template.Child()
 
-    # Cover sits in the Artwork column (~1/3 of the disc hero row).
-    _COVER_SIZE = 180
-    _COVER_SIZE_MIN = 140
-    _COVER_SIZE_MAX = 280
+    _COVER_SIZE = 280
+    _COVER_SIZE_MIN = 200
+    _COVER_SIZE_MAX = 560
     _COVER_PLACEHOLDER_ICON_SIZE = 48
 
     def __init__(self, store: SettingsStore | None = None, **kwargs) -> None:
@@ -205,21 +203,23 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._track_artist_button: Gtk.Button | None = None
         self._track_select_all: Gtk.CheckButton | None = None
         self._syncing_select_all = False
-        # Title and Artist columns share width across rows (0.4.11 layout).
-        self._track_title_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
-        self._track_artist_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        # Lead (#) and Time stay locked; Title|Artist use a fixed 50/50 grid
+        # so column headers do not drift when the window is resized.
+        self._track_lead_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        self._track_dur_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
         self._album_field_rows: list[Gtk.Widget] = []
         self._album_title_row: Adw.EntryRow | None = None
         self._album_artist_row: Adw.EntryRow | None = None
         self._album_date_row: Adw.EntryRow | None = None
         self._album_genre_row: Adw.EntryRow | None = None
-        self._album_label_row: Adw.EntryRow | None = None
         self._album_disc_row: Adw.EntryRow | None = None
         self._track_header_suffix: Gtk.Widget | None = None
         self._disc_rows: list[Adw.ActionRow] = []
         self._drive_rows: list[Gtk.Widget] = []
         self._lookup_generation = 0
         self._looking_up = False
+        self._setup_dialog_open = False
+        self._pending_auto_lookup = False
         self._artwork: ArtworkImage | None = None
         self._artwork_embed: ArtworkImage | None = None
         self._art_generation = 0
@@ -245,11 +245,15 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._progress_idle_id: int | None = None
         self._banner_shown = 0.0
         self._banner_target = 0.0
+        self._banner_css_frac = -1.0
         self._banner_tick_id: int | None = None
         self._banner_last_us = 0
         self._banner_hold = False
         self._banner_provider = Gtk.CssProvider()
         self._flash_id: int | None = None
+        self._cover_fit_id: int | None = None
+        self._drive_tray_row: Adw.ActionRow | None = None
+        self._drive_offset_row: Adw.ActionRow | None = None
         self.store = store if store is not None else SettingsStore()
         self._device = self.store.get().device
 
@@ -441,8 +445,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         apply_icon(self.cover_placeholder, 'folder-music-symbolic', display=display)
 
     def _on_close_request(self, *_args) -> bool:
-        # Closing mid-rip used to kill the daemon thread abruptly and leave
-        # a half-written log that looked like a crash. Cancel cleanly first.
         if self._ripping and self._rip_engine is not None:
             self._rip_engine.cancel()
         if self._flash_id is not None:
@@ -540,9 +542,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if hasattr(self.cover_picture, 'set_can_shrink'):
             self.cover_picture.set_can_shrink(True)
 
-        # Opacity on the actions box (+ buttons) — leave can_target on so
-        # hover→click does not race with leave/hide (last working release).
-        # Not focusable: avoids tab-focus leaving icons stuck visible.
         self._set_cover_actions_visible(False)
         for button in (
             self.search_art_button,
@@ -559,10 +558,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self.cover_frame.add_controller(motion)
 
         self._attach_art_album_grid()
-        self.art_album_row.connect('notify::width', self._on_art_album_row_width)
+        self.art_album_row.connect('notify::width', self._on_art_album_geometry)
+        self.album_edit_group.connect('notify::height', self._on_art_album_geometry)
 
     def _attach_art_album_grid(self) -> None:
-        """Place Artwork|Album into a 1:2 column span on the hero grid."""
+        """Place Artwork beside Album; cover square matches Album list height."""
         grid = self.art_album_row
         art = self.art_group
         album = self.album_edit_group
@@ -570,31 +570,71 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             grid.remove(art)
         if album.get_parent() is grid:
             grid.remove(album)
-        grid.set_column_homogeneous(True)
+        # Non-homogeneous: art column tracks the square cover; Album fills rest.
+        grid.set_column_homogeneous(False)
         grid.set_column_spacing(18)
+        art.set_hexpand(False)
+        art.set_halign(Gtk.Align.START)
+        album.set_hexpand(True)
+        album.set_halign(Gtk.Align.FILL)
         grid.attach(art, 0, 0, 1, 1)
-        grid.attach(album, 1, 0, 2, 1)
+        grid.attach(album, 1, 0, 1, 1)
 
-    def _on_art_album_row_width(self, *_args) -> None:
+    def _on_art_album_geometry(self, *_args) -> None:
+        if self._cover_fit_id is not None:
+            return
+        self._cover_fit_id = GLib.timeout_add(32, self._run_fit_cover)
+
+    def _run_fit_cover(self) -> bool:
+        self._cover_fit_id = None
         self._fit_cover_to_column()
+        return GLib.SOURCE_REMOVE
+
+    @staticmethod
+    def _preferences_listbox(group: Adw.PreferencesGroup) -> Gtk.ListBox | None:
+        """Return the boxed-list inside an AdwPreferencesGroup."""
+        outer = group.get_first_child()
+        if outer is None:
+            return None
+        header = outer.get_first_child()
+        content = header.get_next_sibling() if header is not None else None
+        if content is None:
+            return None
+        listbox = content.get_first_child()
+        return listbox if isinstance(listbox, Gtk.ListBox) else None
+
+    def _album_fields_height(self) -> int:
+        """Pixel height of the Album boxed-list (Title through Disc)."""
+        listbox = self._preferences_listbox(self.album_edit_group)
+        if listbox is not None:
+            h = listbox.get_height()
+            if h > 0:
+                return h
+        # Fallback before allocate: sum mapped rows.
+        total = 0
+        measured = 0
+        for row in self._album_field_rows:
+            h = row.get_height()
+            if h > 0:
+                total += h
+                measured += 1
+        if measured == 0:
+            return 0
+        n = len(self._album_field_rows)
+        if n > measured:
+            total = int(round(total * (n / measured)))
+        return total
 
     def _cover_size_for_row(self) -> int | None:
-        """Square cover edge from the hero row's 1/3 column — not art_group width.
-
-        Using art_group width fed back into size_request and grew without bound.
-        """
-        row_w = self.art_album_row.get_width()
-        if row_w < self._COVER_SIZE_MIN * 2:
+        """Square edge = exact Album list height (Title→Disc)."""
+        fields_h = self._album_fields_height()
+        if fields_h <= 0:
             return None
-        spacing = self.art_album_row.get_column_spacing()
-        # 3 homogeneous units → 2 gaps.
-        col_w = max(1, (row_w - 2 * spacing) // 3)
-        # Inset for PreferencesGroup / list padding inside the cell.
-        size = col_w - 8
-        return max(self._COVER_SIZE_MIN, min(self._COVER_SIZE_MAX, size))
+        # Match the list height exactly so cover and Album block stay even.
+        return max(self._COVER_SIZE_MIN, min(self._COVER_SIZE_MAX, fields_h))
 
     def _fit_cover_to_column(self) -> None:
-        """Keep the cover square within the Artwork 1/3 column."""
+        """Keep the cover square equal to the Album Title→Disc list height."""
         size = self._cover_size_for_row()
         if size is None:
             return
@@ -610,11 +650,17 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
     def _apply_cover_display_size(self, size: int) -> None:
         self._cover_display_size = size
-        for widget in (self.cover_overlay, self.cover_picture, self.cover_frame):
+        for widget in (
+            self.cover_overlay,
+            self.cover_picture,
+            self.cover_frame,
+            self.art_cover_row,
+        ):
             widget.set_size_request(size, size)
+        # Keep the Artwork column as wide as the square (title chrome matches Album).
+        self.art_group.set_size_request(size, -1)
         icon_px = max(32, min(self._COVER_PLACEHOLDER_ICON_SIZE, size // 4))
         self.cover_placeholder.set_pixel_size(icon_px)
-        install_window_styles(self.get_display(), cover_size=size)
 
     def _apply_blank_cover_paintable(self, size: int) -> None:
         """Hold the cover slot open at *size* when no artwork is loaded."""
@@ -630,10 +676,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
     def _setup_progress_styles(self) -> None:
         """Install cover / track / progress CSS and wire the rip banner fill."""
-        install_window_styles(
-            self.get_display(),
-            cover_size=getattr(self, '_cover_display_size', self._COVER_SIZE),
-        )
+        install_window_styles(self.get_display())
         self.flash_veil.set_halign(Gtk.Align.FILL)
         self.flash_veil.set_valign(Gtk.Align.FILL)
         self.flash_veil.set_hexpand(True)
@@ -645,10 +688,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._apply_banner_fill()
 
     def _set_cover_actions_visible(self, visible: bool) -> None:
-        # Opacity only — leave can_target enabled so moving onto the buttons
-        # does not race with leave/hide before click. Also set each button so
-        # OSD styling cannot leave icons stuck visible/invisible.
         opacity = 1.0 if visible else 0.0
+        self.cover_hover.set_opacity(opacity)
         self.cover_actions.set_opacity(opacity)
         for button in (
             self.search_art_button,
@@ -656,6 +697,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self.clear_art_button,
         ):
             button.set_opacity(opacity)
+        if visible:
+            self._update_cover_size_label()
 
     def _on_cover_pointer_enter(self, *_args) -> None:
         self._set_cover_actions_visible(True)
@@ -689,23 +732,31 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._fit_cover_to_column()
 
     def _update_cover_size_label(self) -> None:
-        """Show source (and embed) dimensions under the cover when art is loaded."""
         art = self._artwork
         if art is None:
             self.cover_size_label.set_visible(False)
             self.cover_size_label.set_text('')
+            self.cover_embed_label.set_visible(False)
+            self.cover_embed_label.set_text('')
             return
 
-        lines = [f'{art.width}×{art.height}']
+        self.cover_size_label.set_text(f'{art.width}×{art.height}')
+        self.cover_size_label.set_tooltip_text('Source artwork size')
+        self.cover_size_label.set_visible(True)
+
+        show_embed = False
         if self.store.get().embed_artwork:
             emb = self._artwork_embed
             if emb is None:
                 self._prepare_embed_artwork()
                 emb = self._artwork_embed
             if emb is not None:
-                lines.append(f'Embed {emb.width}×{emb.height}')
-        self.cover_size_label.set_text('\n'.join(lines))
-        self.cover_size_label.set_visible(True)
+                self.cover_embed_label.set_text(f'Embed {emb.width}×{emb.height}')
+                self.cover_embed_label.set_tooltip_text('Size written into ripped files')
+                show_embed = True
+        if not show_embed:
+            self.cover_embed_label.set_text('')
+        self.cover_embed_label.set_visible(show_embed)
 
     # —— Settings groups (Preferences dialog) ——
 
@@ -728,7 +779,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         # Action: text button, or compact grey optical icon when complete.
         self._setup_btn = Gtk.Button(label='Detect')
         self._setup_btn.set_valign(Gtk.Align.CENTER)
-        self._setup_btn.connect('clicked', self._on_run_drive_setup)
+        self._setup_btn.connect('clicked', self.present_drive_setup)
         self._setup_row.add_suffix(self._setup_btn)
 
         status = (
@@ -1195,7 +1246,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 widget.handler_unblock_by_func(handler)
 
         self._device = settings.device
-        self._update_calibration_row()
         self._rebuild_drive_rows(
             settings.device or self._device or '/dev/sr0',
             allow_optical=False,
@@ -1886,13 +1936,19 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         return GLib.SOURCE_CONTINUE
 
     def _apply_banner_fill(self) -> None:
-        self._banner_provider.load_from_string(banner_fill_css(self._banner_shown))
+        # Quantize so CSS is not reparsed every animation frame.
+        q = round(self._banner_shown * 100.0) / 100.0
+        if q == self._banner_css_frac:
+            return
+        self._banner_css_frac = q
+        self._banner_provider.load_from_string(banner_fill_css(q))
 
     def _reset_banner_fill(self) -> bool:
         if self._ripping or self._banner_hold:
             return GLib.SOURCE_REMOVE
         self._banner_shown = 0.0
         self._banner_target = 0.0
+        self._banner_css_frac = -1.0
         if self._banner_tick_id is not None:
             self.remove_tick_callback(self._banner_tick_id)
             self._banner_tick_id = None
@@ -1975,7 +2031,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._sync_cover_action_sensitivity()
         else:
             self.clear_art_button.set_sensitive(False)
-        self.album_edit_group.set_sensitive(idle)
+        self._set_album_fields_editable(idle)
 
         if active:
             self.rip_button.set_label('Cancel')
@@ -2096,16 +2152,33 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _eject_disc(self) -> None:
         """Open the tray / eject media on the configured optical device."""
         device = self.store.get().device or self._device or '/dev/sr0'
-        ok, message = eject_drive(device)
-        if ok:
-            self._toast('Disc ejected')
-            self._last_tray_state = DriveTrayState.TRAY_OPEN
-            self._clear_disc_ui_for_empty(
-                title='Tray open',
-                description='Disc ejected. Close the tray or insert another CD.',
-            )
-        else:
-            self._toast(f'Eject failed: {message}')
+        self.eject_button.set_sensitive(False)
+        self.empty_eject_button.set_sensitive(False)
+
+        def work() -> None:
+            ok, message = eject_drive(device)
+
+            def done() -> bool:
+                self.eject_button.set_sensitive(True)
+                self.empty_eject_button.set_sensitive(True)
+                if ok:
+                    self._toast('Disc ejected')
+                    self._last_tray_state = DriveTrayState.TRAY_OPEN
+                    self._clear_disc_ui_for_empty(
+                        title='Tray open',
+                        description=(
+                            'Disc ejected. Close the tray or insert another CD.'
+                        ),
+                    )
+                else:
+                    self._toast(f'Eject failed: {message}')
+                return GLib.SOURCE_REMOVE
+
+            GLib.idle_add(done)
+
+        threading.Thread(
+            target=work, daemon=True, name='ready2rip-eject'
+        ).start()
 
     def _do_auto_eject(self) -> bool:
         self._eject_disc()
@@ -2113,16 +2186,39 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
     # —— Drive monitor / disc load ——
 
+    def _drive_poll_interval_ms(self) -> int:
+        """Poll faster while waiting for a disc; back off when stable."""
+        if self.stack.get_visible_child_name() == 'empty':
+            return 750
+        state = self._last_tray_state
+        if state in (
+            DriveTrayState.NOT_READY,
+            DriveTrayState.TRAY_OPEN,
+            DriveTrayState.NO_DISC,
+        ):
+            return 750
+        return 2000
+
     def _start_drive_monitor(self) -> None:
         """Poll tray/media state so we notice open trays and new discs."""
         if self._poll_id is not None:
             return
         self._poll_drive(force_refresh=False)
-        self._poll_id = GLib.timeout_add_seconds(2, self._on_drive_poll)
+        self._schedule_drive_poll()
+
+    def _schedule_drive_poll(self) -> None:
+        if self._poll_id is not None:
+            GLib.source_remove(self._poll_id)
+            self._poll_id = None
+        self._poll_id = GLib.timeout_add(
+            self._drive_poll_interval_ms(), self._on_drive_poll
+        )
 
     def _on_drive_poll(self) -> bool:
+        self._poll_id = None
         self._poll_drive(force_refresh=False)
-        return GLib.SOURCE_CONTINUE
+        self._schedule_drive_poll()
+        return GLib.SOURCE_REMOVE
 
     def _poll_drive(self, *, force_refresh: bool) -> None:
         """Schedule a non-blocking tray check (never ioctl/cdparanoia on GTK thread)."""
@@ -2204,8 +2300,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 self._refresh_disc(from_monitor=True)
 
     def _apply_drive_status_to_ui(self, status: DriveStatus) -> None:
+        if self._drive_tray_row is not None:
+            self._drive_tray_row.set_subtitle(status.label)
+            tip = status.message if status.message else status.label
+            self._drive_tray_row.set_tooltip_text(tip)
+            return
         device = status.device or self._device or '/dev/sr0'
-        # Never call cdparanoia from the GTK thread.
         self._rebuild_drive_rows(device, allow_optical=False)
 
     def _clear_disc_ui_for_empty(self, *, title: str, description: str) -> None:
@@ -2221,10 +2321,13 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._rebuild_track_list(None)
         self._fill_album_edit_fields(None)
         self._rebuild_disc_rows(None, None)
-        self._rebuild_drive_rows(
-            self.store.get().device or self._device or '/dev/sr0',
-            allow_optical=False,
-        )
+        if self._drive_tray_row is not None and self._drive_status is not None:
+            self._apply_drive_status_to_ui(self._drive_status)
+        else:
+            self._rebuild_drive_rows(
+                self.store.get().device or self._device or '/dev/sr0',
+                allow_optical=False,
+            )
         self._update_album_header(None, None)
 
     def _disc_identity_key(
@@ -2262,7 +2365,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._start_rip()
             return GLib.SOURCE_REMOVE
 
-        delay = 2500 if settings.auto_lookup_metadata else 800
+        # Short grace so lookup can start; don't wait the full lookup.
+        delay = 1200 if settings.auto_lookup_metadata else 400
         GLib.timeout_add(delay, _start)
 
     def _refresh_disc(self, *, from_monitor: bool = False) -> None:
@@ -2354,9 +2458,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             restored = False
 
         self._rebuild_disc_rows(info, self._ids)
-        self._rebuild_drive_rows(
-            device, drive_info=self._drive_info, allow_optical=False
-        )
         self._fill_album_edit_fields(self._album)
         self._rebuild_track_list(info)
         self._update_album_header(info, self._album)
@@ -2427,11 +2528,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
     @staticmethod
     def _format_metadata_origin(source: str | None) -> str:
-        """Human label for the metadata origin banner."""
+        """Toast label for where album metadata came from."""
         raw = (source or '').strip().lower()
         if not raw or raw == 'manual':
             return 'No metadata'
-        # Manual edits after a lookup: musicbrainz+manual, gnudb+manual, …
         base = raw.split('+', 1)[0].strip()
         names = {
             'musicbrainz': 'MusicBrainz',
@@ -2449,7 +2549,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         return f'Metadata from {pretty}'
 
     def _update_album_header(self, info: DiscInfo | None, album: AlbumMetadata | None) -> None:
-        """Refresh window subtitle, album origin hint, and cover placeholder."""
+        """Refresh window subtitle and cover placeholder."""
         self.window_title.set_title(config.APPLICATION_NAME)
         if album is not None and (album.title or album.artist):
             artist = (album.artist or '').strip()
@@ -2540,6 +2640,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         for row in self._drive_rows:
             self.drive_group.remove(row)
         self._drive_rows.clear()
+        self._drive_tray_row = None
+        self._drive_offset_row = None
 
         settings = self.store.get()
         info = drive_info if drive_info is not None else self._drive_info
@@ -2560,15 +2662,14 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 tray_row.set_tooltip_text(st.message)
             else:
                 tray_row.set_tooltip_text(st.label)
-            self.drive_group.add(tray_row)
-            self._drive_rows.append(tray_row)
         else:
             tray_row = Adw.ActionRow(
                 title='Tray / media',
                 subtitle='Checking…',
             )
-            self.drive_group.add(tray_row)
-            self._drive_rows.append(tray_row)
+        self.drive_group.add(tray_row)
+        self._drive_rows.append(tray_row)
+        self._drive_tray_row = tray_row
 
         for title, subtitle in info.as_rows():
             row = Adw.ActionRow(title=title, subtitle=subtitle)
@@ -2584,18 +2685,27 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         offset_row = Adw.ActionRow(title='Sample offset', subtitle=offset_sub)
         self.drive_group.add(offset_row)
         self._drive_rows.append(offset_row)
+        self._drive_offset_row = offset_row
 
-    def _on_run_drive_setup(self, *_args) -> None:
+    def present_drive_setup(self, *_args) -> None:
+        """Show the sample-offset dialog; defer metadata until it closes."""
+        self.set_drive_setup_open(True)
         dialog = DriveSetupDialog(self.store)
 
         def on_closed(*_a) -> None:
             self.sync_options_from_store()
-            self._update_calibration_row()
-            device = self.store.get().device or self._device or '/dev/sr0'
-            self._rebuild_drive_rows(device, allow_optical=False)
+            self.set_drive_setup_open(False)
 
         dialog.connect('closed', on_closed)
         dialog.present(self)
+
+    def set_drive_setup_open(self, is_open: bool) -> None:
+        """Block metadata lookup while the drive-setup popup is showing."""
+        was_open = self._setup_dialog_open
+        self._setup_dialog_open = is_open
+        if was_open and not is_open and self._pending_auto_lookup:
+            self._pending_auto_lookup = False
+            self._start_metadata_lookup(interactive=False)
 
     def _build_album_edit_rows(self) -> None:
         """Always-visible Album EntryRows (no expander)."""
@@ -2638,12 +2748,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._album_field_rows.append(genre_row)
         self._album_genre_row = genre_row
 
-        label_row = Adw.EntryRow(title='Label')
-        label_row.connect('changed', self._on_album_field_changed)
-        self.album_edit_group.add(label_row)
-        self._album_field_rows.append(label_row)
-        self._album_label_row = label_row
-
         disc_row = Adw.EntryRow(title='Disc')
         disc_row.set_text('1/1')
         disc_row.set_tooltip_text(
@@ -2653,8 +2757,22 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self.album_edit_group.add(disc_row)
         self._album_field_rows.append(disc_row)
         self._album_disc_row = disc_row
+        self._set_album_fields_editable(not self._ripping)
+        listbox = self._preferences_listbox(self.album_edit_group)
+        if listbox is not None:
+            listbox.connect('notify::height', self._on_art_album_geometry)
         # Building rows can steal focus into Title; drop it until the user clicks.
         self._defer_clear_window_focus()
+        self._on_art_album_geometry()
+
+    def _set_album_fields_editable(self, editable: bool) -> None:
+        """Lock Album EntryRows while ripping without greying their text."""
+        for row in self._album_field_rows:
+            row.set_editable(editable)
+            if editable:
+                row.remove_css_class('ready2rip-album-locked')
+            else:
+                row.add_css_class('ready2rip-album-locked')
 
     def _blank_album_for_disc(self, info: DiscInfo) -> AlbumMetadata:
         tracks = [
@@ -2699,8 +2817,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 )
             if self._album_genre_row is not None:
                 self._album_genre_row.set_text(album.genre if album else '')
-            if self._album_label_row is not None:
-                self._album_label_row.set_text(album.label if album else '')
             disc_num = max(1, int(album.medium_position)) if album else 1
             disc_total = max(1, int(album.medium_count)) if album else 1
             if self._album_disc_row is not None:
@@ -2720,8 +2836,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             album.date = normalize_release_date(self._album_date_row.get_text())
         if self._album_genre_row is not None:
             album.genre = self._album_genre_row.get_text().strip()
-        if self._album_label_row is not None:
-            album.label = self._album_label_row.get_text().strip()
         if self._album_disc_row is not None:
             disc_num, disc_total = parse_disc_field(
                 self._album_disc_row.get_text()
@@ -2789,8 +2903,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         # New disc/list always starts in view mode.
         self._tracks_editing = False
         # Fresh size groups so rebuilt widgets align cleanly.
-        self._track_title_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
-        self._track_artist_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        self._track_lead_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        self._track_dur_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
 
         if info is None:
             group.set_title('Tracks')
@@ -2941,17 +3055,17 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         num_ph = self._track_caption('#', 'ready2rip-track-num', xalign=0.5)
         lead.append(select_all)
         lead.append(num_ph)
+        self._track_lead_size.add_widget(lead)
         box.append(lead)
 
         title_h = self._track_caption('Title', 'heading')
         title_h.set_halign(Gtk.Align.START)
-        self._track_title_size.add_widget(title_h)
         artist_h = self._track_caption('Artist', 'heading', 'ready2rip-track-artist')
         artist_h.set_halign(Gtk.Align.START)
-        self._track_artist_size.add_widget(artist_h)
         box.append(self._make_title_artist_grid(title_h, artist_h))
 
         dur_h = self._track_caption('Time', 'ready2rip-track-dur', xalign=1.0)
+        self._track_dur_size.add_widget(dur_h)
         box.append(dur_h)
 
         row.set_child(box)
@@ -2992,6 +3106,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         num.set_xalign(0.5)
         lead.append(check)
         lead.append(num)
+        self._track_lead_size.add_widget(lead)
         box.append(lead)
 
         title_stack, title_label, title_entry = self._make_track_field_stack(
@@ -3001,7 +3116,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             placeholder=f'Track {number:02d} title',
             tooltip=f'Title for track {number:02d}',
         )
-        self._track_title_size.add_widget(title_stack)
         artist_stack, artist_label, artist_entry = self._make_track_field_stack(
             number=number,
             value=artist,
@@ -3013,13 +3127,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             ),
             css_class='ready2rip-track-artist',
         )
-        self._track_artist_size.add_widget(artist_stack)
         box.append(self._make_title_artist_grid(title_stack, artist_stack))
 
         status = Gtk.Label(label='')
         status.add_css_class('caption')
         status.add_css_class('dim-label')
-        status.add_css_class('ready2rip-track-status')
         status.set_ellipsize(Pango.EllipsizeMode.END)
         status.set_max_width_chars(12)
         status.set_xalign(1.0)
@@ -3030,6 +3142,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         dur = self._track_caption(duration_label, 'ready2rip-track-dur', xalign=1.0)
         dur.set_valign(Gtk.Align.CENTER)
         dur.set_tooltip_text(f'Duration {duration_label}')
+        self._track_dur_size.add_widget(dur)
         box.append(dur)
 
         row.set_child(box)
@@ -3232,6 +3345,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     ) -> None:
         if self._disc is None or self._ids is None or self._looking_up:
             return
+        if self._setup_dialog_open:
+            if not interactive:
+                self._pending_auto_lookup = True
+            return
 
         settings = self.store.get()
         use_mb = (
@@ -3249,8 +3366,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         generation = self._lookup_generation
         self._looking_up = True
         self._set_lookup_controls_sensitive(False)
-        self.lookup_progress.set_visible(True)
-        self.lookup_progress.pulse()
 
         mb_id = self._ids.musicbrainz_discid
         freedb_id = self._ids.freedb_id
@@ -3287,19 +3402,16 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             GLib.idle_add(done)
 
         threading.Thread(target=worker, daemon=True).start()
-        GLib.timeout_add(100, self._pulse_lookup_progress)
 
     def _start_mb_url_fetch(self, text: str) -> None:
         """Fetch a single release from a MusicBrainz link (background)."""
-        if self._looking_up:
+        if self._looking_up or self._setup_dialog_open:
             return
 
         self._lookup_generation += 1
         generation = self._lookup_generation
         self._looking_up = True
         self._set_lookup_controls_sensitive(False)
-        self.lookup_progress.set_visible(True)
-        self.lookup_progress.pulse()
 
         discid = ''
         if self._ids is not None and self._ids.musicbrainz_discid:
@@ -3327,13 +3439,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             GLib.idle_add(done)
 
         threading.Thread(target=worker, daemon=True).start()
-        GLib.timeout_add(100, self._pulse_lookup_progress)
-
-    def _pulse_lookup_progress(self) -> bool:
-        if not self._looking_up:
-            return GLib.SOURCE_REMOVE
-        self.lookup_progress.pulse()
-        return GLib.SOURCE_CONTINUE
 
     def _on_lookup_finished(
         self,
@@ -3347,7 +3452,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             return
 
         self._looking_up = False
-        self.lookup_progress.set_visible(False)
         self._set_lookup_controls_sensitive(
             self._disc is not None and not self._ripping
         )
@@ -3385,7 +3489,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             return
 
         self._looking_up = False
-        self.lookup_progress.set_visible(False)
         self._set_lookup_controls_sensitive(
             self._disc is not None and not self._ripping
         )
@@ -3434,19 +3537,50 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         origin = self._format_metadata_origin(album.source)
         if origin != 'No metadata':
             self._toast(origin)
-        selected = {
-            num: check.get_active() for num, check in self._track_checks.items()
-        }
-        self._rebuild_track_list(self._disc)
-        for num, was in selected.items():
-            if num in self._track_checks:
-                self._track_checks[num].set_active(was)
+        if (
+            self._disc is not None
+            and self._track_checks
+            and len(self._track_checks) == self._disc.track_count
+        ):
+            self._refresh_track_fields_from_album()
+        else:
+            selected = {
+                num: check.get_active()
+                for num, check in self._track_checks.items()
+            }
+            self._rebuild_track_list(self._disc)
+            for num, was in selected.items():
+                if num in self._track_checks:
+                    self._track_checks[num].set_active(was)
         self._save_metadata_cache()
         if (
             self.store.get().fetch_artwork
             and self._artwork_source_options().any_enabled
         ):
             self._start_artwork_fetch(self._album)
+
+    def _refresh_track_fields_from_album(self) -> None:
+        """Update existing track rows in place (avoids full list rebuild)."""
+        album = self._album
+        if album is None:
+            return
+        album_artist = normalize_artists(album.artist or '')
+        useful = self._meta_cache.has_useful_metadata(album)
+        self._suppress_meta_write = True
+        try:
+            for num, title_entry in self._track_title_entries.items():
+                meta = track_meta_for(album, num)
+                title = meta.title if meta else ''
+                artist = normalize_artists((meta.artist if meta else '') or '')
+                if not artist and album_artist and useful:
+                    artist = album_artist
+                title_entry.set_text(title)
+                artist_entry = self._track_artist_entries.get(num)
+                if artist_entry is not None:
+                    artist_entry.set_text(artist)
+            self._sync_track_labels_from_entries()
+        finally:
+            self._suppress_meta_write = False
 
     # —— Artwork ——
 

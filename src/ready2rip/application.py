@@ -14,7 +14,6 @@ from ready2rip import config
 from ready2rip.drive_setup import needs_drive_setup
 from ready2rip.icons import register_application_icons
 from ready2rip.settings import SettingsStore
-from ready2rip.setup_dialog import DriveSetupDialog
 from ready2rip.shortcuts import present_keyboard_shortcuts
 from ready2rip.theme import apply_color_scheme
 
@@ -73,10 +72,17 @@ class Application(Adw.Application):
         win.present()
         if not self._setup_shown and needs_drive_setup(self.store):
             self._setup_shown = True
-            GLib.timeout_add(400, self._deferred_drive_setup)
+            # Block metadata immediately — probe may finish before the dialog.
+            if isinstance(win, Ready2RipWindow):
+                win.set_drive_setup_open(True)
+            GLib.idle_add(self._deferred_drive_setup)
 
     def _deferred_drive_setup(self) -> bool:
-        self._present_drive_setup()
+        from ready2rip.window import Ready2RipWindow
+
+        win = self.props.active_window
+        if isinstance(win, Ready2RipWindow):
+            win.present_drive_setup()
         return GLib.SOURCE_REMOVE
 
     def _setup_actions(self) -> None:
@@ -113,7 +119,7 @@ class Application(Adw.Application):
             copyright='© 2026 gnostiko',
             license_type=Gtk.License.GPL_3_0,
             comments=(
-                'Secure CD ripper for Linux. Ready2Rip uses full cdparanoia, '
+                'Secure CD ripper for Linux. ready2rip uses full cdparanoia, '
                 'secure extraction, test and copy, cache defeat, AccurateRip, '
                 'CTDB, MusicBrainz metadata, ReplayGain, and album art.'
             ),
@@ -121,19 +127,6 @@ class Application(Adw.Application):
             issue_url='https://github.com/gnostiko/ready2rip/issues',
         )
         about.present(self.props.active_window)
-
-    def _present_drive_setup(self) -> None:
-        from ready2rip.window import Ready2RipWindow
-
-        dialog = DriveSetupDialog(self.store)
-
-        def on_closed(*_a) -> None:
-            win = self.props.active_window
-            if isinstance(win, Ready2RipWindow):
-                win.sync_options_from_store()
-
-        dialog.connect('closed', on_closed)
-        dialog.present(self.props.active_window)
 
     def create_action(
         self, name: str, callback, shortcuts: list[str] | None = None

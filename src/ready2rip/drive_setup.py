@@ -21,17 +21,25 @@ from ready2rip.accuraterip import (
     fetch_database,
     load_cdda_wav_samples,
 )
-from ready2rip.disc.probe import probe_disc
+from ready2rip.disc.probe import DiscInfo, TrackInfo, probe_disc
 from ready2rip.util import find_cdparanoia
 
 log = logging.getLogger(__name__)
 
 ProgressCb = Callable[[str, float], None]  # message, fraction 0..1
+CancelCb = Callable[[], bool]
 
 # Hard cap for the entire calibration session (extract + offset scan).
 CALIBRATION_BUDGET_SEC = 180.0
 # Leave a little room for saving results after the deadline check.
 _EXTRACT_TIMEOUT_SEC = 90
+# Try a few tracks when the first extract or match fails.
+_MAX_CALIBRATION_TRACKS = 3
+# AccurateRip skips 5 sectors at the start of track 1 / end of the last track.
+# Offset detection must use those tracks so a non-zero offset's silence padding
+# falls inside the skipped window (middle tracks can never match +6, etc.).
+_AR_SKIP_FRAMES = 5 * 588
+_MIN_CALIBRATION_SAMPLES = _AR_SKIP_FRAMES * 2 + 588
 
 
 @dataclass
@@ -62,13 +70,14 @@ def calibrate_drive_offset(
     device: str = '/dev/sr0',
     *,
     on_progress: ProgressCb | None = None,
+    should_cancel: CancelCb | None = None,
 ) -> CalibrationResult:
     """Find AccurateRip sample offset for *device*.
 
     Strategy (fast path first):
-      1. Burst-extract one mid-length track.
+      1. Burst-extract a mid-length track (retry a few tracks on failure).
       2. Try the most popular AccurateRip offsets first.
-      3. Only then try a wider native/Python scan if time remains.
+      3. Native full-range scan, then a Python fallback if needed.
 
     The whole procedure is capped at :data:`CALIBRATION_BUDGET_SEC` (3 minutes).
     """
@@ -78,14 +87,22 @@ def calibrate_drive_offset(
         if on_progress is not None:
             on_progress(msg, max(0.0, min(1.0, frac)))
 
+    def cancelled() -> bool:
+        return should_cancel is not None and should_cancel()
+
     def remaining() -> float:
         return deadline - time.monotonic()
 
     def timed_out() -> bool:
         return remaining() <= 0.0
 
-    progress('Reading disc table of contents…', 0.02)
+    if cancelled():
+        return CalibrationResult(success=False, message='Detection cancelled.')
+
+    progress('Reading disc table of contents', 0.02)
     info = probe_disc(device)
+    if cancelled():
+        return CalibrationResult(success=False, message='Detection cancelled.')
     if info is None or not info.tracks:
         return CalibrationResult(
             success=False,
@@ -108,8 +125,14 @@ def calibrate_drive_offset(
             message='Could not compute AccurateRip disc IDs for this disc.',
         )
 
-    progress(f'Looking up AccurateRip database ({ids.disc_id_string})…', 0.10)
+    progress(f'Looking up AccurateRip ({ids.disc_id_string})', 0.10)
     db = fetch_database(ids)
+    if cancelled():
+        return CalibrationResult(
+            success=False,
+            message='Detection cancelled.',
+            disc_id=ids.disc_id_string,
+        )
     if db is None:
         return CalibrationResult(
             success=False,
@@ -124,34 +147,46 @@ def calibrate_drive_offset(
     if cdparanoia is None:
         return CalibrationResult(success=False, message='cdparanoia not found')
 
-    # One mid-length track is enough for offset detection; full multi-track
-    # re-rips made calibration last tens of minutes.
-    ordered = sorted(info.tracks, key=lambda t: t.length_sectors)
-    middle = [
-        t
-        for t in ordered
-        if t.number not in (1, info.track_count) or info.track_count <= 2
-    ]
-    try_tracks = (middle + [t for t in ordered if t not in middle])[:1]
+    try_tracks = _calibration_tracks(info)
+    if not try_tracks:
+        return CalibrationResult(
+            success=False,
+            message=(
+                'No track is long enough for AccurateRip offset detection. '
+                'Try another commercial CD.'
+            ),
+            disc_id=ids.disc_id_string,
+        )
 
     last_track_num = None
+    extract_failures = 0
     with tempfile.TemporaryDirectory(prefix='ready2rip-cal-') as tmp:
         tmp_path = Path(tmp)
-        for track in try_tracks:
+        for index, track in enumerate(try_tracks):
+            if cancelled():
+                return CalibrationResult(
+                    success=False,
+                    message='Detection cancelled.',
+                    disc_id=ids.disc_id_string,
+                    track_number=last_track_num,
+                )
             if timed_out():
                 break
             last_track_num = track.number
             targets = _targets_for_track(db, track.number)
             if not targets:
+                progress(
+                    f'Track {track.number} has no AccurateRip entries',
+                    0.18 + 0.02 * index,
+                )
                 continue
 
             extract_timeout = min(
                 _EXTRACT_TIMEOUT_SEC, max(15, int(remaining() - 15))
             )
             progress(
-                f'Extracting track {track.number} ({track.duration_label}) '
-                f'for detection (burst, ≤{extract_timeout}s)…',
-                0.22,
+                f'Reading track {track.number} ({track.duration_label})',
+                0.20 + 0.05 * index,
             )
             wav_path = tmp_path / f'cal{track.number}.wav'
             try:
@@ -173,26 +208,41 @@ def calibrate_drive_offset(
                     timeout=extract_timeout,
                 )
             except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                extract_failures += 1
                 log.warning('Calibration extract track %s failed: %s', track.number, exc)
+                progress(
+                    f'Could not read track {track.number}; trying another',
+                    0.28 + 0.05 * index,
+                )
                 continue
 
+            if cancelled():
+                return CalibrationResult(
+                    success=False,
+                    message='Detection cancelled.',
+                    disc_id=ids.disc_id_string,
+                    track_number=track.number,
+                )
+
             if not wav_path.is_file() or wav_path.stat().st_size < 1000:
+                extract_failures += 1
+                progress(
+                    f'Track {track.number} extract was empty; trying another',
+                    0.30 + 0.05 * index,
+                )
                 continue
 
             if timed_out():
                 break
 
-            progress('Loading audio samples…', 0.40)
+            progress('Loading audio samples', 0.40)
             try:
                 samples = load_cdda_wav_samples(wav_path)
             except ValueError as exc:
                 log.warning('WAV load failed: %s', exc)
                 continue
 
-            progress(
-                f'Trying popular sample offsets (track {track.number})…',
-                0.45,
-            )
+            progress(f'Checking popular offsets (track {track.number})', 0.45)
             result = _scan_offsets(
                 samples,
                 track.number,
@@ -201,13 +251,22 @@ def calibrate_drive_offset(
                 db,
                 deadline=deadline,
                 on_progress=on_progress,
+                should_cancel=should_cancel,
             )
+            if cancelled():
+                return CalibrationResult(
+                    success=False,
+                    message='Detection cancelled.',
+                    disc_id=ids.disc_id_string,
+                    track_number=track.number,
+                )
             if result is not None:
                 off, conf, _v1, _v2 = result
                 offset_msg = (
-                    f'Detected sample offset {off} '
-                    f'(AccurateRip match on track {track.number}, confidence {conf})'
+                    f'Detected sample offset {off:+d} '
+                    f'(track {track.number}, confidence {conf})'
                 )
+                progress('Match found', 1.0)
                 return CalibrationResult(
                     success=True,
                     offset=off,
@@ -216,29 +275,90 @@ def calibrate_drive_offset(
                     disc_id=ids.disc_id_string,
                     message=offset_msg,
                 )
+            progress(
+                f'No match on track {track.number}; trying another',
+                0.82,
+            )
+
+    if cancelled():
+        return CalibrationResult(
+            success=False,
+            message='Detection cancelled.',
+            disc_id=ids.disc_id_string,
+            track_number=last_track_num,
+        )
 
     if timed_out():
         return CalibrationResult(
             success=False,
             message=(
                 f'Detection stopped after {int(CALIBRATION_BUDGET_SEC)}s without a match. '
-                'Try another commercial CD, or enter an offset manually '
-                '(see accuraterip.com drive offsets).'
+                'Try another commercial CD, or enter an offset manually.'
             ),
             disc_id=ids.disc_id_string,
             track_number=last_track_num,
         )
 
+    if extract_failures and last_track_num is None:
+        return CalibrationResult(
+            success=False,
+            message=(
+                'Could not read audio from the drive. '
+                'Check the disc, close other CD apps, and try again.'
+            ),
+            disc_id=ids.disc_id_string,
+        )
+
     return CalibrationResult(
         success=False,
         message=(
-            'Could not find a matching AccurateRip offset for this disc/drive. '
-            'You can enter an offset manually from accuraterip.com/driveoffsets.htm, '
-            'or try another commercial CD.'
+            'No AccurateRip match for this disc and drive. '
+            'Try another commercial CD, or enter the offset manually.'
         ),
         disc_id=ids.disc_id_string,
         track_number=last_track_num,
     )
+
+
+def _calibration_tracks(info: DiscInfo) -> list[TrackInfo]:
+    """Tracks that can detect a non-zero read offset via AccurateRip.
+
+    AccurateRip nulls 5 sectors at the start of track 1 and the end of the
+    last track. Applying a sample offset to an uncorrected rip pads the
+    opposite edge with silence; that only stays invisible inside those skip
+    windows. Middle tracks have no skip, so offsets like +6 never match.
+
+    Order: last track (positive offsets) → first track (negative) → others.
+    """
+    if not info.tracks:
+        return []
+
+    by_num = {t.number: t for t in info.tracks}
+    long_enough = [
+        t
+        for t in info.tracks
+        if t.length_sectors * 588 >= _MIN_CALIBRATION_SAMPLES
+    ]
+    if not long_enough:
+        long_enough = list(info.tracks)
+
+    preferred: list[TrackInfo] = []
+    last = by_num.get(info.track_count)
+    first = by_num.get(1)
+    if last is not None and last in long_enough:
+        preferred.append(last)
+    if first is not None and first in long_enough and first not in preferred:
+        preferred.append(first)
+
+    # Longer remaining tracks next — still unlikely to match non-zero offsets,
+    # but useful if first/last lack AccurateRip entries.
+    rest = sorted(
+        (t for t in long_enough if t not in preferred),
+        key=lambda t: t.length_sectors,
+        reverse=True,
+    )
+    preferred.extend(rest)
+    return preferred[:_MAX_CALIBRATION_TRACKS]
 
 
 def _targets_for_track(db: AccurateRipDatabase, track_number: int) -> set[int]:
@@ -255,18 +375,22 @@ def _scan_offsets(
     *,
     deadline: float,
     on_progress: ProgressCb | None = None,
+    should_cancel: CancelCb | None = None,
 ) -> tuple[int, int, int, int] | None:
     """Return (offset, confidence, v1, v2) or None.
 
-    Order: popular offsets → native full-range (if available) → remaining common.
+    Order: popular offsets → native full-range → Python popular retry.
     Respects *deadline* (monotonic seconds).
     """
     def remaining() -> float:
         return deadline - time.monotonic()
 
+    def cancelled() -> bool:
+        return should_cancel is not None and should_cancel()
+
     # —— 1) Popular offsets first (Python, but few candidates) ——
     if on_progress is not None:
-        on_progress('Checking popular drive offsets…', 0.48)
+        on_progress('Checking popular offsets', 0.48)
     hit = _try_offset_list(
         samples,
         track_number,
@@ -276,17 +400,16 @@ def _scan_offsets(
         POPULAR_OFFSETS,
         deadline=deadline,
         on_progress=on_progress,
+        should_cancel=should_cancel,
         progress_lo=0.48,
-        progress_hi=0.72,
+        progress_hi=0.70,
     )
-    if hit is not None:
+    if hit is not None or cancelled() or remaining() < 5:
         return hit
-    if remaining() < 5:
-        return None
 
-    # —— 2) Fast native helper over ±2000 (seconds in C) ——
+    # —— 2) Fast native helper over ±2000 ——
     if on_progress is not None:
-        on_progress('Scanning offsets with fast helper…', 0.74)
+        on_progress('Scanning full offset range', 0.72)
     native = _scan_with_native(
         samples,
         track_number,
@@ -294,13 +417,33 @@ def _scan_offsets(
         targets,
         timeout=min(45, max(5, int(remaining() - 3))),
     )
-    if native is not None:
-        if native[0] is None:
-            return None
+    if cancelled():
+        return None
+    if native is not None and native[0] is not None:
         off, v1, v2 = native[0], native[1], native[2]
         match = db.best_match(track_number, v1, v2)
-        return off, match.confidence_count, v1, v2
-    return None
+        if match.confidence.name == 'MATCH':
+            return off, match.confidence_count, v1, v2
+
+    # —— 3) Native miss/unavailable: one more Python pass on popular set ——
+    # Covers helper build failures and rare checksum edge cases.
+    if remaining() < 4 or cancelled():
+        return None
+    if on_progress is not None:
+        on_progress('Retrying popular offsets', 0.88)
+    return _try_offset_list(
+        samples,
+        track_number,
+        total_tracks,
+        targets,
+        db,
+        POPULAR_OFFSETS,
+        deadline=deadline,
+        on_progress=on_progress,
+        should_cancel=should_cancel,
+        progress_lo=0.88,
+        progress_hi=0.97,
+    )
 
 
 def _try_offset_list(
@@ -313,6 +456,7 @@ def _try_offset_list(
     *,
     deadline: float,
     on_progress: ProgressCb | None,
+    should_cancel: CancelCb | None = None,
     progress_lo: float,
     progress_hi: float,
 ) -> tuple[int, int, int, int] | None:
@@ -320,9 +464,11 @@ def _try_offset_list(
     for i, off in enumerate(offsets):
         if time.monotonic() >= deadline:
             return None
+        if should_cancel is not None and should_cancel():
+            return None
         if on_progress is not None and (i % 3 == 0 or i + 1 == total):
             frac = progress_lo + (progress_hi - progress_lo) * (i / total)
-            on_progress(f'Trying sample offset {off}… ({i + 1}/{total})', frac)
+            on_progress(f'Trying offset {off:+d} ({i + 1}/{total})', frac)
         v1, v2 = compute_checksums_samples(
             samples, track_number, total_tracks, sample_offset=off
         )
@@ -383,7 +529,6 @@ def _scan_with_native(
         raw_path.write_bytes(samples.tobytes())
         n = len(samples)
         target_args = [f'{t:08x}' for t in sorted(targets)]
-        # Prefer popular band first? Full ±2000 step 1 is still only seconds in C.
         cmd = [
             str(helper),
             str(raw_path),

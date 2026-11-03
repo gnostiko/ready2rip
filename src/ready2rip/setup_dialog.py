@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""First-run / re-run drive offset + cache setup dialog (compact)."""
+"""First-run / re-run drive offset detection dialog."""
 
 from __future__ import annotations
 
@@ -10,73 +10,83 @@ import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 
-from gi.repository import Adw, GLib, Gtk
+from gi.repository import Adw, Gdk, GLib, Gtk, Pango
 
 from ready2rip.drive_setup import (
     CalibrationResult,
     calibrate_drive_offset,
     save_calibration,
 )
-from ready2rip.icons import apply_icon
 from ready2rip.settings import SettingsStore
+
+_EASE = 'cubic-bezier(0.33, 1, 0.68, 1)'
+
+_SETUP_CSS = f"""
+.ready2rip-setup-flash {{
+    background-color: @success_bg_color;
+    opacity: 0;
+    transition: opacity 200ms {_EASE};
+}}
+.ready2rip-setup-flash.error {{
+    background-color: @error_bg_color;
+}}
+.ready2rip-setup-flash.visible {{
+    opacity: 0.34;
+}}
+.ready2rip-setup-page {{
+    padding: 8px 20px 16px 20px;
+}}
+button.ready2rip-setup-quiet {{
+    font-size: 0.9em;
+    opacity: 0.7;
+}}
+button.ready2rip-setup-quiet:hover {{
+    opacity: 1;
+}}
+"""
+
+_setup_css_provider: Gtk.CssProvider | None = None
 
 
 class DriveSetupDialog(Adw.Dialog):
-    """Detect AccurateRip sample offset and analyze drive features (compact UI)."""
+    """Compact Adwaita dialog; detecting swaps to a status + Cancel page."""
 
     def __init__(self, store: SettingsStore, **kwargs) -> None:
         super().__init__(**kwargs)
         self.set_title('Detect sample offset')
-        # Compact fixed dialog — content is designed to fit without scrolling.
-        self.set_content_width(420)
-        self.set_content_height(380)
+        self.set_content_width(400)
+        self.set_content_height(340)
         self._store = store
         self._busy = False
-        self._last_result: CalibrationResult | None = None
+        self._cancel = threading.Event()
+        self._flash_id = None
+        self._leave_progress_id = None
 
         settings = store.get()
+        self._install_styles()
+
+        root = Gtk.Overlay(hexpand=True, vexpand=True)
+
+        self._flash_veil = Gtk.Box()
+        self._flash_veil.set_hexpand(True)
+        self._flash_veil.set_vexpand(True)
+        self._flash_veil.set_can_target(False)
+        self._flash_veil.add_css_class('ready2rip-setup-flash')
 
         toolbar = Adw.ToolbarView()
-        header = Adw.HeaderBar()
-        toolbar.add_top_bar(header)
 
         self._stack = Gtk.Stack(vexpand=True, hexpand=True)
         self._stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self._stack.set_transition_duration(200)
 
-        # —— Intro (compact; no full StatusPage) ——
-        intro = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=10,
-            margin_start=16,
-            margin_end=16,
-            margin_top=8,
-            margin_bottom=16,
-            valign=Gtk.Align.CENTER,
+        intro = self._page()
+        intro.append(self._heading('Detect sample offset'))
+        intro.append(
+            self._body(
+                'Insert a commercial audio CD. ready2rip measures the '
+                'AccurateRip sample offset for this drive.'
+            )
         )
-        icon = Gtk.Image()
-        apply_icon(icon, 'media-optical-symbolic')
-        icon.set_pixel_size(48)
-        icon.set_halign(Gtk.Align.CENTER)
-        intro.append(icon)
-
-        title = Gtk.Label(label='Detect sample offset')
-        title.add_css_class('title-3')
-        title.set_halign(Gtk.Align.CENTER)
-        intro.append(title)
-
-        desc = Gtk.Label(
-            label=(
-                'Measures the AccurateRip sample offset. '
-                'Insert a commercial CD, then start.'
-            ),
-            wrap=True,
-            justify=Gtk.Justification.CENTER,
-            max_width_chars=42,
-        )
-        desc.add_css_class('body')
-        desc.add_css_class('dim-label')
-        desc.set_halign(Gtk.Align.CENTER)
-        intro.append(desc)
 
         device_group = Adw.PreferencesGroup()
         self._device_row = Adw.EntryRow(title='Optical drive')
@@ -84,120 +94,89 @@ class DriveSetupDialog(Adw.Dialog):
         device_group.add(self._device_row)
         intro.append(device_group)
 
-        start_btn = Gtk.Button(label='Start detection')
-        start_btn.add_css_class('suggested-action')
-        start_btn.add_css_class('pill')
-        start_btn.set_halign(Gtk.Align.CENTER)
-        start_btn.set_margin_top(4)
-        start_btn.connect('clicked', self._on_start)
-        intro.append(start_btn)
+        self._start_btn = Gtk.Button(label='Start')
+        self._start_btn.add_css_class('pill')
+        self._start_btn.add_css_class('suggested-action')
+        self._start_btn.set_halign(Gtk.Align.CENTER)
+        self._start_btn.set_margin_top(8)
+        self._start_btn.connect('clicked', self._on_start)
+        intro.append(self._start_btn)
 
-        skip_btn = Gtk.Button(label='Skip (offset 0)')
-        skip_btn.add_css_class('flat')
-        skip_btn.set_halign(Gtk.Align.CENTER)
-        skip_btn.connect('clicked', self._on_skip)
-        intro.append(skip_btn)
-
+        self._skip_btn = Gtk.Button(label='Not now')
+        self._skip_btn.add_css_class('flat')
+        self._skip_btn.add_css_class('ready2rip-setup-quiet')
+        self._skip_btn.set_halign(Gtk.Align.CENTER)
+        self._skip_btn.set_margin_top(2)
+        self._skip_btn.set_tooltip_text(
+            'Use offset 0 for now. You can detect later in Settings → Drive.'
+        )
+        self._skip_btn.connect('clicked', self._on_skip)
+        intro.append(self._skip_btn)
         self._stack.add_named(intro, 'intro')
 
-        # —— Progress ——
-        prog_page = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=12,
-            valign=Gtk.Align.CENTER,
-            margin_start=20,
-            margin_end=20,
-        )
-        self._prog_title = Gtk.Label(label='Detecting sample offset…')
-        self._prog_title.add_css_class('title-3')
-        self._prog_title.set_halign(Gtk.Align.CENTER)
-        self._prog_status = Gtk.Label(
-            label='Starting…',
-            wrap=True,
-            justify=Gtk.Justification.CENTER,
-            max_width_chars=40,
-        )
+        progress = self._page()
+        self._prog_title = self._heading('Detecting…')
+        progress.append(self._prog_title)
+
+        self._prog_status = Gtk.Label(label='Starting')
         self._prog_status.add_css_class('body')
         self._prog_status.add_css_class('dim-label')
-        self._prog_bar = Gtk.ProgressBar(show_text=True, hexpand=True)
-        prog_page.append(self._prog_title)
-        prog_page.append(self._prog_status)
-        prog_page.append(self._prog_bar)
-        self._stack.add_named(prog_page, 'progress')
+        self._prog_status.set_halign(Gtk.Align.CENTER)
+        self._prog_status.set_justify(Gtk.Justification.CENTER)
+        self._prog_status.set_wrap(True)
+        self._prog_status.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self._prog_status.set_max_width_chars(36)
+        self._prog_status.set_ellipsize(Pango.EllipsizeMode.END)
+        self._prog_status.set_selectable(False)
+        progress.append(self._prog_status)
 
-        # —— Result (compact card, no huge StatusPage) ——
-        result = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=10,
-            margin_start=16,
-            margin_end=16,
-            margin_top=8,
-            margin_bottom=16,
-            valign=Gtk.Align.CENTER,
-        )
-        self._result_icon = Gtk.Image()
-        apply_icon(self._result_icon, 'emblem-ok-symbolic')
-        self._result_icon.set_pixel_size(40)
-        self._result_icon.set_halign(Gtk.Align.CENTER)
-        result.append(self._result_icon)
+        self._cancel_btn = Gtk.Button(label='Cancel')
+        self._cancel_btn.add_css_class('pill')
+        self._cancel_btn.set_halign(Gtk.Align.CENTER)
+        self._cancel_btn.set_margin_top(12)
+        self._cancel_btn.connect('clicked', self._on_cancel)
+        progress.append(self._cancel_btn)
+        self._stack.add_named(progress, 'progress')
 
-        self._result_title = Gtk.Label(label='Drive ready')
-        self._result_title.add_css_class('title-3')
-        self._result_title.set_halign(Gtk.Align.CENTER)
+        result = self._page()
+        self._result_title = self._heading('Drive ready')
         result.append(self._result_title)
-
-        self._result_desc = Gtk.Label(
-            label='',
-            wrap=True,
-            justify=Gtk.Justification.CENTER,
-            max_width_chars=44,
-            selectable=True,
-        )
-        self._result_desc.add_css_class('body')
-        self._result_desc.add_css_class('dim-label')
-        self._result_desc.set_halign(Gtk.Align.CENTER)
+        self._result_desc = self._body('')
+        self._result_desc.set_selectable(True)
         result.append(self._result_desc)
 
-        done_btn = Gtk.Button(label='Continue')
-        done_btn.add_css_class('suggested-action')
+        done_btn = Gtk.Button(label='Done')
         done_btn.add_css_class('pill')
+        done_btn.add_css_class('suggested-action')
         done_btn.set_halign(Gtk.Align.CENTER)
         done_btn.set_margin_top(4)
         done_btn.connect('clicked', lambda *_: self.close())
         result.append(done_btn)
 
-        self._manual_btn = Gtk.Button(label='Enter offset manually…')
+        self._retry_btn = Gtk.Button(label='Try again')
+        self._retry_btn.add_css_class('flat')
+        self._retry_btn.set_halign(Gtk.Align.CENTER)
+        self._retry_btn.connect('clicked', self._on_retry)
+        result.append(self._retry_btn)
+
+        self._manual_btn = Gtk.Button(label='Enter offset manually')
         self._manual_btn.add_css_class('flat')
         self._manual_btn.set_halign(Gtk.Align.CENTER)
         self._manual_btn.connect('clicked', self._on_manual)
         result.append(self._manual_btn)
-
         self._stack.add_named(result, 'result')
 
-        # —— Manual offset ——
-        manual = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=10,
-            margin_start=16,
-            margin_end=16,
-            margin_top=12,
-            margin_bottom=16,
-            valign=Gtk.Align.CENTER,
+        manual = self._page()
+        manual.append(self._heading('Sample offset'))
+        manual.append(
+            self._body(
+                'Enter the AccurateRip value for this drive. '
+                'See accuraterip.com/driveoffsets.htm.'
+            )
         )
-        manual_lbl = Gtk.Label(
-            label='Enter the AccurateRip sample offset for this drive.',
-            wrap=True,
-            justify=Gtk.Justification.CENTER,
-            max_width_chars=40,
-        )
-        manual_lbl.add_css_class('body')
-        manual_lbl.add_css_class('dim-label')
-        manual.append(manual_lbl)
-
         offset_group = Adw.PreferencesGroup()
         self._manual_offset = Adw.SpinRow(
             title='Sample offset',
-            subtitle='accuraterip.com/driveoffsets.htm',
             adjustment=Gtk.Adjustment(
                 value=settings.drive_sample_offset,
                 lower=-2000,
@@ -210,102 +189,251 @@ class DriveSetupDialog(Adw.Dialog):
         offset_group.add(self._manual_offset)
         manual.append(offset_group)
 
-        save_manual = Gtk.Button(label='Save offset')
-        save_manual.add_css_class('suggested-action')
+        save_manual = Gtk.Button(label='Save')
         save_manual.add_css_class('pill')
+        save_manual.add_css_class('suggested-action')
         save_manual.set_halign(Gtk.Align.CENTER)
+        save_manual.set_margin_top(4)
         save_manual.connect('clicked', self._on_save_manual)
         manual.append(save_manual)
         self._stack.add_named(manual, 'manual')
 
         toolbar.set_content(self._stack)
-        self.set_child(toolbar)
+        root.set_child(toolbar)
+        root.add_overlay(self._flash_veil)
+        self.set_child(root)
         self._stack.set_visible_child_name('intro')
+        self.connect('closed', self._on_closed)
+
+    def _install_styles(self) -> None:
+        global _setup_css_provider
+        display = self.get_display() or Gdk.Display.get_default()
+        if display is None:
+            return
+        if _setup_css_provider is not None:
+            return
+        provider = Gtk.CssProvider()
+        provider.load_from_string(_SETUP_CSS)
+        Gtk.StyleContext.add_provider_for_display(
+            display,
+            provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
+        _setup_css_provider = provider
+
+    @staticmethod
+    def _page() -> Gtk.Box:
+        box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=10,
+            valign=Gtk.Align.CENTER,
+            hexpand=True,
+            vexpand=True,
+        )
+        box.add_css_class('ready2rip-setup-page')
+        return box
+
+    @staticmethod
+    def _heading(text: str) -> Gtk.Label:
+        label = Gtk.Label(label=text)
+        label.add_css_class('title-2')
+        label.set_halign(Gtk.Align.CENTER)
+        label.set_wrap(True)
+        label.set_justify(Gtk.Justification.CENTER)
+        label.set_max_width_chars(32)
+        return label
+
+    @staticmethod
+    def _body(text: str) -> Gtk.Label:
+        label = Gtk.Label(
+            label=text,
+            wrap=True,
+            justify=Gtk.Justification.CENTER,
+            max_width_chars=36,
+        )
+        label.add_css_class('body')
+        label.add_css_class('dim-label')
+        label.set_halign(Gtk.Align.CENTER)
+        return label
+
+    def _device(self) -> str:
+        return self._device_row.get_text().strip() or '/dev/sr0'
+
+    def _on_closed(self, *_args) -> None:
+        self._cancel.set()
+        self._cancel_leave_progress()
+
+    def _cancel_leave_progress(self) -> None:
+        if self._leave_progress_id is not None:
+            GLib.source_remove(self._leave_progress_id)
+            self._leave_progress_id = None
+
+    def _leave_progress(self, page: str, *, delay_ms: int = 0) -> None:
+        """Swap away from the detecting page."""
+        self._cancel_leave_progress()
+
+        def _go() -> bool:
+            self._leave_progress_id = None
+            self._stack.set_visible_child_name(page)
+            return GLib.SOURCE_REMOVE
+
+        if delay_ms <= 0:
+            _go()
+            return
+        self._leave_progress_id = GLib.timeout_add(delay_ms, _go)
+
+    def _on_cancel(self, *_args) -> None:
+        if not self._busy:
+            self._leave_progress('intro')
+            return
+        self._cancel.set()
+        self._prog_title.set_label('Cancelling…')
+        self._prog_status.set_label('Stopping detection')
+
+    def _on_retry(self, *_args) -> None:
+        self._leave_progress('intro')
 
     def _on_start(self, *_args) -> None:
         if self._busy:
             return
-        device = self._device_row.get_text().strip() or '/dev/sr0'
+        device = self._device()
         self._busy = True
+        self._cancel.clear()
+        self._cancel_leave_progress()
+        self._prog_title.set_label('Detecting…')
+        self._prog_status.set_label('Starting')
+        self._start_btn.set_sensitive(False)
+        self._skip_btn.set_sensitive(False)
+        self._device_row.set_sensitive(False)
+        self._cancel_btn.set_sensitive(True)
         self._stack.set_visible_child_name('progress')
-        self._prog_title.set_label('Detecting sample offset…')
-        self._prog_bar.set_fraction(0.0)
-        self._prog_status.set_label('Starting…')
 
         def worker() -> None:
             def on_prog(msg: str, frac: float) -> None:
                 GLib.idle_add(self._update_progress, msg, frac)
 
-            result = calibrate_drive_offset(device, on_progress=on_prog)
+            result = calibrate_drive_offset(
+                device,
+                on_progress=on_prog,
+                should_cancel=self._cancel.is_set,
+            )
 
             def done() -> bool:
                 self._busy = False
-                self._last_result = result
-                self._show_result(device, result)
+                self._start_btn.set_sensitive(True)
+                self._skip_btn.set_sensitive(True)
+                self._device_row.set_sensitive(True)
+                if self._cancel.is_set() and not result.success:
+                    self._show_cancelled()
+                else:
+                    self._show_result(device, result)
                 return GLib.SOURCE_REMOVE
 
             GLib.idle_add(done)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _update_progress(self, msg: str, frac: float) -> bool:
+    def _update_progress(self, msg: str, _frac: float = 0.0) -> bool:
         self._prog_status.set_label(msg)
-        self._prog_bar.set_fraction(frac)
-        self._prog_bar.set_text(f'{int(frac * 100)}%')
         lower = msg.casefold()
-        if 'offset' in lower or 'scanning' in lower:
-            self._prog_title.set_label('Sample offset…')
-        elif 'extract' in lower:
-            self._prog_title.set_label('Reading track…')
+        if 'cancel' in lower:
+            self._prog_title.set_label('Cancelling…')
+        elif 'extract' in lower or 'reading track' in lower:
+            self._prog_title.set_label('Reading track')
+        elif 'offset' in lower or 'scanning' in lower or 'checking' in lower:
+            self._prog_title.set_label('Matching offsets')
+        elif 'database' in lower or 'looking up' in lower:
+            self._prog_title.set_label('Looking up disc')
+        elif 'table of contents' in lower or 'reading disc' in lower:
+            self._prog_title.set_label('Reading disc')
+        elif 'match found' in lower:
+            self._prog_title.set_label('Sample offset detected')
+        else:
+            self._prog_title.set_label('Detecting…')
         return GLib.SOURCE_REMOVE
+
+    def _flash(self, kind: str = 'success') -> None:
+        if self._flash_id is not None:
+            GLib.source_remove(self._flash_id)
+            self._flash_id = None
+        if kind == 'error':
+            self._flash_veil.add_css_class('error')
+        else:
+            self._flash_veil.remove_css_class('error')
+        self._flash_veil.add_css_class('visible')
+        self._flash_id = GLib.timeout_add(350, self._hide_flash)
+
+    def _hide_flash(self) -> bool:
+        self._flash_id = None
+        self._flash_veil.remove_css_class('visible')
+        GLib.timeout_add(220, self._clear_flash_error)
+        return GLib.SOURCE_REMOVE
+
+    def _clear_flash_error(self) -> bool:
+        if 'visible' not in self._flash_veil.get_css_classes():
+            self._flash_veil.remove_css_class('error')
+        return GLib.SOURCE_REMOVE
+
+    def _show_cancelled(self) -> None:
+        self._result_title.set_label('Detection cancelled')
+        self._result_desc.set_label(
+            'No offset was saved. Start again when a commercial CD is ready.'
+        )
+        self._retry_btn.set_visible(True)
+        self._manual_btn.set_visible(True)
+        self._leave_progress('result')
 
     def _show_result(self, device: str, result: CalibrationResult) -> None:
         if result.success and result.offset is not None:
-            _save_result(self._store, device, result, offset=result.offset)
-            apply_icon(self._result_icon, 'emblem-ok-symbolic')
+            save_calibration(self._store, device=device, offset=result.offset)
+            self._prog_title.set_label('Sample offset detected')
+            self._prog_status.set_label(f'{result.offset:+d} samples')
+            self._flash('success')
             self._result_title.set_label('Sample offset detected')
-            self._result_desc.set_label(f'{result.message}\nSaved for {device}.')
-            self._manual_btn.set_visible(False)
-        else:
-            apply_icon(self._result_icon, 'dialog-warning-symbolic')
-            self._result_title.set_label('Detection incomplete')
-            self._result_desc.set_label(
-                f'{result.message or "Could not detect sample offset."}\n'
-                'Enter an offset manually or skip.'
+            conf = (
+                f' · confidence {result.confidence}'
+                if result.confidence
+                else ''
             )
-            self._manual_btn.set_visible(True)
-        self._stack.set_visible_child_name('result')
+            track = (
+                f' · track {result.track_number}'
+                if result.track_number
+                else ''
+            )
+            self._result_desc.set_label(
+                f'{result.offset:+d} samples{conf}{track}\nSaved for {device}.'
+            )
+            self._retry_btn.set_visible(False)
+            self._manual_btn.set_visible(False)
+            self._leave_progress('result', delay_ms=450)
+            return
+
+        self._flash('error')
+        self._result_title.set_label('Could not detect offset')
+        detail = (result.message or '').strip() or (
+            'No AccurateRip match for this disc and drive.'
+        )
+        self._result_desc.set_label(
+            f'{detail}\nTry another commercial CD, or enter the offset manually.'
+        )
+        self._retry_btn.set_visible(True)
+        self._manual_btn.set_visible(True)
+        self._leave_progress('result', delay_ms=350)
 
     def _on_skip(self, *_args) -> None:
-        device = self._device_row.get_text().strip() or '/dev/sr0'
+        device = self._device()
         save_calibration(self._store, device=device, offset=0)
-        apply_icon(self._result_icon, 'emblem-ok-symbolic')
-        self._result_title.set_label('Setup skipped')
-        self._result_desc.set_label(
-            f'Saved offset 0 for {device}. Re-run setup later for AccurateRip accuracy.'
-        )
-        self._manual_btn.set_visible(True)
-        self._stack.set_visible_child_name('result')
+        self.close()
 
     def _on_manual(self, *_args) -> None:
         self._stack.set_visible_child_name('manual')
 
     def _on_save_manual(self, *_args) -> None:
-        device = self._device_row.get_text().strip() or '/dev/sr0'
+        device = self._device()
         offset = int(self._manual_offset.get_value())
         save_calibration(self._store, device=device, offset=offset)
-        apply_icon(self._result_icon, 'emblem-ok-symbolic')
         self._result_title.set_label('Offset saved')
-        self._result_desc.set_label(f'Saved sample offset {offset} for {device}.')
+        self._result_desc.set_label(f'Saved {offset:+d} samples for {device}.')
+        self._retry_btn.set_visible(False)
         self._manual_btn.set_visible(False)
         self._stack.set_visible_child_name('result')
-
-
-def _save_result(
-    store,
-    device: str,
-    result: CalibrationResult,
-    *,
-    offset: int,
-) -> None:
-    save_calibration(store, device=device, offset=offset)
