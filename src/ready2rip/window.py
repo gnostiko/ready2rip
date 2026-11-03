@@ -205,11 +205,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._track_artist_button: Gtk.Button | None = None
         self._track_select_all: Gtk.CheckButton | None = None
         self._syncing_select_all = False
-        # Keep checkbox/# · Title|Artist · status · time columns locked across rows.
-        self._track_lead_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
-        self._track_fields_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
-        self._track_status_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
-        self._track_dur_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        # Title and Artist columns share width across rows (0.4.11 layout).
+        self._track_title_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        self._track_artist_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
         self._album_field_rows: list[Gtk.Widget] = []
         self._album_title_row: Adw.EntryRow | None = None
         self._album_artist_row: Adw.EntryRow | None = None
@@ -1977,6 +1975,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._sync_cover_action_sensitivity()
         else:
             self.clear_art_button.set_sensitive(False)
+        self.album_edit_group.set_sensitive(idle)
 
         if active:
             self.rip_button.set_label('Cancel')
@@ -2789,10 +2788,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._track_header_suffix = None
         # New disc/list always starts in view mode.
         self._tracks_editing = False
-        self._track_lead_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
-        self._track_fields_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
-        self._track_status_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
-        self._track_dur_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        # Fresh size groups so rebuilt widgets align cleanly.
+        self._track_title_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        self._track_artist_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
 
         if info is None:
             group.set_title('Tracks')
@@ -2882,22 +2880,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         label.set_xalign(xalign)
         return label
 
-    def _make_track_status_slot(self, *, interactive: bool) -> Gtk.Label:
-        """Status column placeholder — always allocated so Artist stays aligned."""
-        status = Gtk.Label(label='')
-        status.add_css_class('ready2rip-track-status')
-        status.set_hexpand(False)
-        if interactive:
-            status.add_css_class('caption')
-            status.add_css_class('dim-label')
-            status.set_ellipsize(Pango.EllipsizeMode.END)
-            status.set_max_width_chars(12)
-            status.set_xalign(1.0)
-            status.set_valign(Gtk.Align.CENTER)
-            status.set_opacity(0.0)
-        self._track_status_size.add_widget(status)
-        return status
-
     def _make_track_field_stack(
         self,
         *,
@@ -2959,20 +2941,17 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         num_ph = self._track_caption('#', 'ready2rip-track-num', xalign=0.5)
         lead.append(select_all)
         lead.append(num_ph)
-        self._track_lead_size.add_widget(lead)
         box.append(lead)
 
         title_h = self._track_caption('Title', 'heading')
         title_h.set_halign(Gtk.Align.START)
+        self._track_title_size.add_widget(title_h)
         artist_h = self._track_caption('Artist', 'heading', 'ready2rip-track-artist')
         artist_h.set_halign(Gtk.Align.START)
-        fields = self._make_title_artist_grid(title_h, artist_h)
-        fields.add_css_class('ready2rip-track-title-artist')
-        self._track_fields_size.add_widget(fields)
-        box.append(fields)
-        box.append(self._make_track_status_slot(interactive=False))
+        self._track_artist_size.add_widget(artist_h)
+        box.append(self._make_title_artist_grid(title_h, artist_h))
+
         dur_h = self._track_caption('Time', 'ready2rip-track-dur', xalign=1.0)
-        self._track_dur_size.add_widget(dur_h)
         box.append(dur_h)
 
         row.set_child(box)
@@ -2986,7 +2965,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         artist: str,
         duration_label: str,
     ) -> Gtk.ListBoxRow:
-        """Track row: checkbox · # · title · artist · status · time."""
+        """Flat track row: checkbox · # · title · artist · status · time.
+
+        View mode shows labels; Edit mode swaps in entries for title/artist.
+        Title/Artist share remaining width equally (1/2 each).
+        """
         row = Gtk.ListBoxRow()
         row.set_activatable(False)
         row.set_selectable(False)
@@ -3009,7 +2992,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         num.set_xalign(0.5)
         lead.append(check)
         lead.append(num)
-        self._track_lead_size.add_widget(lead)
         box.append(lead)
 
         title_stack, title_label, title_entry = self._make_track_field_stack(
@@ -3019,6 +3001,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             placeholder=f'Track {number:02d} title',
             tooltip=f'Title for track {number:02d}',
         )
+        self._track_title_size.add_widget(title_stack)
         artist_stack, artist_label, artist_entry = self._make_track_field_stack(
             number=number,
             value=artist,
@@ -3030,18 +3013,23 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             ),
             css_class='ready2rip-track-artist',
         )
-        fields = self._make_title_artist_grid(title_stack, artist_stack)
-        fields.add_css_class('ready2rip-track-title-artist')
-        self._track_fields_size.add_widget(fields)
-        box.append(fields)
+        self._track_artist_size.add_widget(artist_stack)
+        box.append(self._make_title_artist_grid(title_stack, artist_stack))
 
-        status = self._make_track_status_slot(interactive=True)
+        status = Gtk.Label(label='')
+        status.add_css_class('caption')
+        status.add_css_class('dim-label')
+        status.add_css_class('ready2rip-track-status')
+        status.set_ellipsize(Pango.EllipsizeMode.END)
+        status.set_max_width_chars(12)
+        status.set_xalign(1.0)
+        status.set_valign(Gtk.Align.CENTER)
+        status.set_visible(False)
         box.append(status)
 
         dur = self._track_caption(duration_label, 'ready2rip-track-dur', xalign=1.0)
         dur.set_valign(Gtk.Align.CENTER)
         dur.set_tooltip_text(f'Duration {duration_label}')
-        self._track_dur_size.add_widget(dur)
         box.append(dur)
 
         row.set_child(box)
@@ -3231,7 +3219,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             msg = ' · '.join(parts)
             label.set_text(msg)
             label.set_tooltip_text(msg)
-            label.set_opacity(1.0 if msg else 0.0)
+            label.set_visible(bool(msg))
 
     # —— Metadata lookup ——
 

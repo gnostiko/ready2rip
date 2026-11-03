@@ -106,10 +106,8 @@ button.ready2rip-cover-trash:active {{
     opacity: 0.7;
 }}
 .ready2rip-track-artist {{
+    /* Width comes from the equal Title|Artist grid; keep a soft floor. */
     min-width: 96px;
-}}
-.ready2rip-track-status {{
-    min-width: 7em;
 }}
 .ready2rip-track-dur {{
     min-width: 3em;
