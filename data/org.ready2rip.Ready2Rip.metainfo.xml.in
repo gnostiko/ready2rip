@@ -31,7 +31,9 @@
         <p>
           0.4.12: Artwork hover actions, naming scheme presets,
           nested sample-offset settings, GNOME 51 Flatpak, and UI
-          capitalization cleanup. Remove dual-encode option.
+          capitalization cleanup. Remove dual-encode option. Album
+          fields grey out while ripping; track Title/Artist spacing
+          restored.
         </p>
       </description>
     </release>
