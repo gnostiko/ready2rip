@@ -622,7 +622,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             return 0
         n = len(self._album_field_rows)
         if n > measured:
-            total = int(round(total * (n / measured)))
+            total = round(total * (n / measured))
         return total
 
     def _cover_size_for_row(self) -> int | None:
