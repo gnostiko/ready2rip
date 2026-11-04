@@ -898,6 +898,18 @@ class CtdbVerifier:
     def verify_wav(self, path: Path, track_number: int) -> CtdbResult:
         try:
             pcm = load_cdda_pcm(path)
+        except Exception as exc:
+            log.warning("CTDB CRC failed for track %s: %s", track_number, exc)
+            return CtdbResult(
+                track_number=track_number,
+                confidence=CtdbConfidence.ERROR,
+                message=f"CRC error: {exc}",
+            )
+        return self.verify_pcm(pcm, track_number)
+
+    def verify_pcm(self, pcm: bytes, track_number: int) -> CtdbResult:
+        """Verify from raw interleaved LE PCM (shared load with AccurateRip)."""
+        try:
             crc = compute_track_crc(
                 pcm,
                 track_number,

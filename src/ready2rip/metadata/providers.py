@@ -482,7 +482,7 @@ class FreeDBProvider(MetadataProvider):
 
     def _cddb_hello(self) -> str:
         # gnudb expects identifiable hello; email-shaped user reduces blocks.
-        version = getattr(config, 'APPLICATION_VERSION', '0.4.6')
+        version = getattr(config, 'APPLICATION_VERSION', '0')
         return (
             f'ready2rip@users.noreply.github.com localhost '
             f'{config.APPLICATION_NAME} {version}'

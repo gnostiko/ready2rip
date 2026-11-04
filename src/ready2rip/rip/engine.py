@@ -4,9 +4,11 @@ import logging
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
@@ -17,6 +19,7 @@ from ready2rip.ctdb import (
     CtdbConfidence,
     CtdbResult,
     CtdbVerifier,
+    load_cdda_pcm,
     total_audio_samples,
 )
 from ready2rip.disc.cache import flush_drive_cache
@@ -53,6 +56,8 @@ from ready2rip.rip.encode import (
 from ready2rip.rip.paranoia_stats import ParanoiaStats, parse_paranoia_stderr
 from ready2rip.rip.riplog import (
     RipLog,
+    TrackLogEntry,
+    analyze_pcm_for_log,
     analyze_wav_for_log,
     extraction_speed_x,
     title_for_track,
@@ -133,6 +138,8 @@ class RipJob:
     verify_ctdb: bool = True
     submit_ctdb: bool = False
     sample_offset: int = 0
+    # True after Detect / skip in drive setup (offset 0 can still be configured).
+    offset_configured: bool = False
     disc_info: DiscInfo | None = None
     # Total tracks on the disc (for AR first/last sample skip), not just selected.
     disc_track_count: int = 0
@@ -161,7 +168,7 @@ class RipJob:
     # Pair with write_cue_file for a matching image CUE sheet.
     copy_image: bool = False
     # Longest edge for embed when preparing from folder art (0 = no downscale).
-    artwork_max_size: int = 600
+    artwork_max_size: int = 1000  # match settings.DEFAULT_ARTWORK_MAX_SIZE
 
 
 ProgressCallback = Callable[[RipProgress], None]
@@ -189,6 +196,20 @@ class _TrackExtract:
     copy_mode: str = ''  # mode of the successful copy pass
     attempt_log: list[str] = field(default_factory=list)
     expected_wav_bytes: int = 0
+
+
+@dataclass
+class _PendingEncode:
+    """Background encode overlapping the next track's extraction."""
+
+    future: Future[list[Path]]
+    track_no: int
+    idx: float
+    dests: list[_EncodeDest]
+    extracted: _TrackExtract
+    test_wav: Path
+    copy_wav: Path
+    log_entry: TrackLogEntry | None
 
 
 @dataclass(frozen=True)
@@ -238,17 +259,30 @@ class RipEngine:
 
     def __init__(self) -> None:
         self._cancelled = False
-        self._proc: subprocess.Popen | None = None
+        self._proc_lock = threading.Lock()
+        self._procs: set[subprocess.Popen[str]] = set()
+        self._encode_pending: _PendingEncode | None = None
         self._tags = TagWriter()
 
     def cancel(self) -> None:
         self._cancelled = True
-        proc = self._proc
-        if proc is not None and proc.poll() is None:
-            try:
-                proc.terminate()
-            except OSError:
-                pass
+        with self._proc_lock:
+            procs = list(self._procs)
+        for proc in procs:
+            if proc.poll() is None:
+                try:
+                    proc.terminate()
+                except OSError:
+                    pass
+        # Drop incomplete encode outputs; the encode worker exits via terminate.
+        pending = self._encode_pending
+        if pending is not None:
+            for dest in pending.dests:
+                try:
+                    if dest.out_path.is_file() and dest.out_path.stat().st_size < 1024:
+                        dest.out_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def run(self, job: RipJob, on_progress: ProgressCallback | None = None) -> RipResult:
         self._cancelled = False
@@ -318,15 +352,11 @@ class RipEngine:
                 success=False,
                 error=f'Cannot create output folder(s): {exc}',
             )
-        album_dir = dests0[0].album_dir  # primary encode (log destination)
-        for dest in dests0:
-            notes.append(
-                f'Encode target: {dest.format.upper()} → {dest.album_dir}'
-            )
-            if rip_log is not None:
-                rip_log.notes.append(
-                    f'Encode target: {dest.format.upper()} → {dest.album_dir}'
-                )
+        album_dir = dests0[0].album_dir
+        target_note = f'Encode target: {dests0[0].format.upper()} → {album_dir}'
+        notes.append(target_note)
+        if rip_log is not None:
+            rip_log.notes.append(target_note)
 
         def report(
             track_number: int,
@@ -363,13 +393,6 @@ class RipEngine:
             job, album_dir
         )
         notes.extend(art_notes)
-        # Mirror cover into every secondary album folder before ripping.
-        for dest in dests0[1:]:
-            if job.save_cover_file and (
-                job.folder_artwork is not None or job.artwork is not None
-            ):
-                _ea, _fa, _cp, extra_art = _prepare_artwork(job, dest.album_dir)
-                notes.extend(extra_art)
         if cover_path is not None:
             notes.append(f'Cover art saved: {cover_path}')
             if rip_log is not None:
@@ -385,6 +408,11 @@ class RipEngine:
             if job.sample_offset:
                 notes.append(
                     f'Read offset {job.sample_offset} samples applied during extraction (-O)'
+                )
+            if not job.offset_configured:
+                notes.append(
+                    'WARNING: Drive sample offset was not calibrated — '
+                    'AccurateRip results may be unreliable'
                 )
             if rip_log is not None:
                 rip_log.ar_status = status
@@ -573,8 +601,7 @@ class RipEngine:
                     if rip_log is not None:
                         rip_log.replaygain_notes.extend(rg_notes)
 
-                # Multi-file CUE per (album folder, format) — keeps multi-encode
-                # same-folder rips from mixing FLAC+MP3 into one sheet.
+                # Multi-file CUE grouped by album folder + format.
                 if (
                     job.write_cue_file
                     and track_output_pairs
@@ -682,6 +709,11 @@ class RipEngine:
                 and not test_copy_mismatches
             ):
                 ctdb_quality = 100
+            else:
+                notes.append(
+                    'CTDB submit quality=0 '
+                    '(requires secure test&copy with no burst recovery)'
+                )
             submit = ctdb_verifier.submit(
                 ctdb_results,
                 drivename=drivename,
@@ -716,9 +748,13 @@ class RipEngine:
         if ctdb_summary:
             done_msg = f'{done_msg} · {ctdb_summary}'
         if burst_tracks:
+            tracks_txt = ', '.join(str(n) for n in burst_tracks)
             done_msg = (
-                f'{done_msg} · burst fallback on '
-                f'{len(burst_tracks)} track(s)'
+                f'{done_msg} · WARNING: burst (-Z) on track(s) {tracks_txt}'
+            )
+            notes.append(
+                f'WARNING: Insecure burst extraction on track(s) {tracks_txt} '
+                '(not archival-grade for those tracks)'
             )
         if job.test_and_copy:
             if test_copy_mismatches:
@@ -1287,10 +1323,15 @@ class RipEngine:
         Tags and optional embedded art are applied after each encode. Folder
         cover is written once per album directory when missing.
         """
-        outputs: list[Path] = []
-        n = max(1, len(dests))
+        # Lossy/lossless encodes first so a final WAV dest can rename the temp.
+        ordered = [d for d in dests if d.format != 'wav'] + [
+            d for d in dests if d.format == 'wav'
+        ]
+        outputs_by_dest: dict[int, Path] = {}
+        n = max(1, len(ordered))
         covered: set[Path] = set()
-        for i, dest in enumerate(dests):
+        wav_left = sum(1 for d in ordered if d.format == 'wav')
+        for i, dest in enumerate(ordered):
             dest.album_dir.mkdir(parents=True, exist_ok=True)
             if (
                 write_cover
@@ -1307,9 +1348,8 @@ class RipEngine:
                 on_progress(i, dest.format, dest.out_path)
 
             if dest.format == 'wav':
-                if dest.out_path.exists():
-                    dest.out_path.unlink()
-                shutil.copy2(wav_path, dest.out_path)
+                wav_left -= 1
+                _place_wav_output(wav_path, dest.out_path, move=wav_left == 0)
             else:
                 self._encode(dest.format, wav_path, dest.out_path, job)
 
@@ -1332,7 +1372,7 @@ class RipEngine:
                 self._tags.embed_artwork(
                     dest.out_path, embed_art.data, embed_art.mime
                 )
-            outputs.append(dest.out_path)
+            outputs_by_dest[id(dest)] = dest.out_path
             log.info(
                 'Encoded %s → %s (%s/%s)',
                 dest.format,
@@ -1340,7 +1380,8 @@ class RipEngine:
                 i + 1,
                 n,
             )
-        return outputs
+        # Preserve caller destination order.
+        return [outputs_by_dest[id(d)] for d in dests]
 
     def _rip_tracks_phase(
         self,
@@ -1367,197 +1408,210 @@ class RipEngine:
         test_copy_mismatches: list[int],
         rip_log: RipLog | None,
     ) -> Path | None:
-        """Process every selected track with secure test & copy."""
-        for i, track_no in enumerate(tracks):
-            if self._cancelled:
+        """Process every selected track with secure test & copy.
+
+        Encode of track N overlaps extraction of track N+1 (drive-bound rip
+        with CPU-bound encode). AccurateRip and CTDB share one PCM load.
+        """
+        pending: _PendingEncode | None = None
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix='r2r-enc') as pool:
+
+            def finish_pending(*, abandon: bool = False) -> Path | None:
+                nonlocal pending, album_dir
+                if pending is None:
+                    return album_dir
+                job_pending = pending
+                pending = None
+                self._encode_pending = None
+                if abandon or self._cancelled:
+                    try:
+                        job_pending.future.result(timeout=120)
+                    except Exception:
+                        pass
+                    for dest in job_pending.dests:
+                        try:
+                            if dest.out_path.is_file():
+                                # Incomplete encode after cancel — drop it.
+                                if dest.out_path.stat().st_size < 1024:
+                                    dest.out_path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                    self._unlink_quiet(job_pending.test_wav, job_pending.copy_wav)
+                    return album_dir
+                written = job_pending.future.result()
+                primary_out: Path | None = None
+                for dest, out_path in zip(
+                    job_pending.dests, written, strict=True
+                ):
+                    outputs.append(out_path)
+                    track_output_pairs.append((job_pending.track_no, out_path))
+                    if primary_out is None:
+                        primary_out = out_path
+                        album_dir = dest.album_dir
+                self._unlink_quiet(job_pending.test_wav, job_pending.copy_wav)
+                if job_pending.log_entry is not None and primary_out is not None:
+                    job_pending.log_entry.output_path = primary_out
+                    job_pending.log_entry.filename = primary_out.name
+                    if job_pending.log_entry.status != 'finished with errors':
+                        job_pending.log_entry.status = 'OK'
+                done_extra = ''
+                if job_pending.extracted.mode == 'burst':
+                    done_extra = ' (burst)'
+                elif job.test_and_copy and job_pending.extracted.copy_crc:
+                    done_extra = (
+                        f' (test=copy CRC {job_pending.extracted.copy_crc})'
+                    )
+                if len(job_pending.dests) > 1:
+                    done_extra = f'{done_extra} · {len(job_pending.dests)} encodes'
+                report(
+                    job_pending.track_no,
+                    RipState.DONE,
+                    index=job_pending.idx,
+                    sub=1.0,
+                    message=f'Finished track {job_pending.track_no}{done_extra}',
+                    total_units=total_units,
+                )
                 return album_dir
 
-            idx = unit_index + i
-            toc_track = self._toc_track(job.disc_info, track_no)
-            sectors = toc_track.length_sectors if toc_track else 0
+            for i, track_no in enumerate(tracks):
+                if self._cancelled:
+                    finish_pending(abandon=True)
+                    return album_dir
 
-            log_entry = None
-            if rip_log is not None:
-                log_entry = rip_log.begin_track(
-                    track_no,
-                    title=title_for_track(job.album, track_no),
-                    length_label=toc_track.duration_label if toc_track else '',
-                    start_sector=toc_track.start_sector if toc_track else 0,
-                    length_sectors=sectors,
-                )
+                idx = unit_index + i
+                toc_track = self._toc_track(job.disc_info, track_no)
+                sectors = toc_track.length_sectors if toc_track else 0
 
-            test_wav = tmp_path / f'track{track_no:02d}_test.wav'
-            copy_wav = tmp_path / f'track{track_no:02d}_copy.wav'
-            expected = expected_sizes.get(track_no)
-
-            extracted = self._extract_track_secure(
-                job=job,
-                track_no=track_no,
-                test_wav=test_wav,
-                copy_wav=copy_wav,
-                expected=expected,
-                sectors=sectors,
-                defeat_cache=defeat_cache,
-                idx=idx,
-                total_units=total_units,
-                report=report,
-                notes=notes,
-            )
-            if self._cancelled:
-                return album_dir
-            if job.test_and_copy and not extracted.matched:
-                if track_no not in test_copy_mismatches:
-                    test_copy_mismatches.append(track_no)
-                # Never encode unmatched secure audio. Burst recovery is the
-                # only allowed insecure exception (when user enabled it).
-                accept_burst = (
-                    extracted.mode == 'burst'
-                    and job.burst_fallback
-                    and extracted.copy_wav.is_file()
-                )
-                if not accept_burst:
-                    raise _CrcMismatch(
+                log_entry = None
+                if rip_log is not None:
+                    log_entry = rip_log.begin_track(
                         track_no,
-                        extracted.error
-                        or (
-                            f'Test & copy CRC mismatch on track {track_no} '
-                            f'(secure retries exhausted; enable Burst Fallback '
-                            f'to allow insecure recovery)'
+                        title=title_for_track(job.album, track_no),
+                        length_label=(
+                            toc_track.duration_label if toc_track else ''
                         ),
-                        test_crc=extracted.test_crc,
-                        copy_crc=extracted.copy_crc,
-                        attempt_log=extracted.attempt_log,
+                        start_sector=toc_track.start_sector if toc_track else 0,
+                        length_sectors=sectors,
                     )
 
-            if extracted.mode == 'burst' and track_no not in burst_tracks:
-                burst_tracks.append(track_no)
+                test_wav = tmp_path / f'track{track_no:02d}_test.wav'
+                copy_wav = tmp_path / f'track{track_no:02d}_copy.wav'
+                expected = expected_sizes.get(track_no)
 
-            self._apply_extract_to_log(
-                log_entry,
-                extracted=extracted,
-                sectors=sectors,
-                expected_bytes=expected,
-                test_and_copy=job.test_and_copy,
-            )
-
-            if ar_verifier is not None:
-                report(
-                    track_no,
-                    RipState.VERIFYING,
-                    index=idx,
-                    sub=0.55,
-                    message=f'AccurateRip check track {track_no}…',
+                # Extract overlaps the previous track's encode.
+                extracted = self._extract_track_secure(
+                    job=job,
+                    track_no=track_no,
+                    test_wav=test_wav,
+                    copy_wav=copy_wav,
+                    expected=expected,
+                    sectors=sectors,
+                    defeat_cache=defeat_cache,
+                    idx=idx,
                     total_units=total_units,
+                    report=report,
+                    notes=notes,
                 )
-                ar = ar_verifier.verify_wav(extracted.copy_wav, track_no)
-                ar_results.append(ar)
-                if log_entry is not None:
-                    log_entry.accuraterip = ar
-                report(
+                if self._cancelled:
+                    finish_pending(abandon=True)
+                    return album_dir
+                if job.test_and_copy and not extracted.matched:
+                    if track_no not in test_copy_mismatches:
+                        test_copy_mismatches.append(track_no)
+                    accept_burst = (
+                        extracted.mode == 'burst'
+                        and job.burst_fallback
+                        and extracted.copy_wav.is_file()
+                    )
+                    if not accept_burst:
+                        finish_pending(abandon=True)
+                        raise _CrcMismatch(
+                            track_no,
+                            extracted.error
+                            or (
+                                f'Test & copy CRC mismatch on track {track_no} '
+                                f'(secure retries exhausted; enable Burst '
+                                f'Fallback to allow insecure recovery)'
+                            ),
+                            test_crc=extracted.test_crc,
+                            copy_crc=extracted.copy_crc,
+                            attempt_log=extracted.attempt_log,
+                        )
+
+                if extracted.mode == 'burst' and track_no not in burst_tracks:
+                    burst_tracks.append(track_no)
+
+                self._apply_extract_to_log(
+                    log_entry,
+                    extracted=extracted,
+                    sectors=sectors,
+                    expected_bytes=expected,
+                    test_and_copy=job.test_and_copy,
+                )
+
+                self._verify_track_databases(
+                    extracted.copy_wav,
                     track_no,
-                    RipState.VERIFYING,
-                    index=idx,
-                    sub=0.58,
-                    message=ar.message,
+                    ar_verifier=ar_verifier,
+                    ctdb_verifier=ctdb_verifier,
+                    ar_results=ar_results,
+                    ctdb_results=ctdb_results,
+                    log_entry=log_entry,
+                    idx=idx,
                     total_units=total_units,
+                    report=report,
                 )
 
-            if ctdb_verifier is not None:
-                report(
-                    track_no,
-                    RipState.VERIFYING,
-                    index=idx,
-                    sub=0.59,
-                    message=f'CTDB check track {track_no}…',
-                    total_units=total_units,
-                )
-                ctdb = ctdb_verifier.verify_wav(extracted.copy_wav, track_no)
-                ctdb_results.append(ctdb)
-                if log_entry is not None:
-                    log_entry.ctdb = ctdb
-                report(
-                    track_no,
-                    RipState.VERIFYING,
-                    index=idx,
-                    sub=0.60,
-                    message=ctdb.message,
-                    total_units=total_units,
-                )
+                if self._cancelled:
+                    finish_pending(abandon=True)
+                    return album_dir
 
-            if self._cancelled:
-                return album_dir
+                # Previous encode must finish before we start another (one WAV
+                # encode worker); extract of this track already overlapped it.
+                finish_pending()
+                if self._cancelled:
+                    return album_dir
 
-            dests = self._destinations_for_track(job, track_no)
-            self._ensure_destination_dirs(dests)
-            n_targets = max(1, len(dests))
-
-            def _enc_progress(
-                t_i: int,
-                enc_fmt: str,
-                _out_path: Path,
-                *,
-                n_targets: int = n_targets,
-                track_no: int = track_no,
-                idx: int = idx,
-            ) -> None:
-                enc_frac = 0.62 + (0.24 * (t_i / n_targets))
+                dests = self._destinations_for_track(job, track_no)
+                self._ensure_destination_dirs(dests)
+                n_targets = max(1, len(dests))
                 report(
                     track_no,
                     RipState.ENCODING,
                     index=idx,
-                    sub=enc_frac,
+                    sub=0.62,
                     message=(
-                        f'Encoding track {track_no} to {enc_fmt.upper()}'
-                        + (f' ({t_i + 1}/{n_targets})' if n_targets > 1 else '')
+                        f'Encoding track {track_no}'
+                        + (f' ({n_targets} formats)' if n_targets > 1 else '')
                         + '…'
                     ),
                     total_units=total_units,
                 )
 
-            written = self._encode_wav_to_destinations(
-                extracted.copy_wav,
-                dests,
-                job,
-                track_number=track_no,
-                embed_art=embed_art,
-                disc_track_count=disc_track_count,
-                write_cover=True,
-                on_progress=_enc_progress,
-            )
-            if self._cancelled:
-                return album_dir
+                future = pool.submit(
+                    self._encode_wav_to_destinations,
+                    extracted.copy_wav,
+                    dests,
+                    job,
+                    track_number=track_no,
+                    embed_art=embed_art,
+                    disc_track_count=disc_track_count,
+                    write_cover=True,
+                    on_progress=None,
+                )
+                pending = _PendingEncode(
+                    future=future,
+                    track_no=track_no,
+                    idx=idx,
+                    dests=dests,
+                    extracted=extracted,
+                    test_wav=extracted.test_wav,
+                    copy_wav=extracted.copy_wav,
+                    log_entry=log_entry,
+                )
+                self._encode_pending = pending
 
-            primary_out: Path | None = None
-            for dest, out_path in zip(dests, written, strict=True):
-                outputs.append(out_path)
-                track_output_pairs.append((track_no, out_path))
-                if primary_out is None:
-                    primary_out = out_path
-                    album_dir = dest.album_dir
-
-            self._unlink_quiet(extracted.test_wav, extracted.copy_wav)
-
-            if log_entry is not None and primary_out is not None:
-                log_entry.output_path = primary_out
-                log_entry.filename = primary_out.name
-                if log_entry.status != 'finished with errors':
-                    log_entry.status = 'OK'
-
-            done_extra = ''
-            if extracted.mode == 'burst':
-                done_extra = ' (burst)'
-            elif job.test_and_copy and extracted.copy_crc:
-                done_extra = f' (test=copy CRC {extracted.copy_crc})'
-            if len(dests) > 1:
-                done_extra = f'{done_extra} · {len(dests)} encodes'
-            report(
-                track_no,
-                RipState.DONE,
-                index=idx,
-                sub=1.0,
-                message=f'Finished track {track_no}{done_extra}',
-                total_units=total_units,
-            )
+            finish_pending(abandon=self._cancelled)
 
         return album_dir
 
@@ -1686,11 +1740,8 @@ class RipEngine:
                 attempt_stats.merge(st)
                 pass_elapsed = time.monotonic() - attempt_t0
                 elapsed += pass_elapsed
-                copy_crc, peak2, _ = analyze_wav_for_log(copy_wav, sectors)
-                if peak is None:
-                    peak = peak2
-                elif peak2 is not None:
-                    peak = max(peak, peak2)
+                copy_crc = wav_pcm_crc(copy_wav)
+                # Peak filled later from the shared AR/CTDB PCM pass.
 
                 if not job.test_and_copy:
                     matched = True
@@ -1854,12 +1905,12 @@ class RipEngine:
             sample_offset=job.sample_offset,
         )
         elapsed = time.monotonic() - t0
-        copy_crc, peak, _ = analyze_wav_for_log(copy_wav, sectors)
+        copy_crc = wav_pcm_crc(copy_wav)
         return _TrackExtract(
             mode=mode,
             test_crc='',  # no dual-pass — do not fake a matching test CRC
             copy_crc=copy_crc,
-            peak=peak,
+            peak=None,
             elapsed=elapsed,
             stats=st,
             matched=False,
@@ -2540,7 +2591,6 @@ class RipEngine:
                         success=False, cancelled=True, notes=notes, album_dir=album_dir
                     )
 
-                # Encode once per target (same/different folders).
                 dests = self._destinations_for_track(
                     job, 1, filename=basename
                 )
@@ -2907,28 +2957,126 @@ class RipEngine:
         timeout: int | None = None,
     ) -> tuple[int, str]:
         log.info('Running %s: %s', what, ' '.join(cmd))
+        proc: subprocess.Popen[str] | None = None
         try:
-            self._proc = subprocess.Popen(
+            proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
             )
+            with self._proc_lock:
+                self._procs.add(proc)
             try:
-                _stdout, stderr = self._proc.communicate(timeout=timeout)
+                _stdout, stderr = proc.communicate(timeout=timeout)
             except subprocess.TimeoutExpired:
-                self._proc.kill()
+                proc.kill()
                 try:
-                    self._proc.communicate(timeout=5)
+                    proc.communicate(timeout=5)
                 except Exception:
                     pass
                 raise RuntimeError(f'{what} timed out after {timeout}s') from None
-            code = self._proc.returncode if self._proc is not None else -1
+            code = proc.returncode if proc is not None else -1
             return code if code is not None else -1, stderr or ''
         except OSError as exc:
             raise RuntimeError(f'Failed to run {what}: {exc}') from exc
         finally:
-            self._proc = None
+            if proc is not None:
+                with self._proc_lock:
+                    self._procs.discard(proc)
+
+    def _verify_track_databases(
+        self,
+        wav_path: Path,
+        track_no: int,
+        *,
+        ar_verifier: AccurateRipVerifier | None,
+        ctdb_verifier: CtdbVerifier | None,
+        ar_results: list[AccurateRipResult],
+        ctdb_results: list[CtdbResult],
+        log_entry: TrackLogEntry | None,
+        idx: float,
+        total_units: float,
+        report: TrackReportFn,
+    ) -> None:
+        """One PCM load for peak/CRC log fields + AccurateRip + CTDB."""
+        need_peak = log_entry is not None and log_entry.peak_percent is None
+        if ar_verifier is None and ctdb_verifier is None and not need_peak:
+            return
+
+        report(
+            track_no,
+            RipState.VERIFYING,
+            index=idx,
+            sub=0.55,
+            message=f'Verifying track {track_no}…',
+            total_units=total_units,
+        )
+        pcm: bytes | None = None
+        try:
+            pcm = load_cdda_pcm(wav_path)
+        except Exception as exc:
+            log.warning('PCM load failed for track %s: %s', track_no, exc)
+
+        if pcm is not None and log_entry is not None:
+            _crc, peak = analyze_pcm_for_log(pcm)
+            if peak is not None:
+                log_entry.peak_percent = peak
+
+        if ar_verifier is not None:
+            if pcm is not None:
+                ar = ar_verifier.verify_pcm(pcm, track_no)
+            else:
+                ar = ar_verifier.verify_wav(wav_path, track_no)
+            ar_results.append(ar)
+            if log_entry is not None:
+                log_entry.accuraterip = ar
+            report(
+                track_no,
+                RipState.VERIFYING,
+                index=idx,
+                sub=0.58,
+                message=ar.message,
+                total_units=total_units,
+            )
+
+        if ctdb_verifier is not None:
+            report(
+                track_no,
+                RipState.VERIFYING,
+                index=idx,
+                sub=0.59,
+                message=f'CTDB check track {track_no}…',
+                total_units=total_units,
+            )
+            if pcm is not None:
+                ctdb = ctdb_verifier.verify_pcm(pcm, track_no)
+            else:
+                ctdb = ctdb_verifier.verify_wav(wav_path, track_no)
+            ctdb_results.append(ctdb)
+            if log_entry is not None:
+                log_entry.ctdb = ctdb
+            report(
+                track_no,
+                RipState.VERIFYING,
+                index=idx,
+                sub=0.60,
+                message=ctdb.message,
+                total_units=total_units,
+            )
+
+
+def _place_wav_output(src: Path, dest: Path, *, move: bool) -> None:
+    """Write *src* to *dest*; rename when safe, else copy."""
+    if dest.exists():
+        dest.unlink()
+    if move:
+        try:
+            src.replace(dest)
+            return
+        except OSError:
+            log.debug('WAV rename failed (%s → %s); copying', src, dest)
+    shutil.copy2(src, dest)
 
 
 def _prepare_artwork(

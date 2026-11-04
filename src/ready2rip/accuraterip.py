@@ -253,23 +253,6 @@ def load_cdda_wav_samples(path: Path) -> memoryview:
     return memoryview(raw).cast('I')  # unsigned 32-bit LE words
 
 
-def compute_checksums_wav(
-    path: Path,
-    track_number: int,
-    total_tracks: int,
-    *,
-    sample_offset: int = 0,
-) -> tuple[int, int]:
-    """Return (crc_v1, crc_v2) for a CDDA WAV file."""
-    samples = load_cdda_wav_samples(path)
-    return compute_checksums_samples(
-        samples,
-        track_number,
-        total_tracks,
-        sample_offset=sample_offset,
-    )
-
-
 def compute_checksums_samples(
     samples: memoryview,
     track_number: int,
@@ -361,6 +344,28 @@ class AccurateRipVerifier:
             self._total_tracks = total
 
     def verify_wav(self, path: Path, track_number: int) -> AccurateRipResult:
+        try:
+            pcm = load_cdda_wav_samples(path)
+        except Exception as exc:
+            log.warning('AccurateRip CRC failed for track %s: %s', track_number, exc)
+            return AccurateRipResult(
+                track_number=track_number,
+                confidence=AccurateRipConfidence.ERROR,
+                message=f'CRC error: {exc}',
+            )
+        return self.verify_samples(pcm, track_number)
+
+    def verify_pcm(self, pcm: bytes, track_number: int) -> AccurateRipResult:
+        """Verify from raw interleaved LE PCM (same bytes as CTDB ``load_cdda_pcm``)."""
+        raw = pcm
+        if len(raw) % 4 != 0:
+            raw = raw[: len(raw) - (len(raw) % 4)]
+        samples = memoryview(raw).cast('I')
+        return self.verify_samples(samples, track_number)
+
+    def verify_samples(
+        self, samples: memoryview, track_number: int
+    ) -> AccurateRipResult:
         if self._db is None:
             return AccurateRipResult(
                 track_number=track_number,
@@ -368,8 +373,8 @@ class AccurateRipVerifier:
                 message='AccurateRip database unavailable',
             )
         try:
-            v1, v2 = compute_checksums_wav(
-                path,
+            v1, v2 = compute_checksums_samples(
+                samples,
                 track_number,
                 self._total_tracks,
                 sample_offset=self.sample_offset,

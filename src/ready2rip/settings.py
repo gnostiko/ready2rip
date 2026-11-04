@@ -160,7 +160,10 @@ def opus_bitrate_label(bitrate: int) -> str:
     return f'{int(bitrate)} kbps VBR'
 
 
-# 0 = keep full downloaded resolution when embedding
+# 0 = keep full downloaded resolution when embedding.
+# Default 1000: crisp on phones/desktops without multi-MB-per-track bloat
+# (Picard CAA default download is 500; 600–800 favors old car decks).
+DEFAULT_ARTWORK_MAX_SIZE = 1000
 ARTWORK_SIZES = (
     (300, '300 px'),
     (500, '500 px'),
@@ -276,7 +279,7 @@ class AppSettings:
     fetch_artwork: bool = True
     artwork_source_itunes: bool = True
     artwork_source_caa: bool = True
-    artwork_max_size: int = 600
+    artwork_max_size: int = DEFAULT_ARTWORK_MAX_SIZE
     use_musicbrainz: bool = True
     use_freedb: bool = True
     auto_lookup_metadata: bool = True
@@ -473,7 +476,7 @@ class SettingsStore:
             snap.artwork_max_size = _ARTWORK_SIZE_ALIASES[snap.artwork_max_size]
         elif snap.artwork_max_size not in allowed:
             # Drop free-form custom sizes; keep default embed size.
-            snap.artwork_max_size = 600
+            snap.artwork_max_size = DEFAULT_ARTWORK_MAX_SIZE
         return snap
 
     def update(self, **kwargs) -> AppSettings:

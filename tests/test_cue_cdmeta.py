@@ -64,6 +64,28 @@ def test_parse_cd_text_titles() -> None:
     assert info.album_title.startswith('Album Title')
 
 
+def test_cdmeta_mmc_stubs_do_not_fake_enrichment() -> None:
+    """Live MMC CD-TEXT/MCN/ISRC is stubbed — never invent disc metadata."""
+    from ready2rip.disc.cdmeta import (
+        enrich_album_from_disc,
+        read_cd_text,
+        read_disc_codes,
+        read_isrc,
+        read_mcn,
+    )
+
+    album = AlbumMetadata(title='Keep', artist='Me')
+    assert read_cd_text('/dev/null') is None
+    assert read_mcn('/dev/null') == ''
+    assert read_isrc('/dev/null', 1) == ''
+    codes = read_disc_codes('/dev/null', [1, 2])
+    assert codes.mcn == ''
+    assert codes.isrcs == {}
+    assert enrich_album_from_disc(
+        album, device='/dev/null', track_numbers=[1]
+    ) is album
+
+
 def test_mb_primary_genre_picks_highest_count() -> None:
     entity = {
         'genres': [

@@ -18,6 +18,7 @@ from ready2rip.ctdb import CtdbConfidence, CtdbResult
 from ready2rip.disc.probe import DiscInfo
 from ready2rip.metadata.providers import AlbumMetadata
 from ready2rip.paths import sanitize_component, track_meta_for
+from ready2rip.rip.eac_logcrc import append_eac_checksum
 from ready2rip.rip.encode import encode_command_summary
 from ready2rip.settings import rip_log_aac_quality, rip_log_mp3_quality
 
@@ -66,6 +67,7 @@ class RipLog:
         self.finished_at: datetime | None = None
         self.device: str = ''
         self.sample_offset: int = 0
+        self.offset_configured: bool = False
         self.encode_format: str = 'flac'
         self.flac_compression: int = 5
         self.mp3_quality: str = 'v0'
@@ -102,6 +104,7 @@ class RipLog:
     def configure_from_job(self, job) -> None:
         self.device = job.device
         self.sample_offset = job.sample_offset
+        self.offset_configured = bool(getattr(job, 'offset_configured', False))
         self.encode_format = job.encode_format
         self.flac_compression = job.flac_compression
         self.mp3_quality = job.mp3_quality or 'v0'
@@ -237,7 +240,15 @@ class RipLog:
         if self.disc is not None and getattr(self.disc, 'pregap_source', ''):
             lines.append(f'Pregap source           : {self.disc.pregap_source}')
         lines.append('')
-        lines.append(f'Read offset correction                      : {self.sample_offset}')
+        offset_note = (
+            'calibrated'
+            if self.offset_configured
+            else 'NOT CALIBRATED — AccurateRip may mismatch'
+        )
+        lines.append(
+            f'Read offset correction                      : '
+            f'{self.sample_offset} ({offset_note})'
+        )
         lines.append(
             'Overread into Lead-In and Lead-Out          : No'
         )
@@ -323,6 +334,22 @@ class RipLog:
             else 'Write CUE sheet                 : No'
         )
         lines.append('')
+
+        burst_early = [
+            t.number
+            for t in self.tracks
+            if 'burst' in (t.extract_mode or '').lower()
+        ]
+        if burst_early:
+            lines.append('WARNING: Insecure burst extraction (-Z) on this session')
+            lines.append(
+                f'  Affected track(s): {", ".join(str(n) for n in burst_early)}'
+            )
+            lines.append(
+                '  Those tracks are not archival-grade secure rips '
+                '(paranoia disabled for the final audio).'
+            )
+            lines.append('')
 
         if self.disc and self.disc.tracks:
             lines.append('TOC of the extracted CD')
@@ -469,12 +496,13 @@ class RipLog:
             if 'burst' in (t.extract_mode or '').lower()
         ]
         if burst:
+            lines.append('WARNING: Insecure burst extraction (-Z)')
             lines.append(
-                f'Burst mode used for track(s): {", ".join(str(n) for n in burst)}'
+                f'  Track(s) {", ".join(str(n) for n in burst)} were NOT ripped '
+                'with full paranoia. Audio may contain uncorrected errors.'
             )
             lines.append(
-                '(Final audio for those tracks was extracted with paranoia '
-                'disabled [-Z]; see per-track mode and attempt log)'
+                '  Do not treat this as an archival-grade secure rip for those tracks.'
             )
             lines.append('')
 
@@ -540,12 +568,8 @@ class RipLog:
         lines.append('')
         lines.append('End of status report')
         lines.append('')
-        # Simple checksum of log body
-        body = '\n'.join(lines)
-        checksum = zlib.crc32(body.encode('utf-8')) & 0xFFFFFFFF
-        lines.append(f'==== Log checksum {checksum:08X} ====')
-        lines.append('')
-        return '\n'.join(lines)
+        # Interchangeable log signature (Rijndael-256 CBC XOR).
+        return append_eac_checksum('\n'.join(lines))
 
     def default_log_filename(self) -> str:
         artist = sanitize_component(
@@ -596,44 +620,43 @@ def wav_pcm_crc(wav_path: Path) -> str:
             return ''
 
 
+def analyze_pcm_for_log(pcm: bytes) -> tuple[str, float | None]:
+    """Return ``(crc32_hex, peak_percent)`` from interleaved LE 16-bit stereo PCM."""
+    if not pcm:
+        return '', None
+    crc = zlib.crc32(pcm) & 0xFFFFFFFF
+    if len(pcm) % 2 != 0:
+        return f'{crc:08x}', None
+    samples = array.array('h')
+    samples.frombytes(pcm if len(pcm) % 2 == 0 else pcm[:-1])
+    if sys.byteorder != 'little':
+        samples.byteswap()
+    if not samples:
+        return f'{crc:08x}', 0.0
+    peak = max(abs(min(samples)), abs(max(samples)))
+    peak_pct = (peak / 32767.0) * 100.0 if peak else 0.0
+    return f'{crc:08x}', peak_pct
+
+
 def analyze_wav_for_log(
     wav_path: Path,
     _length_sectors: int = 0,
 ) -> tuple[str, float | None, float | None]:
     """Return ``(crc32_hex, peak_percent, None)`` for a CDDA WAV file."""
-    crc = 0
-    peak = 0
     try:
         with wave.open(str(wav_path), 'rb') as wf:
             if wf.getsampwidth() != 2:
                 raw = wf.readframes(wf.getnframes())
                 crc = zlib.crc32(raw) & 0xFFFFFFFF
                 return f'{crc:08x}', None, None
-            remaining = wf.getnframes()
-            while remaining > 0:
-                take = min(_PCM_CHUNK_FRAMES, remaining)
-                data = wf.readframes(take)
-                if not data:
-                    break
-                remaining -= take
-                crc = zlib.crc32(data, crc)
-                samples = array.array('h')
-                samples.frombytes(data)
-                if sys.byteorder != 'little':
-                    samples.byteswap()
-                if samples:
-                    local = max(abs(min(samples)), abs(max(samples)))
-                    if local > peak:
-                        peak = local
-            crc &= 0xFFFFFFFF
+            raw = wf.readframes(wf.getnframes())
+        crc, peak = analyze_pcm_for_log(raw)
+        return crc, peak, None
     except Exception:
         try:
             return _pcm_crc_from_raw(wav_path), None, None
         except OSError:
             return '', None, None
-
-    peak_pct = (peak / 32767.0) * 100.0 if peak else 0.0
-    return f'{crc:08x}', peak_pct, None
 
 
 def extraction_speed_x(length_sectors: int, elapsed_seconds: float) -> float | None:

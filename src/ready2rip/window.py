@@ -34,6 +34,7 @@ from ready2rip.disc.drive_status import (
     query_drive_status,
 )
 from ready2rip.disc.probe import DiscInfo, probe_disc
+from ready2rip.drive_setup import needs_drive_setup
 from ready2rip.icons import apply_icon
 from ready2rip.metadata.cache import MetadataCache
 from ready2rip.metadata.providers import (
@@ -60,6 +61,7 @@ from ready2rip.rip.engine import RipEngine, RipJob, RipProgress, RipResult, RipS
 from ready2rip.settings import (
     AAC_QUALITIES,
     ARTWORK_SIZES,
+    DEFAULT_ARTWORK_MAX_SIZE,
     ENCODERS,
     FLAC_LEVELS,
     MP3_QUALITIES,
@@ -1159,9 +1161,16 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             )
         except ValueError:
             try:
-                self._art_size_row.set_selected(self._art_size_values.index(600))
+                self._art_size_row.set_selected(
+                    self._art_size_values.index(DEFAULT_ARTWORK_MAX_SIZE)
+                )
             except ValueError:
                 self._art_size_row.set_selected(2)
+        self._art_size_row.set_tooltip_text(
+            'Longest edge when embedding. 1000 px is the default (sharp on '
+            'phones/desktops). Prefer 600–800 for older car stereos; folder '
+            'cover.jpg stays full resolution.'
+        )
         self._art_size_row.connect('notify::selected', self._on_art_size_changed)
         self._art_size_row.set_sensitive(settings.embed_artwork)
         self._add_metadata_row(self._art_size_row, self.artwork_group)
@@ -1948,7 +1957,47 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._toast('Select at least one track to rip')
             return
 
+        if needs_drive_setup(self.store):
+            self._confirm_uncalibrated_offset_then_rip()
+            return
+
+        self._start_rip_after_offset_check()
+
+    def _confirm_uncalibrated_offset_then_rip(self) -> None:
+        """Warn before ripping when sample offset has not been calibrated."""
+        dialog = Adw.AlertDialog(
+            heading='Sample offset not calibrated',
+            body=(
+                'AccurateRip verification needs a measured drive offset. '
+                'Detect now for best results, or rip with offset 0 '
+                '(matches may fail or look wrong).'
+            ),
+        )
+        dialog.add_response('cancel', 'Cancel')
+        dialog.add_response('detect', 'Detect…')
+        dialog.add_response('rip', 'Rip anyway')
+        dialog.set_response_appearance(
+            'detect', Adw.ResponseAppearance.SUGGESTED
+        )
+        dialog.set_default_response('detect')
+        dialog.set_close_response('cancel')
+
+        def on_response(_dlg: Adw.AlertDialog, response: str) -> None:
+            if response == 'detect':
+                self.present_drive_setup()
+            elif response == 'rip':
+                self._start_rip_after_offset_check()
+
+        dialog.connect('response', on_response)
+        dialog.present(self)
+
+    def _start_rip_after_offset_check(self) -> None:
         settings = self.store.get()
+        track_numbers = self._selected_track_numbers()
+        if not track_numbers:
+            self._toast('Select at least one track to rip')
+            return
+
         # Full-res for folder cover; embed-sized for files. Fetch before rip if missing.
         folder_art = self._artwork
         embed_art = self._artwork_embed or self._artwork
@@ -2008,6 +2057,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             verify_ctdb=settings.verify_ctdb,
             submit_ctdb=settings.submit_ctdb,
             sample_offset=settings.drive_sample_offset,
+            offset_configured=bool(settings.drive_offset_configured),
             disc_info=self._disc,
             disc_track_count=self._disc.track_count,
             burst_fallback=settings.burst_fallback,
@@ -2316,7 +2366,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             )
             ar_bits.append(f'CTDB {matches}/{len(result.ctdb)}')
         if result.burst_tracks:
-            ar_bits.append(f'burst on {len(result.burst_tracks)}')
+            n_burst = len(result.burst_tracks)
+            ar_bits.append(
+                f'WARNING: insecure burst (-Z) on '
+                f'{n_burst} track{"s" if n_burst != 1 else ""}'
+            )
         if result.log_path is not None:
             ar_bits.append('log saved')
         detail = f'{n} file{"s" if n != 1 else ""} saved to {dest}'
@@ -2330,7 +2384,16 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self.toolbar_view.set_reveal_bottom_bars(True)
         self.rip_revealer.set_reveal_child(True)
         GLib.timeout_add(560, self._release_banner)
-        self._toast(f'Rip complete · {n} file(s)', timeout=4)
+        if result.burst_tracks:
+            n_burst = len(result.burst_tracks)
+            self._toast(
+                f'Rip complete · {n} file(s) · WARNING: insecure burst on '
+                f'{n_burst} track{"s" if n_burst != 1 else ""} '
+                f'(not archival-grade)',
+                timeout=5,
+            )
+        else:
+            self._toast(f'Rip complete · {n} file(s)', timeout=4)
         # Show per-track AR/CTDB outcome in the track list subtitles when available.
         if result.accuraterip or result.ctdb:
             self._apply_verify_results_to_rows(
@@ -2361,6 +2424,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                         description=(
                             'Disc ejected. Close the tray or insert another CD.'
                         ),
+                        icon_name=None,
                     )
                 else:
                     self._toast(f'Eject failed: {message}')
@@ -2469,12 +2533,21 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                     self._auto_rip_disc_key = None
                     self._auto_rip_pending = False
                 title, description = empty
-                self._clear_disc_ui_for_empty(title=title, description=description)
+                self._clear_disc_ui_for_empty(
+                    title=title,
+                    description=description,
+                    icon_name=(
+                        None
+                        if state is DriveTrayState.TRAY_OPEN
+                        else 'media-optical-symbolic'
+                    ),
+                )
             return
 
         if state is DriveTrayState.NOT_READY:
             if prev is not DriveTrayState.NOT_READY:
                 if self.stack.get_visible_child_name() == 'empty':
+                    self._set_status_page_icon('media-optical-symbolic')
                     self.status_page.set_title('Drive not ready')
                     self.status_page.set_description(
                         'Waiting for the drive to finish spinning up…'
@@ -2500,7 +2573,20 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         device = status.device or self._device or '/dev/sr0'
         self._rebuild_drive_rows(device, allow_optical=False)
 
-    def _clear_disc_ui_for_empty(self, *, title: str, description: str) -> None:
+    def _set_status_page_icon(self, icon_name: str | None) -> None:
+        """Show a status-page icon, or hide it when *icon_name* is None."""
+        if icon_name:
+            apply_icon(self.status_page, icon_name, display=self.get_display())
+        else:
+            self.status_page.set_icon_name(None)
+
+    def _clear_disc_ui_for_empty(
+        self,
+        *,
+        title: str,
+        description: str,
+        icon_name: str | None = 'media-optical-symbolic',
+    ) -> None:
         self._disc = None
         self._ids = None
         self._album = None
@@ -2508,6 +2594,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self.stack.set_visible_child_name('empty')
         self._set_rip_sensitive(False)
         self._set_lookup_controls_sensitive(False)
+        self._set_status_page_icon(icon_name)
         self.status_page.set_title(title)
         self.status_page.set_description(description)
         self._rebuild_track_list(None)
@@ -2601,7 +2688,15 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         empty = _empty_tray_copy(status.state, device)
         if empty is not None:
             title, description = empty
-            self._clear_disc_ui_for_empty(title=title, description=description)
+            self._clear_disc_ui_for_empty(
+                title=title,
+                description=description,
+                icon_name=(
+                    None
+                    if status.state is DriveTrayState.TRAY_OPEN
+                    else 'media-optical-symbolic'
+                ),
+            )
             return
 
         self._disc = info
@@ -2613,6 +2708,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self.stack.set_visible_child_name('empty')
             self._set_rip_sensitive(False)
             self._set_lookup_controls_sensitive(False)
+            self._set_status_page_icon('media-optical-symbolic')
             if status.state is DriveTrayState.NOT_READY:
                 self.status_page.set_title('Drive not ready')
                 self.status_page.set_description(

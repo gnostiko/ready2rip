@@ -221,19 +221,6 @@ def compute_disc_crc(
     return zlib.crc32(pcm[start:end]) & 0xFFFFFFFF
 
 
-def parity_raw_to_u16(parity: bytes, stride: int, npar: int) -> list[list[int]]:
-    """Parse raw remainder buffer into ``[stride][npar]`` ushorts."""
-    expected = stride * npar * 2
-    if len(parity) < expected:
-        raise ValueError(f"parity length {len(parity)} < {expected}")
-    rows: list[list[int]] = []
-    for part in range(stride):
-        base = part * npar * 2
-        row = list(struct.unpack_from(f"<{npar}H", parity, base))
-        rows.append(row)
-    return rows
-
-
 def u16_grid_to_bytes(rows: list[list[int]]) -> bytes:
     """Serialize ``[stride][npar]`` ushorts to little-endian bytes."""
     out = bytearray()

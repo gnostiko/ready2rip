@@ -26,10 +26,23 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-11-03">
+    <release version="@APPLICATION_VERSION@" date="2026-11-04">
       <description>
         <p>
-          0.4.16: Picard-aligned tags for FLAC/Opus, MP3, and M4A —
+          0.4.17: Stronger secure-rip pipeline — warn when the drive
+          sample offset is uncalibrated, one PCM pass for log peak plus
+          AccurateRip/CTDB, safer encode-overlap cancel (no half files),
+          louder burst honesty with EAC log checksums, CTDB submit
+          quality 100 only for clean secure test&amp;copy, and honest
+          CD-TEXT/MCN/ISRC stubs. Default embed art size 1000px; clear
+          the empty-state disc icon when the tray is open.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.16" date="2026-11-03">
+      <description>
+        <p>
+          Picard-aligned tags for FLAC/Opus, MP3, and M4A —
           multi-value artists, split track/disc totals, correct
           MusicBrainz recording IDs, and richer barcode/catalog/country
           fields. Artist style setting applies to filenames; feat. still
