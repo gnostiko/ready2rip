@@ -124,6 +124,40 @@ def scheme_index(schemes: tuple[NamingScheme, ...], template: str) -> int:
     return custom
 
 
+# Prior *defaults* that should become the current dated-album folder default.
+_LEGACY_DEFAULT_FOLDER_TEMPLATES = {
+    '{album_artist}/({date}) - {album}',
+    '{album_artist}/({date}) - {album}/{disc_folder}',
+    '{album_artist}/{dated_album}/{disc_folder}',
+}
+
+# Prior filename default (no multi-disc prefix) → current {disc_track} default.
+_LEGACY_DEFAULT_FILENAME_TEMPLATES = {
+    '{track:02d} - {title}',
+}
+
+
+def migrate_album_folder_template(template: str | None) -> str:
+    """Normalize stored album-folder templates to the current presets."""
+    text = (template or '').strip()
+    if not text:
+        return DEFAULT_ALBUM_FOLDER_TEMPLATE
+    # Drop trailing disc subfolders from presets; disc belongs in the filename.
+    if text.endswith('/{disc_folder}'):
+        text = text[: -len('/{disc_folder}')].rstrip('/')
+    if not text or text in _LEGACY_DEFAULT_FOLDER_TEMPLATES:
+        return DEFAULT_ALBUM_FOLDER_TEMPLATE
+    return text
+
+
+def migrate_filename_template(template: str | None) -> str:
+    """Normalize stored filename templates to the current default when legacy."""
+    text = (template or '').strip()
+    if not text or text in _LEGACY_DEFAULT_FILENAME_TEMPLATES:
+        return DEFAULT_FILENAME_TEMPLATE
+    return text
+
+
 def sanitize_component(name: str, *, fallback: str = 'Unknown') -> str:
     """Make a single path component safe for common filesystems."""
     cleaned = _UNSAFE.sub('', name).strip().strip('.')

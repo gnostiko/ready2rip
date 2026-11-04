@@ -14,6 +14,8 @@ from gi.repository import Gio, GLib
 from ready2rip.paths import (
     DEFAULT_ALBUM_FOLDER_TEMPLATE,
     DEFAULT_FILENAME_TEMPLATE,
+    migrate_album_folder_template,
+    migrate_filename_template,
 )
 from ready2rip.tags.artists import (
     DEFAULT_ARTIST_STYLE,
@@ -173,39 +175,6 @@ ARTWORK_SIZES = (
 _ARTWORK_SIZE_ALIASES = {
     720: 800,
 }
-
-# Prior *defaults* that should become the current dated-album folder default.
-_LEGACY_DEFAULT_FOLDER_TEMPLATES = {
-    '{album_artist}/({date}) - {album}',
-    '{album_artist}/({date}) - {album}/{disc_folder}',
-    '{album_artist}/{dated_album}/{disc_folder}',
-}
-
-
-def _migrate_album_folder_template(template: str | None) -> str:
-    text = (template or '').strip()
-    if not text:
-        return DEFAULT_ALBUM_FOLDER_TEMPLATE
-    # Drop trailing disc subfolders from presets; disc belongs in the filename.
-    if text.endswith('/{disc_folder}'):
-        text = text[: -len('/{disc_folder}')].rstrip('/')
-    if not text or text in _LEGACY_DEFAULT_FOLDER_TEMPLATES:
-        return DEFAULT_ALBUM_FOLDER_TEMPLATE
-    return text
-
-
-# Prior filename default (no multi-disc prefix) → current {disc_track} default.
-_LEGACY_DEFAULT_FILENAME_TEMPLATES = {
-    '{track:02d} - {title}',
-}
-
-
-def _migrate_filename_template(template: str | None) -> str:
-    text = (template or '').strip()
-    if not text or text in _LEGACY_DEFAULT_FILENAME_TEMPLATES:
-        return DEFAULT_FILENAME_TEMPLATE
-    return text
-
 
 def _get_bool(settings: Gio.Settings, key: str, default: bool) -> bool:
     """Read a boolean key; fall back if the installed schema is older."""
@@ -460,10 +429,10 @@ class SettingsStore:
                 use_musicbrainz=s.get_boolean('use-musicbrainz'),
                 use_freedb=s.get_boolean('use-freedb'),
                 auto_lookup_metadata=s.get_boolean('auto-lookup-metadata'),
-                filename_template=_migrate_filename_template(
+                filename_template=migrate_filename_template(
                     s.get_string('filename-template')
                 ),
-                album_folder_template=_migrate_album_folder_template(
+                album_folder_template=migrate_album_folder_template(
                     s.get_string('album-folder-template')
                 ),
                 artist_style=normalize_artist_style(

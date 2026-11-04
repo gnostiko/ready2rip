@@ -12,13 +12,11 @@ from ready2rip.paths import (
     FILENAME_SCHEMES,
     FOLDER_SCHEMES,
     build_output_paths,
+    migrate_album_folder_template,
+    migrate_filename_template,
     scheme_index,
     scheme_tooltip,
     template_values,
-)
-from ready2rip.settings import (
-    _migrate_album_folder_template,
-    _migrate_filename_template,
 )
 
 
@@ -67,24 +65,24 @@ def test_scheme_tooltip_includes_template_and_description() -> None:
 
 def test_migrate_strips_disc_folder() -> None:
     assert (
-        _migrate_album_folder_template('{album_artist}/{dated_album}/{disc_folder}')
+        migrate_album_folder_template('{album_artist}/{dated_album}/{disc_folder}')
         == DEFAULT_ALBUM_FOLDER_TEMPLATE
     )
     assert (
-        _migrate_album_folder_template('{album_artist}/{album}/{disc_folder}')
+        migrate_album_folder_template('{album_artist}/{album}/{disc_folder}')
         == '{album_artist}/{album}'
     )
     assert (
-        _migrate_album_folder_template('{genre}/{album_artist}/{album}/{disc_folder}')
+        migrate_album_folder_template('{genre}/{album_artist}/{album}/{disc_folder}')
         == '{genre}/{album_artist}/{album}'
     )
 
 
 def test_migrate_filename_default_to_disc_track() -> None:
-    assert _migrate_filename_template('{track:02d} - {title}') == DEFAULT_FILENAME_TEMPLATE
-    assert _migrate_filename_template('') == DEFAULT_FILENAME_TEMPLATE
+    assert migrate_filename_template('{track:02d} - {title}') == DEFAULT_FILENAME_TEMPLATE
+    assert migrate_filename_template('') == DEFAULT_FILENAME_TEMPLATE
     assert (
-        _migrate_filename_template('{disc_track} - {artist} - {title}')
+        migrate_filename_template('{disc_track} - {artist} - {title}')
         == '{disc_track} - {artist} - {title}'
     )
 
