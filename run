@@ -2,5 +2,21 @@
 # Run ready2rip from this source tree. No Meson build directory required.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-export PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
-exec python3 -m ready2rip.main "$@"
+
+# Drop AppImage / portable-env pollution so we use the host stack.
+unset PYTHONHOME APPDIR APPIMAGE OWD 2>/dev/null || true
+export PYTHONPATH="${ROOT}/src"
+export PATH="/usr/bin:/bin"
+
+# An extracted AppImage may leave GI_TYPELIB_PATH pointing at its typelibs.
+case "${GI_TYPELIB_PATH:-}" in
+  *AppImage*|*squashfs-root*) unset GI_TYPELIB_PATH ;;
+esac
+
+if [[ -x /usr/bin/python3 ]]; then
+  PYTHON=/usr/bin/python3
+else
+  PYTHON=python3
+fi
+
+exec "$PYTHON" -m ready2rip.main "$@"

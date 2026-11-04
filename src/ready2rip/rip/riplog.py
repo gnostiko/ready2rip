@@ -252,7 +252,7 @@ class RipLog:
         )
         lines.append(
             'Gap handling                                : '
-            'INDEX 00 merged into previous track (EAC default / noncompliant); '
+            'INDEX 00 merged into previous track; '
             'standard 2s track-1 pause as PREGAP unless HTOA; '
             'longer non-silent HTOA → track 00; track 1 never includes INDEX 00'
         )

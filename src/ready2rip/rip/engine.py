@@ -64,6 +64,7 @@ from ready2rip.rip.secure import (
     burst_paranoia_flags,
     secure_paranoia_flags,
 )
+from ready2rip.tags.artists import DEFAULT_ARTIST_STYLE
 from ready2rip.tags.writer import TagWriter
 from ready2rip.util import find_cdparanoia, validate_device_path
 
@@ -126,6 +127,7 @@ class RipJob:
     album: AlbumMetadata | None = None
     filename_template: str = DEFAULT_FILENAME_TEMPLATE
     album_folder_template: str = DEFAULT_ALBUM_FOLDER_TEMPLATE
+    artist_style: str = DEFAULT_ARTIST_STYLE
     save_cover_file: bool = True
     verify_accuraterip: bool = True
     verify_ctdb: bool = True
@@ -1242,6 +1244,7 @@ class RipEngine:
             album=job.album,
             track_number=max(1, track_number),
             extension=enc_ext,
+            artist_style=job.artist_style,
         )
         if filename:
             stem = Path(filename).name
@@ -1319,6 +1322,7 @@ class RipEngine:
                     job.album,
                     track_number,
                     total_tracks=total_for_tags or None,
+                    artist_style=job.artist_style,
                 )
                 if retitle:
                     _retag_title(
@@ -2300,6 +2304,7 @@ class RipEngine:
             album=job.album,
             track_number=1,
             extension=ext,
+            artist_style=job.artist_style,
         )
         try:
             album_dir.mkdir(parents=True, exist_ok=True)

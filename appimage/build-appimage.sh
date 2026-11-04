@@ -198,8 +198,9 @@ REQUIRED_TYPELIBS=(
 )
 # Optional but useful on Wayland/X11 hosts
 OPTIONAL_TYPELIBS=(
-  # Ubuntu 22.04 ships GIRepository-2.0; newer distros often have 3.0 only.
-  GIRepository-2.0 GIRepository-3.0
+  # PyGObject ≥3.52 uses GIRepository-3.0 (libgirepository-2.0).
+  # Keep 2.0 optional for older build hosts.
+  GIRepository-3.0 GIRepository-2.0
   GdkWayland-4.0 GdkX11-4.0
   Soup-3.0 Soup-2.4 Json-1.0
 )
@@ -232,10 +233,10 @@ done
 for t in "${OPTIONAL_TYPELIBS[@]}"; do
   copy_typelib "$t" 0 || true
 done
-# Need at least one GIRepository typelib (2.0 on Jammy, 3.0 on newer hosts).
-if [ ! -f "${APPDIR}/usr/lib/girepository-1.0/GIRepository-2.0.typelib" ] \
-  && [ ! -f "${APPDIR}/usr/lib/girepository-1.0/GIRepository-3.0.typelib" ]; then
-  echo "error: missing GIRepository-2.0/3.0.typelib (install gobject-introspection)" >&2
+# Need GIRepository-3.0 (current) or 2.0 (older hosts).
+if [ ! -f "${APPDIR}/usr/lib/girepository-1.0/GIRepository-3.0.typelib" ] \
+  && [ ! -f "${APPDIR}/usr/lib/girepository-1.0/GIRepository-2.0.typelib" ]; then
+  echo "error: missing GIRepository-3.0.typelib (install gir1.2-girepository-3.0)" >&2
   exit 1
 fi
 

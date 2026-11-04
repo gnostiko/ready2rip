@@ -200,7 +200,7 @@ def parse_cd_text(raw: bytes) -> CdTextInfo:
         buckets[key].extend(pack[4:16])
 
     # Merge continuation packs that share type with increasing track seq —
-    # libcdio-style: NUL-separated strings in the concatenated stream, starting
+    # NUL-separated strings in the concatenated stream, starting
     # at the track number of the first pack for that type.
     by_type: dict[int, list[tuple[int, bytearray]]] = {}
     for ptype, track in order:

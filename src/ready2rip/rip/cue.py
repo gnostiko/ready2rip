@@ -53,8 +53,8 @@ def build_cue_tracks(
     track-1 boundary — HTOA layout in a single image.
 
     Inter-track INDEX 00 is placed at ``start - pregap`` when that sector is
-    inside the image (cyanrip/EAC noncompliant: gaps merged into previous).
-    A standard track-1 pause that is not in the file is emitted as PREGAP.
+    inside the image (gaps merged into the previous track). A standard track-1
+    pause that is not in the file is emitted as PREGAP.
     """
     album_artist = (album.artist if album else '') or 'Unknown Artist'
     tracks: list[CueTrack] = []
@@ -168,10 +168,9 @@ def write_multi_file_cue_sheet(
 
     Each audio track is its own ``FILE`` with ``INDEX 01 00:00:00``. cdparanoia
     already extracts INDEX 01 → next INDEX 01, so the next track's INDEX 00
-    lives at the tail of the previous file (EAC/cyanrip noncompliant). A
-    standard 2s track-1 pause that is not stored is ``PREGAP``. Optional
-    *htoa_file* is linked as track 01 ``INDEX 00``. Data tracks are raw
-    BINARY files in TOC order.
+    lives at the tail of the previous file. A standard 2s track-1 pause that
+    is not stored is ``PREGAP``. Optional *htoa_file* is linked as track 01
+    ``INDEX 00``. Data tracks are raw BINARY files in TOC order.
     """
     lines = _cue_header(
         album,
@@ -381,8 +380,7 @@ def _multi_comment(
     has_gaps = bool(disc and any(t.pregap_sectors for t in disc.tracks))
     if has_gaps:
         comment = (
-            'ready2rip — Multiple files with gaps appended to previous '
-            '(EAC default / noncompliant)'
+            'ready2rip — Multiple files with gaps appended to previous track'
         )
     else:
         comment = 'ready2rip — Multiple files with left-out gaps (secure rip)'

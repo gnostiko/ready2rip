@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """AccurateRip disc IDs, CRC v1/v2, and database verification.
 
-Algorithm and binary DB layout follow open implementations (ARver / whipper),
-which implement the AccurateRip protocol described on Hydrogenaudio.
+Computes disc identifiers and track CRCs, then looks up and compares them
+against the AccurateRip database.
 """
 
 from __future__ import annotations
@@ -114,7 +114,7 @@ def disc_ids_from_info(info: DiscInfo) -> AccurateRipDiscIds | None:
     if not info.tracks:
         return None
 
-    # MusicBrainz/AR style: LBA + 150 pregap frames for absolute offsets.
+    # Absolute CD offsets: LBA + 150 pregap frames.
     pregap = 150
     audio_offsets_lba = [t.start_sector + pregap for t in info.tracks]
     last = info.tracks[-1]
@@ -286,8 +286,7 @@ def compute_checksums_samples(
     if n < _SKIP_FRAMES * 2:
         raise ValueError('Audio too short for AccurateRip')
 
-    # Match whipper/accuraterip-checksum.c: MulBy starts at 1; skip window
-    # uses 0-based bounds then compares to MulBy.
+    # MulBy starts at 1; the skip window uses 0-based bounds then compares to MulBy.
     check_from = 0
     check_to = n
     if track_number == 1:

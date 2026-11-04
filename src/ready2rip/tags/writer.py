@@ -9,7 +9,17 @@ from pathlib import Path
 
 from ready2rip.metadata.providers import AlbumMetadata
 from ready2rip.paths import track_meta_for
-from ready2rip.tags.artists import normalize_artists, split_artists
+from ready2rip.tags.artists import (
+    ARTIST_STYLE_FEAT,
+    ARTIST_STYLE_SLASH,
+    DEFAULT_ARTIST_STYLE,
+    format_artists,
+    format_title_with_artists,
+    normalize_artist_style,
+    normalize_artists,
+    primary_artist,
+    split_artists,
+)
 from ready2rip.util import normalize_release_date
 
 log = logging.getLogger(__name__)
@@ -33,18 +43,35 @@ class TagWriter:
         track_number: int,
         *,
         total_tracks: int | None = None,
+        artist_style: str | None = DEFAULT_ARTIST_STYLE,
     ) -> None:
         suffix = path.suffix.lower()
+        style = normalize_artist_style(artist_style)
         track = track_meta_for(album, track_number)
-        title = track.title if track and track.title else f'Track {track_number:02d}'
-        # Multi-artist: "A; B; C" (dBpoweramp-style) → multi-value tags on write.
-        artist = normalize_artists(
+        raw_title = (
+            track.title if track and track.title else f'Track {track_number:02d}'
+        )
+        # Multi-artist stored as "A; B; C" in metadata strings.
+        raw_artist = normalize_artists(
             (track.artist if track and track.artist else None)
             or album.artist
             or 'Unknown Artist'
         )
         album_title = album.title or 'Unknown Album'
-        album_artist = normalize_artists(album.artist or artist)
+        raw_album_artist = normalize_artists(album.artist or raw_artist)
+
+        if style == ARTIST_STYLE_FEAT:
+            title = format_title_with_artists(raw_title, raw_artist, style)
+            artist = primary_artist(raw_artist) or raw_artist
+            album_artist = primary_artist(raw_album_artist) or raw_album_artist
+        elif style == ARTIST_STYLE_SLASH:
+            title = raw_title
+            artist = format_artists(raw_artist, style)
+            album_artist = format_artists(raw_album_artist, style)
+        else:
+            title = raw_title
+            artist = raw_artist
+            album_artist = raw_album_artist
         # Keep full YYYY-MM-DD when available (not year-only).
         date = normalize_release_date(album.date or '')
         total = total_tracks if total_tracks is not None else (
@@ -321,7 +348,7 @@ class TagWriter:
         track_meta=None,
     ) -> None:
         audio['TITLE'] = [title]
-        # Multi-value ARTIST / ALBUMARTIST (one field per name), like dBpoweramp.
+        # Multi-value ARTIST / ALBUMARTIST (one field per name).
         audio['ARTIST'] = split_artists(artist) or [artist or 'Unknown Artist']
         audio['ALBUM'] = [album]
         audio['ALBUMARTIST'] = (
@@ -329,7 +356,7 @@ class TagWriter:
         )
         if date:
             audio['DATE'] = [date]
-            # Picard-compatible: ORIGINALDATE also carries full precision.
+            # ORIGINALDATE keeps the full release date when DATE is year-only elsewhere.
             audio['ORIGINALDATE'] = [date]
         if total_tracks:
             audio['TRACKNUMBER'] = [f'{track_number}/{total_tracks}']

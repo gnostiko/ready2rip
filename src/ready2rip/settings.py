@@ -15,6 +15,10 @@ from ready2rip.paths import (
     DEFAULT_ALBUM_FOLDER_TEMPLATE,
     DEFAULT_FILENAME_TEMPLATE,
 )
+from ready2rip.tags.artists import (
+    DEFAULT_ARTIST_STYLE,
+    normalize_artist_style,
+)
 
 log = logging.getLogger(__name__)
 
@@ -22,11 +26,11 @@ SCHEMA_ID = 'org.ready2rip.Ready2Rip'
 _SCHEMA_XML = 'org.ready2rip.Ready2Rip.gschema.xml'
 
 ENCODERS = (
-    ('flac', 'FLAC (lossless)'),
-    ('mp3', 'MP3'),
-    ('aac', 'AAC (M4A)'),
-    ('opus', 'Opus'),
     ('wav', 'WAV (uncompressed)'),
+    ('flac', 'FLAC (lossless)'),
+    ('opus', 'Opus'),
+    ('aac', 'M4A'),
+    ('mp3', 'MP3'),
 )
 
 ENCODER_IDS = frozenset(e[0] for e in ENCODERS)
@@ -44,7 +48,7 @@ FLAC_LEVELS = (
     (8, '8 (smallest)'),
 )
 
-# LAME presets: VBR (-V n) and CBR (-b n). Default V0 matches common archival rips.
+# LAME presets: VBR (-V n) and CBR (-b n). Default is V0.
 MP3_QUALITIES = (
     ('v0', 'V0 (VBR)'),
     ('v1', 'V1 (VBR)'),
@@ -170,19 +174,36 @@ _ARTWORK_SIZE_ALIASES = {
     720: 800,
 }
 
-# Re-exported for callers; canonical definitions live in ready2rip.paths.
-_LEGACY_ALBUM_FOLDER_TEMPLATES = {
-    '{album_artist}/{album}/{disc_folder}',
-    '{album_artist}/{album}',
-    '{album_artist}/({date}) - {album}/{disc_folder}',
+# Prior *defaults* that should become the current dated-album folder default.
+_LEGACY_DEFAULT_FOLDER_TEMPLATES = {
     '{album_artist}/({date}) - {album}',
+    '{album_artist}/({date}) - {album}/{disc_folder}',
+    '{album_artist}/{dated_album}/{disc_folder}',
 }
 
 
 def _migrate_album_folder_template(template: str | None) -> str:
     text = (template or '').strip()
-    if not text or text in _LEGACY_ALBUM_FOLDER_TEMPLATES:
+    if not text:
         return DEFAULT_ALBUM_FOLDER_TEMPLATE
+    # Drop trailing disc subfolders from presets; disc belongs in the filename.
+    if text.endswith('/{disc_folder}'):
+        text = text[: -len('/{disc_folder}')].rstrip('/')
+    if not text or text in _LEGACY_DEFAULT_FOLDER_TEMPLATES:
+        return DEFAULT_ALBUM_FOLDER_TEMPLATE
+    return text
+
+
+# Prior filename default (no multi-disc prefix) → current {disc_track} default.
+_LEGACY_DEFAULT_FILENAME_TEMPLATES = {
+    '{track:02d} - {title}',
+}
+
+
+def _migrate_filename_template(template: str | None) -> str:
+    text = (template or '').strip()
+    if not text or text in _LEGACY_DEFAULT_FILENAME_TEMPLATES:
+        return DEFAULT_FILENAME_TEMPLATE
     return text
 
 
@@ -291,8 +312,11 @@ class AppSettings:
     use_freedb: bool = True
     auto_lookup_metadata: bool = True
     filename_template: str = DEFAULT_FILENAME_TEMPLATE
-    # {disc_folder} expands to CD1, CD2, … only when total discs > 1.
+    # Multi-disc numbering belongs in the filename ({disc_track}); {disc_folder}
+    # is only for Custom folder templates (CD1, CD2, …).
     album_folder_template: str = DEFAULT_ALBUM_FOLDER_TEMPLATE
+    # How multi-artist strings appear in filenames/tags: semicolon | slash | feat.
+    artist_style: str = DEFAULT_ARTIST_STYLE
     verify_accuraterip: bool = True
     verify_ctdb: bool = True
     submit_ctdb: bool = False
@@ -436,10 +460,14 @@ class SettingsStore:
                 use_musicbrainz=s.get_boolean('use-musicbrainz'),
                 use_freedb=s.get_boolean('use-freedb'),
                 auto_lookup_metadata=s.get_boolean('auto-lookup-metadata'),
-                filename_template=s.get_string('filename-template')
-                or DEFAULT_FILENAME_TEMPLATE,
+                filename_template=_migrate_filename_template(
+                    s.get_string('filename-template')
+                ),
                 album_folder_template=_migrate_album_folder_template(
                     s.get_string('album-folder-template')
+                ),
+                artist_style=normalize_artist_style(
+                    _get_string(s, 'artist-style', DEFAULT_ARTIST_STYLE)
                 ),
                 verify_accuraterip=s.get_boolean('verify-accuraterip'),
                 verify_ctdb=_get_bool(s, 'verify-ctdb', True),
@@ -461,11 +489,14 @@ class SettingsStore:
         if not snap.output_directory.strip():
             snap.output_directory = default_output_directory()
 
-        # Persist album-folder default if the stored template was the old one.
+        # Persist migrated naming defaults when the stored template was legacy.
         if s is not None:
             stored_folder = (s.get_string('album-folder-template') or '').strip()
             if snap.album_folder_template != stored_folder:
                 s.set_string('album-folder-template', snap.album_folder_template)
+            stored_name = (s.get_string('filename-template') or '').strip()
+            if snap.filename_template != stored_name:
+                s.set_string('filename-template', snap.filename_template)
 
         # Migrate removed artwork size presets (e.g. 720 → 800).
         allowed = {px for px, _label in ARTWORK_SIZES}
@@ -507,6 +538,7 @@ class SettingsStore:
             'auto_lookup_metadata': ('auto-lookup-metadata', 'bool'),
             'filename_template': ('filename-template', 'string'),
             'album_folder_template': ('album-folder-template', 'string'),
+            'artist_style': ('artist-style', 'string'),
             'verify_accuraterip': ('verify-accuraterip', 'bool'),
             'verify_ctdb': ('verify-ctdb', 'bool'),
             'submit_ctdb': ('submit-ctdb', 'bool'),
@@ -545,6 +577,9 @@ class SettingsStore:
                             s.set_int('aac-bitrate', int(value[3:]))
                         except Exception:
                             pass
+                elif attr == 'artist_style':
+                    value = normalize_artist_style(str(value))
+                    current = replace(current, artist_style=value)
                 s.set_string(gkey, str(value))
             elif kind == 'int':
                 s.set_int(gkey, int(value))

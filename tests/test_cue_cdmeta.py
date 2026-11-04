@@ -22,7 +22,7 @@ def _disc_with_gap() -> DiscInfo:
 
 
 def test_multi_file_cue_uses_index00_for_intertrack_gap(tmp_path: Path) -> None:
-    """EAC-style multi-file CUE: next-track INDEX 00 lives in the previous FILE."""
+    """Multi-file CUE: next-track INDEX 00 lives in the previous FILE."""
     disc = _disc_with_gap()
     t1 = tmp_path / '01.flac'
     t2 = tmp_path / '02.flac'

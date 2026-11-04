@@ -26,10 +26,22 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-11-02">
+    <release version="@APPLICATION_VERSION@" date="2026-11-03">
       <description>
         <p>
-          0.4.13: Rework sample-offset detection popup, grow cover art
+          0.4.14: Multi-artist save styles (semicolon, slash, feat.),
+          multi-disc-safe default filenames ({disc_track}), leaner
+          naming presets with hover hints, and Custom templates that
+          stay empty until Custom is chosen. Encoder list order
+          WAV→FLAC→Opus→M4A→MP3; AppImage GIRepository 3.0 and ./run
+          host-Python fixes.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.13" date="2026-11-02">
+      <description>
+        <p>
+          Rework sample-offset detection popup, grow cover art
           to match the Album block, defer metadata until setup finishes,
           and remove the top lookup progress bar. Snappier disc and
           tray updates; ready2rip branding in UI copy.

@@ -5,8 +5,8 @@ The ripped PCM is passed through unchanged: no gain, EQ, fade, channel remix,
 or forced resample flags. Compression uses stock quality presets only.
 
   * FLAC — reference ``flac`` CLI; compression level only (lossless).
-  * MP3  — LAME ``-V n`` / ``-b n`` (Hydrogenaudio-style); ``--noreplaygain``
-    so LAME does not write competing RG tags (we tag after encode).
+  * MP3  — LAME ``-V n`` / ``-b n``; ``--noreplaygain`` so LAME does not
+    write competing RG tags (we tag after encode).
   * AAC  — ffmpeg ``libfdk_aac`` when available (FDK VBR 1–5 / CBR), else
     native ``aac`` with the same preset names mapped to stock ``-b:a`` /
     approximate CBR for VBR. AAC-LC only; no HE-AAC, no custom filters.

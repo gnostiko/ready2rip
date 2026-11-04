@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Vendored Rijndael (AES-generalized) for EAC-compatible log checksums.
+"""Vendored Rijndael (AES-generalized) for rip-log checksums.
 
 Source: pprp 0.2.6 (https://github.com/dsoprea/RijndaelPbkdf), GPL-2.
 Authors: Bram Cohen; Trevor Perrin (Python 3); packaging via pprp.
-Used only for Exact Audio Copy log signature compatibility.
 """
 
 # Authors:

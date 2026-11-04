@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""CTDB Reed-Solomon parity (Galois16) matching CUETools CDRepairEncode.
+"""CTDB Reed-Solomon parity over GF(2^16) (Galois16).
 
-Ported from CUETools.Parity (Galois / RsEncode / ParityToSyndrome) and the
-``CDRepairEncode`` / ``AccurateRipVerify`` encode path. LGPL/GPL-compatible
-with ready2rip's GPL-3.0.
+Builds parity and syndrome tables used when submitting or verifying CTDB
+entries. Licensed under terms compatible with ready2rip's GPL-3.0.
 """
 
 from __future__ import annotations
@@ -13,14 +12,14 @@ import zlib
 from array import array
 from dataclasses import dataclass
 
-# GF(2^16) primitive used by CUETools Galois16.
+# GF(2^16) primitive polynomial for CTDB Galois16.
 GALOIS16_POLYNOMIAL = 0x1100B
 GALOIS16_W = 16
 GALOIS16_MAX = (1 << GALOIS16_W) - 1
 
-# CUETools default CTDB stride (ushort units; stereo frame = 2 ushorts).
+# CTDB stride in ushort units (stereo frame = 2 ushorts).
 CTDB_STRIDE = 5880
-# Classic CTDB submit width (form ``parity`` field always uses 8).
+# CTDB submit width (form ``parity`` field always uses 8).
 CTDB_NPAR = 8
 
 
@@ -31,7 +30,7 @@ def _laststride_samples(total_samples: int, *, stride: int = CTDB_STRIDE) -> int
 
 
 class Galois16:
-    """Galois field GF(2^16) with CUETools polynomial ``0x1100B``."""
+    """Galois field GF(2^16) with primitive polynomial ``0x1100B``."""
 
     __slots__ = ("exp_tbl", "log_tbl", "max")
 
@@ -360,11 +359,11 @@ def syndrome_to_parity(syndrome: list[list[int]]) -> bytes:
 
 
 class CdRepairEncode:
-    """Streaming CDRepairEncode-compatible parity + disc CRC accumulator.
+    """Streaming CTDB parity + disc CRC accumulator.
 
     Feeds interleaved little-endian CDDA PCM (ushort samples). Skips the first
     stride of ushorts and the lead-out (``stride + laststride`` ushorts at the
-    end of the remaining region), matching CUETools.
+    end of the remaining region).
     """
 
     def __init__(

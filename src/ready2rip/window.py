@@ -51,7 +51,9 @@ from ready2rip.paths import (
     FILENAME_TEMPLATE_HELP,
     FOLDER_SCHEMES,
     FOLDER_TEMPLATE_HELP,
+    NamingScheme,
     scheme_index,
+    scheme_tooltip,
     track_meta_for,
 )
 from ready2rip.rip.engine import RipEngine, RipJob, RipProgress, RipResult, RipState
@@ -69,7 +71,7 @@ from ready2rip.settings import (
     opus_bitrate_label,
 )
 from ready2rip.setup_dialog import DriveSetupDialog
-from ready2rip.tags.artists import normalize_artists
+from ready2rip.tags.artists import ARTIST_STYLES, normalize_artist_style, normalize_artists
 from ready2rip.util import normalize_release_date, parse_disc_field, validate_device_path
 from ready2rip.window_styles import banner_fill_css, install_window_styles
 
@@ -203,6 +205,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._track_artist_button: Gtk.Button | None = None
         self._track_select_all: Gtk.CheckButton | None = None
         self._syncing_select_all = False
+        self._naming_scheme_factories: list[Gtk.SignalListItemFactory] = []
+        # Last Custom templates (kept when switching to presets; restored on Custom).
+        self._custom_album_folder_template = ''
+        self._custom_filename_template = ''
         # Lead (#) and Time stay locked; Title|Artist use a fixed 50/50 grid
         # so column headers do not drift when the window is resized.
         self._track_lead_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
@@ -899,50 +905,69 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._output_row.add_suffix(folder_btn)
         self._add_option_row(self._output_row, self.files_group)
 
+        # Build both scheme UIs before connecting handlers so load/sync cannot
+        # touch a row that does not exist yet.
         self._folder_scheme_row = Adw.ComboRow(title='Album folder scheme')
-        self._folder_scheme_row.set_model(
-            Gtk.StringList.new([s.label for s in FOLDER_SCHEMES])
+        self._folder_template_row = Adw.EntryRow(title='Album folder template')
+        self._folder_template_row.set_tooltip_text(FOLDER_TEMPLATE_HELP)
+        self._filename_scheme_row = Adw.ComboRow(title='Track filename scheme')
+        self._filename_row = Adw.EntryRow(title='Track filename template')
+        self._filename_row.set_tooltip_text(FILENAME_TEMPLATE_HELP)
+
+        self._bind_naming_scheme_combo(
+            self._folder_scheme_row,
+            FOLDER_SCHEMES,
+            settings.album_folder_template,
+            entry=self._folder_template_row,
+            custom_attr='_custom_album_folder_template',
+            default_template=DEFAULT_ALBUM_FOLDER_TEMPLATE,
         )
-        self._folder_scheme_row.set_selected(
-            scheme_index(FOLDER_SCHEMES, settings.album_folder_template)
+        self._bind_naming_scheme_combo(
+            self._filename_scheme_row,
+            FILENAME_SCHEMES,
+            settings.filename_template,
+            entry=self._filename_row,
+            custom_attr='_custom_filename_template',
+            default_template=DEFAULT_FILENAME_TEMPLATE,
         )
-        self._folder_scheme_row.set_tooltip_text(
-            'Folder layout under the output folder. Custom unlocks the template.'
-        )
+
         self._folder_scheme_row.connect(
             'notify::selected', self._on_folder_scheme_changed
         )
-        self._add_option_row(self._folder_scheme_row, self.files_group)
-
-        self._folder_template_row = Adw.EntryRow(title='Album folder template')
-        self._folder_template_row.set_text(settings.album_folder_template)
-        self._folder_template_row.set_tooltip_text(FOLDER_TEMPLATE_HELP)
         self._folder_template_row.connect(
             'changed', self._on_folder_template_changed
-        )
-        self._add_option_row(self._folder_template_row, self.files_group)
-
-        self._filename_scheme_row = Adw.ComboRow(title='Track filename scheme')
-        self._filename_scheme_row.set_model(
-            Gtk.StringList.new([s.label for s in FILENAME_SCHEMES])
-        )
-        self._filename_scheme_row.set_selected(
-            scheme_index(FILENAME_SCHEMES, settings.filename_template)
-        )
-        self._filename_scheme_row.set_tooltip_text(
-            'Track file naming. Custom unlocks the template.'
         )
         self._filename_scheme_row.connect(
             'notify::selected', self._on_filename_scheme_changed
         )
-        self._add_option_row(self._filename_scheme_row, self.files_group)
-
-        self._filename_row = Adw.EntryRow(title='Track filename template')
-        self._filename_row.set_text(settings.filename_template)
-        self._filename_row.set_tooltip_text(FILENAME_TEMPLATE_HELP)
         self._filename_row.connect('changed', self._on_filename_changed)
+
+        self._add_option_row(self._folder_scheme_row, self.files_group)
+        self._add_option_row(self._folder_template_row, self.files_group)
+        self._add_option_row(self._filename_scheme_row, self.files_group)
         self._add_option_row(self._filename_row, self.files_group)
         self._sync_naming_template_sensitivity()
+
+        self._artist_style_row = Adw.ComboRow(title='Multiple artists')
+        self._artist_style_row.set_model(
+            Gtk.StringList.new([label for _sid, label in ARTIST_STYLES])
+        )
+        style_ids = [sid for sid, _label in ARTIST_STYLES]
+        try:
+            self._artist_style_row.set_selected(
+                style_ids.index(normalize_artist_style(settings.artist_style))
+            )
+        except ValueError:
+            self._artist_style_row.set_selected(0)
+        self._artist_style_row.set_tooltip_text(
+            'How multiple artists appear in filenames and tags. '
+            'feat. puts guests on the title '
+            '(Track feat. Guest & Other) and keeps the primary artist.'
+        )
+        self._artist_style_row.connect(
+            'notify::selected', self._on_artist_style_changed
+        )
+        self._add_option_row(self._artist_style_row, self.files_group)
 
         # —— Ripping page: extraction ——
         self._test_copy_row = Adw.SwitchRow(
@@ -1162,6 +1187,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             (self._folder_template_row, self._on_folder_template_changed),
             (self._filename_scheme_row, self._on_filename_scheme_changed),
             (self._filename_row, self._on_filename_changed),
+            (self._artist_style_row, self._on_artist_style_changed),
             (self._encoder_row, self._on_encoder_changed),
             (self._quality_row, self._on_quality_changed),
             (self._offset_row, self._on_offset_changed),
@@ -1192,14 +1218,29 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         try:
             self._output_row.set_text(settings.output_directory or default_out)
             self._device_row.set_text(settings.device or '/dev/sr0')
-            self._folder_template_row.set_text(settings.album_folder_template)
-            self._folder_scheme_row.set_selected(
-                scheme_index(FOLDER_SCHEMES, settings.album_folder_template)
+            self._load_naming_scheme_state(
+                FOLDER_SCHEMES,
+                settings.album_folder_template,
+                combo=self._folder_scheme_row,
+                entry=self._folder_template_row,
+                custom_attr='_custom_album_folder_template',
+                default_template=DEFAULT_ALBUM_FOLDER_TEMPLATE,
             )
-            self._filename_row.set_text(settings.filename_template)
-            self._filename_scheme_row.set_selected(
-                scheme_index(FILENAME_SCHEMES, settings.filename_template)
+            self._load_naming_scheme_state(
+                FILENAME_SCHEMES,
+                settings.filename_template,
+                combo=self._filename_scheme_row,
+                entry=self._filename_row,
+                custom_attr='_custom_filename_template',
+                default_template=DEFAULT_FILENAME_TEMPLATE,
             )
+            style_ids = [sid for sid, _label in ARTIST_STYLES]
+            try:
+                self._artist_style_row.set_selected(
+                    style_ids.index(normalize_artist_style(settings.artist_style))
+                )
+            except ValueError:
+                self._artist_style_row.set_selected(0)
             self._sync_naming_template_sensitivity()
             try:
                 self._encoder_row.set_selected(ids.index(settings.encode_format))
@@ -1401,89 +1442,238 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         # Full TOC probe off the UI thread when the user changes the device path.
         self._refresh_disc(from_monitor=False)
 
+    def _bind_naming_scheme_combo(
+        self,
+        row: Adw.ComboRow,
+        schemes: tuple[NamingScheme, ...],
+        current_template: str,
+        *,
+        entry: Adw.EntryRow,
+        custom_attr: str,
+        default_template: str,
+    ) -> None:
+        """Wire the scheme dropdown (default display) and popup hover hints."""
+        row.set_model(Gtk.StringList.new([s.label for s in schemes]))
+        # Keep the default factory so the chosen preset label shows in the row.
+        # list_factory only customizes popup items (tooltips).
+        list_factory = Gtk.SignalListItemFactory()
+
+        def on_setup(_factory: Gtk.SignalListItemFactory, list_item: Gtk.ListItem) -> None:
+            label = Gtk.Label(xalign=0.0)
+            label.set_ellipsize(Pango.EllipsizeMode.END)
+            label.set_hexpand(True)
+            list_item.set_child(label)
+
+        def on_bind(_factory: Gtk.SignalListItemFactory, list_item: Gtk.ListItem) -> None:
+            label = list_item.get_child()
+            if not isinstance(label, Gtk.Label):
+                return
+            pos = int(list_item.get_position())
+            if not (0 <= pos < len(schemes)):
+                return
+            scheme = schemes[pos]
+            label.set_label(scheme.label)
+            label.set_tooltip_text(scheme_tooltip(scheme))
+
+        list_factory.connect('setup', on_setup)
+        list_factory.connect('bind', on_bind)
+        row.set_list_factory(list_factory)
+        self._naming_scheme_factories.append(list_factory)
+
+        self._load_naming_scheme_state(
+            schemes,
+            current_template,
+            combo=row,
+            entry=entry,
+            custom_attr=custom_attr,
+            default_template=default_template,
+        )
+
+    def _load_naming_scheme_state(
+        self,
+        schemes: tuple[NamingScheme, ...],
+        template: str,
+        *,
+        combo: Adw.ComboRow,
+        entry: Adw.EntryRow,
+        custom_attr: str,
+        default_template: str,
+    ) -> None:
+        """Select the matching preset (or Custom). Custom entry stays empty for presets."""
+        text = (template or '').strip() or default_template
+        idx = scheme_index(schemes, text)
+        combo.set_selected(idx)
+        if schemes[idx].id == 'custom':
+            setattr(self, custom_attr, text)
+            entry.set_text(text)
+        else:
+            # Preset chosen — leave the Custom template field blank.
+            entry.set_text('')
+        self._sync_naming_scheme_row_tooltip(combo, schemes)
+
+    @staticmethod
+    def _sync_naming_scheme_row_tooltip(
+        row: Adw.ComboRow,
+        schemes: tuple[NamingScheme, ...],
+    ) -> None:
+        idx = row.get_selected()
+        if 0 <= idx < len(schemes):
+            row.set_tooltip_text(scheme_tooltip(schemes[idx]))
+        else:
+            row.set_tooltip_text(None)
+
     def _sync_naming_template_sensitivity(self) -> None:
         """Template entries are editable only while Scheme is Custom."""
-        folder_idx = self._folder_scheme_row.get_selected()
+        folder_row = getattr(self, '_folder_scheme_row', None)
+        folder_entry = getattr(self, '_folder_template_row', None)
+        file_row = getattr(self, '_filename_scheme_row', None)
+        file_entry = getattr(self, '_filename_row', None)
+        if None in (folder_row, folder_entry, file_row, file_entry):
+            return
+
+        folder_idx = folder_row.get_selected()
         folder_custom = (
             0 <= folder_idx < len(FOLDER_SCHEMES)
             and FOLDER_SCHEMES[folder_idx].id == 'custom'
         )
-        self._folder_template_row.set_sensitive(folder_custom)
+        folder_entry.set_sensitive(folder_custom)
+        if not folder_custom and folder_entry.get_text():
+            self._with_handler_blocked(
+                folder_entry,
+                self._on_folder_template_changed,
+                lambda: folder_entry.set_text(''),
+            )
 
-        file_idx = self._filename_scheme_row.get_selected()
+        file_idx = file_row.get_selected()
         file_custom = (
             0 <= file_idx < len(FILENAME_SCHEMES)
             and FILENAME_SCHEMES[file_idx].id == 'custom'
         )
-        self._filename_row.set_sensitive(file_custom)
+        file_entry.set_sensitive(file_custom)
+        if not file_custom and file_entry.get_text():
+            self._with_handler_blocked(
+                file_entry,
+                self._on_filename_changed,
+                lambda: file_entry.set_text(''),
+            )
+        self._sync_naming_scheme_row_tooltip(folder_row, FOLDER_SCHEMES)
+        self._sync_naming_scheme_row_tooltip(file_row, FILENAME_SCHEMES)
+
+    @staticmethod
+    def _with_handler_blocked(widget: Gtk.Widget, handler, fn) -> None:
+        widget.handler_block_by_func(handler)
+        try:
+            fn()
+        finally:
+            widget.handler_unblock_by_func(handler)
+
+    def _apply_naming_scheme_selection(
+        self,
+        *,
+        schemes: tuple[NamingScheme, ...],
+        combo: Adw.ComboRow,
+        combo_handler,
+        entry: Adw.EntryRow,
+        entry_handler,
+        store_key: str,
+        custom_attr: str,
+        default_template: str,
+    ) -> None:
+        idx = combo.get_selected()
+        if not (0 <= idx < len(schemes)):
+            return
+        scheme = schemes[idx]
+
+        if scheme.id == 'custom':
+            # Show the remembered Custom text (often empty until the user types).
+            remembered = (getattr(self, custom_attr) or '').strip()
+            self._with_handler_blocked(
+                entry, entry_handler, lambda: entry.set_text(remembered)
+            )
+            self.store.update(
+                **{store_key: remembered or default_template}
+            )
+        else:
+            # Preset: save its template; keep the Custom field empty.
+            self._with_handler_blocked(
+                entry, entry_handler, lambda: entry.set_text('')
+            )
+            self.store.update(**{store_key: scheme.template})
+
+        # Re-assert selection so the dropdown shows the chosen preset.
+        if combo.get_selected() != idx:
+            self._with_handler_blocked(
+                combo, combo_handler, lambda: combo.set_selected(idx)
+            )
+        self._sync_naming_template_sensitivity()
+
+    def _apply_naming_template_edit(
+        self,
+        *,
+        schemes: tuple[NamingScheme, ...],
+        combo: Adw.ComboRow,
+        text: str,
+        store_key: str,
+        custom_attr: str,
+        default_template: str,
+    ) -> None:
+        """Save Custom edits; stay on Custom even if text matches a preset."""
+        idx = combo.get_selected()
+        on_custom = 0 <= idx < len(schemes) and schemes[idx].id == 'custom'
+        if not on_custom:
+            return
+        setattr(self, custom_attr, text)
+        self.store.update(**{store_key: text or default_template})
+        self._sync_naming_template_sensitivity()
 
     def _on_folder_scheme_changed(self, row: Adw.ComboRow, *_args) -> None:
-        idx = row.get_selected()
-        if not (0 <= idx < len(FOLDER_SCHEMES)):
-            return
-        scheme = FOLDER_SCHEMES[idx]
-        if scheme.id != 'custom' and scheme.template:
-            if self._folder_template_row.get_text().strip() != scheme.template:
-                self._folder_template_row.handler_block_by_func(
-                    self._on_folder_template_changed
-                )
-                try:
-                    self._folder_template_row.set_text(scheme.template)
-                finally:
-                    self._folder_template_row.handler_unblock_by_func(
-                        self._on_folder_template_changed
-                    )
-                self.store.update(album_folder_template=scheme.template)
-        self._sync_naming_template_sensitivity()
+        self._apply_naming_scheme_selection(
+            schemes=FOLDER_SCHEMES,
+            combo=row,
+            combo_handler=self._on_folder_scheme_changed,
+            entry=self._folder_template_row,
+            entry_handler=self._on_folder_template_changed,
+            store_key='album_folder_template',
+            custom_attr='_custom_album_folder_template',
+            default_template=DEFAULT_ALBUM_FOLDER_TEMPLATE,
+        )
 
     def _on_folder_template_changed(self, row: Adw.EntryRow) -> None:
-        text = row.get_text().strip() or DEFAULT_ALBUM_FOLDER_TEMPLATE
-        self.store.update(album_folder_template=text)
-        idx = scheme_index(FOLDER_SCHEMES, text)
-        if self._folder_scheme_row.get_selected() != idx:
-            self._folder_scheme_row.handler_block_by_func(
-                self._on_folder_scheme_changed
-            )
-            try:
-                self._folder_scheme_row.set_selected(idx)
-            finally:
-                self._folder_scheme_row.handler_unblock_by_func(
-                    self._on_folder_scheme_changed
-                )
-        self._sync_naming_template_sensitivity()
+        self._apply_naming_template_edit(
+            schemes=FOLDER_SCHEMES,
+            combo=self._folder_scheme_row,
+            text=row.get_text().strip(),
+            store_key='album_folder_template',
+            custom_attr='_custom_album_folder_template',
+            default_template=DEFAULT_ALBUM_FOLDER_TEMPLATE,
+        )
 
     def _on_filename_scheme_changed(self, row: Adw.ComboRow, *_args) -> None:
-        idx = row.get_selected()
-        if not (0 <= idx < len(FILENAME_SCHEMES)):
-            return
-        scheme = FILENAME_SCHEMES[idx]
-        if scheme.id != 'custom' and scheme.template:
-            if self._filename_row.get_text().strip() != scheme.template:
-                self._filename_row.handler_block_by_func(self._on_filename_changed)
-                try:
-                    self._filename_row.set_text(scheme.template)
-                finally:
-                    self._filename_row.handler_unblock_by_func(
-                        self._on_filename_changed
-                    )
-                self.store.update(filename_template=scheme.template)
-        self._sync_naming_template_sensitivity()
+        self._apply_naming_scheme_selection(
+            schemes=FILENAME_SCHEMES,
+            combo=row,
+            combo_handler=self._on_filename_scheme_changed,
+            entry=self._filename_row,
+            entry_handler=self._on_filename_changed,
+            store_key='filename_template',
+            custom_attr='_custom_filename_template',
+            default_template=DEFAULT_FILENAME_TEMPLATE,
+        )
 
     def _on_filename_changed(self, row: Adw.EntryRow) -> None:
-        text = row.get_text().strip() or DEFAULT_FILENAME_TEMPLATE
-        self.store.update(filename_template=text)
-        idx = scheme_index(FILENAME_SCHEMES, text)
-        if self._filename_scheme_row.get_selected() != idx:
-            self._filename_scheme_row.handler_block_by_func(
-                self._on_filename_scheme_changed
-            )
-            try:
-                self._filename_scheme_row.set_selected(idx)
-            finally:
-                self._filename_scheme_row.handler_unblock_by_func(
-                    self._on_filename_scheme_changed
-                )
-        self._sync_naming_template_sensitivity()
+        self._apply_naming_template_edit(
+            schemes=FILENAME_SCHEMES,
+            combo=self._filename_scheme_row,
+            text=row.get_text().strip(),
+            store_key='filename_template',
+            custom_attr='_custom_filename_template',
+            default_template=DEFAULT_FILENAME_TEMPLATE,
+        )
+
+    def _on_artist_style_changed(self, row: Adw.ComboRow, *_args) -> None:
+        idx = row.get_selected()
+        if 0 <= idx < len(ARTIST_STYLES):
+            self.store.update(artist_style=ARTIST_STYLES[idx][0])
 
     def _on_encoder_changed(self, row: Adw.ComboRow, *_args) -> None:
         idx = row.get_selected()
@@ -1810,6 +2000,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             album=self._album,
             filename_template=settings.filename_template,
             album_folder_template=settings.album_folder_template,
+            artist_style=settings.artist_style,
             # Always write full-size cover into the album folder when we have art.
             save_cover_file=folder_art is not None,
             verify_accuraterip=settings.verify_accuraterip,

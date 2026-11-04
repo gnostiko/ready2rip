@@ -47,7 +47,7 @@ ready2rip aims for secure archival ripping on Linux via cdparanoia / libcdio-par
 | Error logging | Parses cdparanoia progress into quality / fixups / skips / suspicious positions |
 | Burst fallback | Off by default. Optional insecure `-Z` recovery after secure retries fail — noted in the log |
 
-**Copy image** mode rips one continuous disc image (FLAC/WAV) instead of per-track files; enable **Write CUE sheet** for a matching image CUE. Per-track rips use a multi-file CUE with INDEX 00 pregaps appended to the previous track (EAC-style). Mixed-mode and CD-Extra data tracks are saved as raw `.bin` files (MODE1/2352 or MODE2/2352).
+**Copy image** mode rips one continuous disc image (FLAC/WAV) instead of per-track files; enable **Write CUE sheet** for a matching image CUE. Per-track rips use a multi-file CUE with INDEX 00 pregaps appended to the previous track. Mixed-mode and CD-Extra data tracks are saved as raw `.bin` files (MODE1/2352 or MODE2/2352).
 
 ## Options
 
@@ -57,14 +57,14 @@ ready2rip aims for secure archival ripping on Linux via cdparanoia / libcdio-par
 |--------|-----------------|
 | **Optical device** | Usually `/dev/sr0` |
 | **Output folder** | `~/Music` |
-| **Album folder scheme** | Presets (default `Artist / (Date) - Album`) or Custom template — `{album_artist}`, `{dated_album}`, `{album}`, `{year}`, `{date}`, `{genre}`, `{label}`, `{disc_folder}`, … |
-| **Track filename scheme** | Presets (default `01 - Title`) or Custom — `{track:02d}`, `{title}`, `{artist}`, `{album}`, `{disc}`, … |
+| **Album folder scheme** | Few presets (default `Artist / (Date) - Album`) or Custom — hover a preset for the template; tokens include `{album_artist}`, `{dated_album}`, `{album}`, `{year}`, … |
+| **Track filename scheme** | Few presets (default `{disc_track} - {title}` → `01` or multi-disc `1-01`) or Custom — hover for the template; VA preset adds `{artist}` |
 
 ### Encoder
 
 | Option | Notes |
 |--------|-------|
-| **Encoder** | FLAC, MP3, AAC (M4A), Opus, or WAV |
+| **Encoder** | WAV, FLAC, Opus, M4A, or MP3 |
 | **FLAC compression** | 0 (fast) … 8 (smallest); default 5 |
 | **MP3 quality** | LAME V0–V5 (VBR) or 128–320 kbps CBR |
 | **AAC quality** | FDK VBR 1–5 or 128–320 kbps CBR (`libfdk_aac` when available) |
@@ -218,8 +218,8 @@ sudo dnf install python3-gobject gtk4 libadwaita python3-mutagen python3-pillow 
   cdparanoia flac lame ffmpeg opus-tools
 
 # Debian / Ubuntu
-sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 python3-mutagen python3-pil \
-  cdparanoia flac lame ffmpeg opus-tools
+sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-girepository-3.0 \
+  python3-mutagen python3-pil cdparanoia flac lame ffmpeg opus-tools
 ```
 
 ### Build host (AppImage packaging)
@@ -296,12 +296,6 @@ ready2rip/
   src/ready2rip/
   meson.build
 ```
-
-## Inspired by
-
-- [Exact Audio Copy](https://www.exactaudiocopy.de/)
-- [dBpoweramp](https://www.dbpoweramp.com/)
-- [cyanrip](https://github.com/cyanreg/cyanrip)
 
 ## License
 

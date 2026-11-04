@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""CUETools Database (CTDB) lookup, CRC verify, parity submit, and repair probe.
+"""CTDB lookup, CRC verify, parity submit, and repair probe.
 
-Protocol follows CUETools / fre:ac notes: colon-separated TOC lookup via
-``lookup2.php``, per-track CRC32 over raw CDDA PCM with first/last truncation
-matching ``CDRepairEncode.TrackCRC`` (stride 5880). New entries are submitted
-via ``submit2.php`` with Galois16 RS parity (npar=8) when confirm is impossible
-but rip quality is high.
+Uses colon-separated TOC lookup via ``lookup2.php``, per-track CRC32 over
+raw CDDA PCM with first/last truncation (stride 5880), and optional
+``submit2.php`` entries with Galois16 Reed-Solomon parity (npar=8) when a
+confirm is impossible but rip quality is high.
 """
 
 from __future__ import annotations
@@ -50,7 +49,7 @@ CTDB_SUBMIT_URLS = (
     "http://db.cuetools.net/submit2.php",
 )
 
-# CUETools default CTDB stride (samples are stereo frames = 4 bytes).
+# CTDB stride (samples are stereo frames = 4 bytes).
 CTDB_STRIDE = 5880
 
 # Re-export parity helpers used by tests / callers.
@@ -229,7 +228,7 @@ def total_audio_samples(info: DiscInfo) -> int:
 
 
 def laststride_samples(total_samples: int, *, stride: int = CTDB_STRIDE) -> int:
-    """CUETools ``laststride`` for *total_samples* (pregap already excluded)."""
+    """CTDB ``laststride`` sample count for *total_samples* (pregap already excluded)."""
     if stride <= 0:
         raise ValueError("stride must be positive")
     return stride + (max(0, total_samples) * 2) % stride

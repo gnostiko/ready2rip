@@ -692,9 +692,8 @@ def _mb_best_named_count(
 def _artist_credit(credit: Any) -> str:
     """Build a multi-artist string from MusicBrainz artist-credit.
 
-    Names are joined with ``; `` (dBpoweramp-style multi-value), not MB
-    joinphrases like `` feat. `` — those are lost in favour of true multi-artist
-    tags when ripping.
+    Names are joined with ``; `` so tags stay multi-value. Join phrases from
+    the credit (for example `` feat. ``) are not kept in the stored string.
     """
     from ready2rip.tags.artists import join_artists, normalize_artists
 

@@ -25,7 +25,7 @@ class DiscIdentifiers:
     musicbrainz_discid: str | None = None
     freedb_id: str | None = None
     last_track: int = 0
-    # MB-style offsets: [leadout, track1_start, track2_start, ...] in frames
+    # Absolute frame offsets: [leadout, track1_start, track2_start, ...]
     offsets: tuple[int, ...] = ()
 
 

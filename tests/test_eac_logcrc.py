@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""EAC-compatible log checksum tests."""
+"""Rip log checksum tests."""
 
 from __future__ import annotations
 

@@ -46,8 +46,8 @@ def test_galois16_mul_commutative() -> None:
     assert g.mul(0, 9) == 0
 
 
-def test_encode_gx_log_npar8_matches_cuetools() -> None:
-    # Hard-coded logs from CUETools CDRepairEncode.ProcessStride8 comments.
+def test_encode_gx_log_npar8_reference() -> None:
+    # Hard-coded GF log table for npar=8 (ProcessStride8 reference values).
     assert encode_gx_log(8) == [
         19483,
         41576,

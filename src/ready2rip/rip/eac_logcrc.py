@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Exact Audio Copy–compatible log checksum (Rijndael-256 CBC XOR).
+"""Rip log checksum (Rijndael-256 CBC XOR).
 
-Algorithm matches OPSnet/eac_logchecker.py and puddly/eac_logsigner:
-UTF-16-LE plaintext (newlines/BOMs stripped), Rijndael-256 CBC with
-all-zero IV and key, then hex of the final ciphertext block.
+UTF-16-LE plaintext (newlines/BOMs stripped), Rijndael-256 CBC with an
+all-zero IV and fixed key, then hex of the final ciphertext block.
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ import re
 
 from ready2rip.eac_rijndael import rijndael
 
-# Public EAC key used by Exact Audio Copy for log signatures.
+# Fixed 256-bit key for the log checksum signature.
 _EAC_KEY = bytes.fromhex(
     '9378716cf13e4265ae55338e940b376184da389e50647726b35f6f341ee3efd9'
 )
@@ -23,7 +22,7 @@ _CHECKSUM_RE = re.compile(
 
 
 def eac_log_checksum(text: str) -> str:
-    """Return 64-char uppercase hex EAC log checksum for *text* (unsigned body)."""
+    """Return 64-char uppercase hex log checksum for *text* (unsigned body)."""
     body = text.replace('\r', '').replace('\n', '')
     body = body.replace('\ufeff', '').replace('\ufffe', '')
     cipher = rijndael(key=_EAC_KEY, block_size=32)
@@ -42,7 +41,7 @@ def strip_existing_checksum(text: str) -> str:
 
 
 def append_eac_checksum(text: str) -> str:
-    """Append an EAC-style checksum footer to *text* (replacing any prior one)."""
+    """Append a ``==== Log checksum … ====`` footer to *text* (replacing any prior one)."""
     body = strip_existing_checksum(text).rstrip() + '\n'
     digest = eac_log_checksum(body)
     return f'{body}\n==== Log checksum {digest} ====\n'
