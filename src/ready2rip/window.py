@@ -961,8 +961,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         except ValueError:
             self._artist_style_row.set_selected(0)
         self._artist_style_row.set_tooltip_text(
-            'How multiple artists appear in filenames and tags. '
-            'feat. puts guests on the title '
+            'How multiple artists appear in filenames. Tags use native '
+            'multi-value artist fields; feat. puts guests on the title '
             '(Track feat. Guest & Other) and keeps the primary artist.'
         )
         self._artist_style_row.connect(

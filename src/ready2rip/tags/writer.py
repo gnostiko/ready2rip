@@ -1,5 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Write tags, ReplayGain, and embedded pictures via mutagen."""
+"""Write tags, ReplayGain, and embedded pictures via mutagen.
+
+Format conventions (Picard-aligned):
+  * Vorbis (FLAC / Opus) — one ARTIST/ALBUMARTIST field per name;
+    TRACKNUMBER/DISCNUMBER are bare integers with separate *TOTAL fields;
+    recording UUID goes in MUSICBRAINZ_RECORDINGID.
+  * ID3 (MP3 / WAV) — multi-value TPE1/TPE2; TRCK/TPOS use ``N/M``;
+    recording UUID in UFID ``http://musicbrainz.org``.
+  * MP4 (M4A) — multi-value ``©ART`` / ``aART``; ``trkn`` / ``disk`` tuples;
+    Picard freeform atoms for MusicBrainz ids (Track Id = recording).
+"""
 
 from __future__ import annotations
 
@@ -7,16 +17,16 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from ready2rip.metadata.providers import AlbumMetadata
+from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
 from ready2rip.paths import track_meta_for
 from ready2rip.tags.artists import (
     ARTIST_STYLE_FEAT,
     DEFAULT_ARTIST_STYLE,
-    format_artists,
     format_title_with_artists,
     normalize_artist_style,
     normalize_artists,
     primary_artist,
+    split_artists,
 )
 from ready2rip.util import normalize_release_date
 
@@ -49,8 +59,7 @@ class TagWriter:
         raw_title = (
             track.title if track and track.title else f'Track {track_number:02d}'
         )
-        # Canonical in-app form is "A; B; C"; tags get the chosen style literally
-        # so players show ; / or feat. the same way filenames do.
+        # UI / paths keep "A; B; C"; tags use native multi-value (or feat. title).
         raw_artist = normalize_artists(
             (track.artist if track and track.artist else None)
             or album.artist
@@ -61,82 +70,37 @@ class TagWriter:
 
         if style == ARTIST_STYLE_FEAT:
             title = format_title_with_artists(raw_title, raw_artist, style)
-            artist = primary_artist(raw_artist) or raw_artist
-            album_artist = primary_artist(raw_album_artist) or raw_album_artist
         else:
             title = raw_title
-            artist = format_artists(raw_artist, style) or raw_artist
-            album_artist = format_artists(raw_album_artist, style) or raw_album_artist
-        # Keep full YYYY-MM-DD when available (not year-only).
+        artists = _artist_names_for_tags(raw_artist, style=style)
+        album_artists = _artist_names_for_tags(raw_album_artist, style=style)
+
         date = normalize_release_date(album.date or '')
         total = total_tracks if total_tracks is not None else (
             len(album.tracks) if album.tracks else None
         )
+        kw = dict(
+            title=title,
+            artists=artists,
+            album=album_title,
+            album_artists=album_artists,
+            date=date,
+            track_number=track_number,
+            total_tracks=total,
+            album_meta=album,
+            track_meta=track,
+        )
 
         if suffix == '.flac':
-            self._tag_flac(
-                path,
-                title=title,
-                artist=artist,
-                album=album_title,
-                album_artist=album_artist,
-                date=date,
-                track_number=track_number,
-                total_tracks=total,
-                album_meta=album,
-                track_meta=track,
-            )
+            self._tag_flac(path, **kw)
         elif suffix == '.mp3':
-            self._tag_mp3(
-                path,
-                title=title,
-                artist=artist,
-                album=album_title,
-                album_artist=album_artist,
-                date=date,
-                track_number=track_number,
-                total_tracks=total,
-                album_meta=album,
-                track_meta=track,
-            )
+            self._tag_mp3(path, **kw)
         elif suffix in {'.m4a', '.mp4', '.aac'}:
-            self._tag_mp4(
-                path,
-                title=title,
-                artist=artist,
-                album=album_title,
-                album_artist=album_artist,
-                date=date,
-                track_number=track_number,
-                total_tracks=total,
-                album_meta=album,
-                track_meta=track,
-            )
+            self._tag_mp4(path, **kw)
         elif suffix in {'.opus', '.ogg'}:
-            self._tag_ogg(
-                path,
-                title=title,
-                artist=artist,
-                album=album_title,
-                album_artist=album_artist,
-                date=date,
-                track_number=track_number,
-                total_tracks=total,
-                album_meta=album,
-                track_meta=track,
-            )
+            self._tag_ogg(path, **kw)
         elif suffix == '.wav':
-            self._tag_wav(
-                path,
-                title=title,
-                artist=artist,
-                album=album_title,
-                album_artist=album_artist,
-                date=date,
-                track_number=track_number,
-                total_tracks=total,
-                album_meta=album,
-            )
+            self._tag_wav(path, **kw)
         else:
             log.warning('No tagger for %s', path)
 
@@ -253,6 +217,10 @@ class TagWriter:
             pic.mime = mime
             pic.desc = 'Cover'
             pic.data = image_bytes
+            width, height = _image_size(image_bytes)
+            if width and height:
+                pic.width = width
+                pic.height = height
             audio.add_picture(pic)
             audio.save()
         elif suffix == '.mp3':
@@ -302,6 +270,10 @@ class TagWriter:
             pic.mime = mime
             pic.desc = 'Cover'
             pic.data = image_bytes
+            width, height = _image_size(image_bytes)
+            if width and height:
+                pic.width = width
+                pic.height = height
             audio['metadata_block_picture'] = [
                 base64.b64encode(pic.write()).decode('ascii')
             ]
@@ -333,44 +305,41 @@ class TagWriter:
         audio,
         *,
         title: str,
-        artist: str,
+        artists: list[str],
         album: str,
-        album_artist: str,
+        album_artists: list[str],
         date: str,
         track_number: int,
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
-        track_meta=None,
+        track_meta: TrackMetadata | None = None,
     ) -> None:
         audio['TITLE'] = [title]
-        # Single-value strings preserve the chosen multi-artist separator.
-        audio['ARTIST'] = [artist or 'Unknown Artist']
+        audio['ARTIST'] = artists
         audio['ALBUM'] = [album]
-        audio['ALBUMARTIST'] = [album_artist or 'Unknown Artist']
+        audio['ALBUMARTIST'] = album_artists
         if date:
             audio['DATE'] = [date]
-            # ORIGINALDATE keeps the full release date when DATE is year-only elsewhere.
             audio['ORIGINALDATE'] = [date]
-        if total_tracks:
-            audio['TRACKNUMBER'] = [f'{track_number}/{total_tracks}']
+        audio['TRACKNUMBER'] = [str(track_number)]
+        if total_tracks and total_tracks > 0:
             audio['TRACKTOTAL'] = [str(total_tracks)]
-        else:
-            audio['TRACKNUMBER'] = [str(track_number)]
-        # Disc position (Vorbis / FLAC / Opus): always "N/M" (e.g. 1/1).
         disc_num, disc_total = _disc_numbers(album_meta)
         if disc_num is not None:
-            total = disc_total if disc_total and disc_total > 0 else 1
-            audio['DISCNUMBER'] = [f'{disc_num}/{total}']
-            audio['DISCTOTAL'] = [str(total)]
-            audio['TOTALDISCS'] = [str(total)]
+            audio['DISCNUMBER'] = [str(disc_num)]
+            if disc_total and disc_total > 0:
+                audio['DISCTOTAL'] = [str(disc_total)]
+        audio['MEDIA'] = ['CD']
+        if _is_compilation(album_meta):
+            audio['COMPILATION'] = ['1']
         if album_meta and album_meta.musicbrainz_release_id:
             audio['MUSICBRAINZ_ALBUMID'] = [album_meta.musicbrainz_release_id]
         if album_meta and album_meta.musicbrainz_release_group_id:
             audio['MUSICBRAINZ_RELEASEGROUPID'] = [
                 album_meta.musicbrainz_release_group_id
             ]
-        if track_meta is not None and getattr(track_meta, 'musicbrainz_recording_id', ''):
-            audio['MUSICBRAINZ_TRACKID'] = [track_meta.musicbrainz_recording_id]
+        if track_meta is not None and track_meta.musicbrainz_recording_id:
+            audio['MUSICBRAINZ_RECORDINGID'] = [track_meta.musicbrainz_recording_id]
         if album_meta and album_meta.barcode:
             audio['BARCODE'] = [album_meta.barcode]
         if album_meta and album_meta.genre:
@@ -389,22 +358,22 @@ class TagWriter:
         path: Path,
         *,
         title: str,
-        artist: str,
+        artists: list[str],
         album: str,
-        album_artist: str,
+        album_artists: list[str],
         date: str,
         track_number: int,
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
-        track_meta=None,
+        track_meta: TrackMetadata | None = None,
     ) -> None:
         from mutagen.mp4 import MP4
 
         audio = MP4(path)
         audio['\xa9nam'] = [title]
-        audio['\xa9ART'] = [artist or 'Unknown Artist']
+        audio['\xa9ART'] = artists
         audio['\xa9alb'] = [album]
-        audio['aART'] = [album_artist or 'Unknown Artist']
+        audio['aART'] = album_artists
         total = total_tracks if total_tracks and total_tracks > 0 else 0
         audio['trkn'] = [(track_number, total)]
         disc_num, disc_total = _disc_numbers(album_meta)
@@ -416,16 +385,38 @@ class TagWriter:
             audio['\xa9gen'] = [album_meta.genre]
         if album_meta and album_meta.label:
             audio['\xa9pub'] = [album_meta.label]
+        if _is_compilation(album_meta):
+            audio['cpil'] = [True]
         if album_meta and album_meta.musicbrainz_release_id:
             audio['----:com.apple.iTunes:MusicBrainz Album Id'] = [
                 album_meta.musicbrainz_release_id.encode('utf-8')
             ]
-        if track_meta is not None and getattr(
-            track_meta, 'musicbrainz_recording_id', ''
-        ):
+        if album_meta and album_meta.musicbrainz_release_group_id:
+            audio['----:com.apple.iTunes:MusicBrainz Release Group Id'] = [
+                album_meta.musicbrainz_release_group_id.encode('utf-8')
+            ]
+        # Picard names this "Track Id" but the value is the recording UUID.
+        if track_meta is not None and track_meta.musicbrainz_recording_id:
             audio['----:com.apple.iTunes:MusicBrainz Track Id'] = [
                 track_meta.musicbrainz_recording_id.encode('utf-8')
             ]
+        if album_meta and album_meta.barcode:
+            audio['----:com.apple.iTunes:BARCODE'] = [
+                album_meta.barcode.encode('utf-8')
+            ]
+        if album_meta and album_meta.catalog_number:
+            audio['----:com.apple.iTunes:CATALOGNUMBER'] = [
+                album_meta.catalog_number.encode('utf-8')
+            ]
+        if album_meta and album_meta.country:
+            audio['----:com.apple.iTunes:MusicBrainz Album Release Country'] = [
+                album_meta.country.encode('utf-8')
+            ]
+        if album_meta and album_meta.discid:
+            audio['----:com.apple.iTunes:MusicBrainz Disc Id'] = [
+                album_meta.discid.encode('utf-8')
+            ]
+        audio['----:com.apple.iTunes:MEDIA'] = [b'CD']
         audio.save()
 
     def _tag_mp3(
@@ -433,14 +424,14 @@ class TagWriter:
         path: Path,
         *,
         title: str,
-        artist: str,
+        artists: list[str],
         album: str,
-        album_artist: str,
+        album_artists: list[str],
         date: str,
         track_number: int,
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
-        track_meta=None,
+        track_meta: TrackMetadata | None = None,
     ) -> None:
         from mutagen.id3 import (
             ID3,
@@ -451,6 +442,7 @@ class TagWriter:
             TPE1,
             TPE2,
             TPOS,
+            TPUB,
             TRCK,
             TXXX,
             UFID,
@@ -462,19 +454,26 @@ class TagWriter:
             audio.add_tags()
         tags = audio.tags
         assert tags is not None
-        tags.delall('TIT2')
-        tags.delall('TPE1')
-        tags.delall('TALB')
-        tags.delall('TPE2')
-        tags.delall('TRCK')
-        tags.delall('TPOS')
-        tags.delall('TDRC')
-        tags.delall('TCON')
+        for frame in (
+            'TIT2',
+            'TPE1',
+            'TALB',
+            'TPE2',
+            'TRCK',
+            'TPOS',
+            'TDRC',
+            'TDOR',
+            'TCON',
+            'TPUB',
+            'TCMP',
+            'TMED',
+        ):
+            tags.delall(frame)
         tags.add(TIT2(encoding=3, text=title))
-        tags.add(TPE1(encoding=3, text=artist or 'Unknown Artist'))
+        tags.add(TPE1(encoding=3, text=artists))
         tags.add(TALB(encoding=3, text=album))
-        tags.add(TPE2(encoding=3, text=album_artist or 'Unknown Artist'))
-        if total_tracks:
+        tags.add(TPE2(encoding=3, text=album_artists))
+        if total_tracks and total_tracks > 0:
             tags.add(TRCK(encoding=3, text=f'{track_number}/{total_tracks}'))
         else:
             tags.add(TRCK(encoding=3, text=str(track_number)))
@@ -487,12 +486,28 @@ class TagWriter:
             try:
                 from mutagen.id3 import TDOR
 
-                tags.delall('TDOR')
                 tags.add(TDOR(encoding=3, text=date))
             except ImportError:
                 pass
         if album_meta and album_meta.genre:
             tags.add(TCON(encoding=3, text=album_meta.genre))
+        if album_meta and album_meta.label:
+            tags.add(TPUB(encoding=3, text=album_meta.label))
+        try:
+            from mutagen.id3 import TMED
+
+            tags.add(TMED(encoding=3, text='CD'))
+        except ImportError:
+            tags.delall('TXXX:MEDIA')
+            tags.add(TXXX(encoding=3, desc='MEDIA', text=['CD']))
+        if _is_compilation(album_meta):
+            try:
+                from mutagen.id3 import TCMP
+
+                tags.add(TCMP(encoding=3, text='1'))
+            except ImportError:
+                tags.delall('TXXX:COMPILATION')
+                tags.add(TXXX(encoding=3, desc='COMPILATION', text=['1']))
         if album_meta and album_meta.musicbrainz_release_id:
             tags.delall('TXXX:MusicBrainz Album Id')
             tags.add(
@@ -502,7 +517,16 @@ class TagWriter:
                     text=[album_meta.musicbrainz_release_id],
                 )
             )
-        if track_meta is not None and getattr(track_meta, 'musicbrainz_recording_id', ''):
+        if album_meta and album_meta.musicbrainz_release_group_id:
+            tags.delall('TXXX:MusicBrainz Release Group Id')
+            tags.add(
+                TXXX(
+                    encoding=3,
+                    desc='MusicBrainz Release Group Id',
+                    text=[album_meta.musicbrainz_release_group_id],
+                )
+            )
+        if track_meta is not None and track_meta.musicbrainz_recording_id:
             tags.delall('UFID:http://musicbrainz.org')
             tags.add(
                 UFID(
@@ -510,9 +534,38 @@ class TagWriter:
                     data=track_meta.musicbrainz_recording_id.encode('ascii'),
                 )
             )
-        if album_meta and album_meta.label:
-            tags.delall('TXXX:LABEL')
-            tags.add(TXXX(encoding=3, desc='LABEL', text=[album_meta.label]))
+        if album_meta and album_meta.barcode:
+            tags.delall('TXXX:BARCODE')
+            tags.add(TXXX(encoding=3, desc='BARCODE', text=[album_meta.barcode]))
+        if album_meta and album_meta.catalog_number:
+            tags.delall('TXXX:CATALOGNUMBER')
+            tags.add(
+                TXXX(
+                    encoding=3,
+                    desc='CATALOGNUMBER',
+                    text=[album_meta.catalog_number],
+                )
+            )
+        if album_meta and album_meta.country:
+            tags.delall('TXXX:MusicBrainz Album Release Country')
+            tags.add(
+                TXXX(
+                    encoding=3,
+                    desc='MusicBrainz Album Release Country',
+                    text=[album_meta.country],
+                )
+            )
+        if album_meta and album_meta.discid:
+            tags.delall('TXXX:MusicBrainz Disc Id')
+            tags.add(
+                TXXX(
+                    encoding=3,
+                    desc='MusicBrainz Disc Id',
+                    text=[album_meta.discid],
+                )
+            )
+        # Drop legacy TXXX:LABEL if present (publisher is TPUB now).
+        tags.delall('TXXX:LABEL')
         # ID3v2.4 keeps full ISO dates in TDRC/TDOR (v2.3 TYER is year-only).
         audio.save(v2_version=4)
 
@@ -521,14 +574,16 @@ class TagWriter:
         path: Path,
         *,
         title: str,
-        artist: str,
+        artists: list[str],
         album: str,
-        album_artist: str,
+        album_artists: list[str],
         date: str,
         track_number: int,
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
+        track_meta: TrackMetadata | None = None,
     ) -> None:
+        del track_meta  # WAV keeps a minimal ID3 subset.
         try:
             from mutagen.wave import WAVE
         except ImportError:
@@ -538,17 +593,16 @@ class TagWriter:
         if audio.tags is None:
             audio.add_tags()
         tags = audio.tags
-        # INFO chunk style via mutagen id3-like if present
         try:
             from mutagen.id3 import ID3, TALB, TDRC, TIT2, TPE1, TPE2, TPOS, TRCK
 
             if tags is None or not isinstance(tags, ID3):
                 return
             tags.add(TIT2(encoding=3, text=title))
-            tags.add(TPE1(encoding=3, text=artist or 'Unknown Artist'))
+            tags.add(TPE1(encoding=3, text=artists))
             tags.add(TALB(encoding=3, text=album))
-            tags.add(TPE2(encoding=3, text=album_artist or 'Unknown Artist'))
-            if total_tracks:
+            tags.add(TPE2(encoding=3, text=album_artists))
+            if total_tracks and total_tracks > 0:
                 tags.add(TRCK(encoding=3, text=f'{track_number}/{total_tracks}'))
             else:
                 tags.add(TRCK(encoding=3, text=str(track_number)))
@@ -561,6 +615,34 @@ class TagWriter:
             audio.save()
         except Exception:
             log.debug('WAV tagging failed for %s', path, exc_info=True)
+
+
+def _artist_names_for_tags(value: str, *, style: str) -> list[str]:
+    """Artist names for native multi-value tags (feat. → primary only)."""
+    if normalize_artist_style(style) == ARTIST_STYLE_FEAT:
+        primary = primary_artist(value)
+        return [primary] if primary else ['Unknown Artist']
+    names = split_artists(value)
+    return names or ['Unknown Artist']
+
+
+def _is_compilation(album_meta: AlbumMetadata | None) -> bool:
+    if album_meta is None:
+        return False
+    name = (album_meta.artist or '').strip().casefold()
+    return name in {'various artists', 'various', 'va', 'v/a'}
+
+
+def _image_size(image_bytes: bytes) -> tuple[int, int]:
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        with Image.open(BytesIO(image_bytes)) as img:
+            return int(img.width), int(img.height)
+    except Exception:
+        return 0, 0
 
 
 def _disc_numbers(

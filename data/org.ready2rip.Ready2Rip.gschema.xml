@@ -177,10 +177,11 @@
 
     <key name="artist-style" type="s">
       <default>'semicolon'</default>
-      <summary>How multiple artists are written in filenames and tags</summary>
+      <summary>How multiple artists appear in filenames</summary>
       <description>
-        semicolon — A; B; C. slash — A / B / C. feat — title becomes
-        "Track feat. B &amp; C" with primary artist only in {artist}/ARTIST.
+        semicolon — A; B; C. slash — A / B / C in filenames. Tags use native
+        multi-value artist fields. feat — title becomes "Track feat. B &amp; C"
+        with primary artist only in tags.
       </description>
       <choices>
         <choice value='semicolon'/>

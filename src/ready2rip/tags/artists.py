@@ -5,10 +5,13 @@ In the UI and canonical string form, multiple artists are stored as::
 
     Artist One; Artist Two; Artist Three
 
-Filename and tag styles (settings):
+Filename styles (settings):
   * ``semicolon`` — ``A; B; C``
   * ``slash`` — ``A / B / C``
-  * ``feat`` — title ``Song feat. B & C``, artist tag keeps the primary only
+  * ``feat`` — ``Song feat. B & C`` in the title; primary artist only in tags
+
+Embedded tags always use native multi-value artist fields (Vorbis / ID3 / MP4),
+except ``feat`` which writes the primary artist and puts guests on the title.
 """
 
 from __future__ import annotations

@@ -29,10 +29,20 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-03">
       <description>
         <p>
-          0.4.15: Write multi-artist separators into tags (semicolon,
-          slash, or feat. on the title), show a bottom toast while
-          looking up metadata, and keep path-migration unit tests
-          free of PyGObject.
+          0.4.16: Picard-aligned tags for FLAC/Opus, MP3, and M4A —
+          multi-value artists, split track/disc totals, correct
+          MusicBrainz recording IDs, and richer barcode/catalog/country
+          fields. Artist style setting applies to filenames; feat. still
+          rewrites titles.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.15" date="2026-11-03">
+      <description>
+        <p>
+          Write multi-artist separators into tags (semicolon, slash, or
+          feat. on the title), show a bottom toast while looking up
+          metadata, and keep path-migration unit tests free of PyGObject.
         </p>
       </description>
     </release>
