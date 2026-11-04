@@ -15,7 +15,6 @@ from dataclasses import dataclass
 # GF(2^16) primitive polynomial for CTDB Galois16.
 GALOIS16_POLYNOMIAL = 0x1100B
 GALOIS16_W = 16
-GALOIS16_MAX = (1 << GALOIS16_W) - 1
 
 # CTDB stride in ushort units (stereo frame = 2 ushorts).
 CTDB_STRIDE = 5880
@@ -64,24 +63,11 @@ class Galois16:
             return 0
         return self.exp_tbl[self.log_tbl[a] + b]
 
-    def div(self, a: int, b: int) -> int:
-        if a == 0:
-            return 0
-        return self.exp_tbl[self.log_tbl[a] - self.log_tbl[b] + self.max]
-
-    def div_exp(self, a: int, b: int) -> int:
-        if a == 0:
-            return 0
-        return self.exp_tbl[self.log_tbl[a] - b + self.max]
-
     def inv(self, a: int) -> int:
         return self.exp_tbl[self.max - self.log_tbl[a]]
 
     def to_log_list(self, values: list[int]) -> list[int]:
         return [-1 if v == 0 else self.to_log(v) for v in values]
-
-    def to_exp_list(self, values: list[int]) -> list[int]:
-        return [0 if v == -1 else self.to_exp(v) for v in values]
 
     def gfdiff(self, a: list[int]) -> list[int]:
         return [a[i + 1] if (i % 2) == 0 else -1 for i in range(len(a) - 1)]

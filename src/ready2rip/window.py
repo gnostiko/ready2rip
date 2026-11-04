@@ -450,7 +450,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         apply_icon(self.search_art_button, 'system-search-symbolic', display=display)
         apply_icon(self.choose_art_button, 'folder-symbolic', display=display)
         apply_icon(self.clear_art_button, 'user-trash-symbolic', display=display)
-        apply_icon(self.status_page, 'media-optical-symbolic', display=display)
+        # Empty-state status page is text-only (no disc icon), same as tray-open.
+        self.status_page.set_icon_name(None)
         apply_icon(self.cover_placeholder, 'folder-music-symbolic', display=display)
 
     def _on_close_request(self, *_args) -> bool:
@@ -2248,6 +2249,13 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self.rip_button.set_sensitive(sensitive)
         self._set_action_enabled('rip', sensitive)
 
+    def _set_track_select_sensitive(self, sensitive: bool) -> None:
+        """Enable/disable left-side track select checkboxes (select-all + per track)."""
+        if self._track_select_all is not None:
+            self._track_select_all.set_sensitive(sensitive)
+        for check in self._track_checks.values():
+            check.set_sensitive(sensitive)
+
     def _set_ripping_ui(self, active: bool) -> None:
         idle = not active
         if active:
@@ -2266,6 +2274,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._track_edit_button.set_sensitive(idle)
         if self._track_artist_button is not None:
             self._track_artist_button.set_sensitive(idle)
+        self._set_track_select_sensitive(idle)
 
         self.search_art_button.set_sensitive(idle)
         self.choose_art_button.set_sensitive(idle)
@@ -2424,7 +2433,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                         description=(
                             'Disc ejected. Close the tray or insert another CD.'
                         ),
-                        icon_name=None,
                     )
                 else:
                     self._toast(f'Eject failed: {message}')
@@ -2536,18 +2544,13 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 self._clear_disc_ui_for_empty(
                     title=title,
                     description=description,
-                    icon_name=(
-                        None
-                        if state is DriveTrayState.TRAY_OPEN
-                        else 'media-optical-symbolic'
-                    ),
                 )
             return
 
         if state is DriveTrayState.NOT_READY:
             if prev is not DriveTrayState.NOT_READY:
                 if self.stack.get_visible_child_name() == 'empty':
-                    self._set_status_page_icon('media-optical-symbolic')
+                    self._set_status_page_icon(None)
                     self.status_page.set_title('Drive not ready')
                     self.status_page.set_description(
                         'Waiting for the drive to finish spinning up…'
@@ -2585,7 +2588,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         *,
         title: str,
         description: str,
-        icon_name: str | None = 'media-optical-symbolic',
+        icon_name: str | None = None,
     ) -> None:
         self._disc = None
         self._ids = None
@@ -2691,11 +2694,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._clear_disc_ui_for_empty(
                 title=title,
                 description=description,
-                icon_name=(
-                    None
-                    if status.state is DriveTrayState.TRAY_OPEN
-                    else 'media-optical-symbolic'
-                ),
             )
             return
 
@@ -2708,7 +2706,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self.stack.set_visible_child_name('empty')
             self._set_rip_sensitive(False)
             self._set_lookup_controls_sensitive(False)
-            self._set_status_page_icon('media-optical-symbolic')
+            self._set_status_page_icon(None)
             if status.state is DriveTrayState.NOT_READY:
                 self.status_page.set_title('Drive not ready')
                 self.status_page.set_description(
@@ -3252,6 +3250,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
         group.set_title(f'Tracks · {info.track_count}')
         self._apply_tracks_edit_mode()
+        # Rebuild while ripping must keep select checkboxes greyed out.
+        self._set_track_select_sensitive(not self._ripping)
 
     @staticmethod
     def _make_title_artist_grid(title: Gtk.Widget, artist: Gtk.Widget) -> Gtk.Grid:

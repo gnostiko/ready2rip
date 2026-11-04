@@ -38,10 +38,6 @@ class HtoaInfo:
     message: str = ''
 
     @property
-    def duration_seconds(self) -> float:
-        return self.length_sectors / 75.0
-
-    @property
     def duration_label(self) -> str:
         return sectors_to_mmss(self.length_sectors)
 

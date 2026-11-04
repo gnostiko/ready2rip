@@ -35,8 +35,6 @@ ENCODERS = (
     ('mp3', 'MP3'),
 )
 
-ENCODER_IDS = frozenset(e[0] for e in ENCODERS)
-
 # FLAC compression levels shown in the Encoding panel.
 FLAC_LEVELS = (
     (0, '0 (Fastest)'),

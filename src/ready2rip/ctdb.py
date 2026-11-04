@@ -887,14 +887,6 @@ class CtdbVerifier:
                 self._encoder = None
                 self._encode_error = str(exc)
 
-    @property
-    def database(self) -> CtdbDatabase | None:
-        return self._db
-
-    @property
-    def parity_result(self) -> ParityResult | None:
-        return self._parity
-
     def verify_wav(self, path: Path, track_number: int) -> CtdbResult:
         try:
             pcm = load_cdda_pcm(path)

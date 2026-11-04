@@ -26,29 +26,6 @@ _PROGRESS_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Stages that mean real correction / trouble (reportable errors).
-_ERROR_STAGES = frozenset(
-    {
-        'skip',
-        'readerr',
-        'scratch',
-        'repair',
-        'cacheerr',
-        'backoff',
-    }
-)
-# Soft fixups (jitter / dropped / duped samples) — still logged, mild quality hit.
-_FIXUP_STAGES = frozenset(
-    {
-        'fixup_edge',
-        'fixup_atom',
-        'fixup_dropped',
-        'fixup_duped',
-        'drift',
-        'overlap',
-    }
-)
-
 
 @dataclass
 class ParanoiaStats:

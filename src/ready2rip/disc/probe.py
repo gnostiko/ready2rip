@@ -29,11 +29,6 @@ class TrackInfo:
     pregap_sectors: int = 0
 
     @property
-    def duration_seconds(self) -> float:
-        # CDDA: 75 sectors per second
-        return self.length_sectors / 75.0
-
-    @property
     def duration_label(self) -> str:
         return sectors_to_mmss(self.length_sectors)
 
@@ -144,7 +139,7 @@ def attach_mmc_toc(disc: DiscInfo) -> None:
 
     toc = read_raw_toc(disc.device)
     if toc is None:
-        _apply_track1_toc_pregap(disc)
+        apply_track1_toc_pregap(disc)
         return
 
     disc.leadout_lba = toc.leadout_lba
@@ -172,7 +167,7 @@ def attach_mmc_toc(disc: DiscInfo) -> None:
             )
         )
     disc.data_tracks = data
-    _apply_track1_toc_pregap(disc)
+    apply_track1_toc_pregap(disc)
     if data:
         log.info(
             'MMC TOC: %d audio, %d data track(s) on %s',
@@ -182,7 +177,8 @@ def attach_mmc_toc(disc: DiscInfo) -> None:
         )
 
 
-def _apply_track1_toc_pregap(disc: DiscInfo) -> None:
+def apply_track1_toc_pregap(disc: DiscInfo) -> None:
+    """Set track-1 INDEX 00 from TOC ``start_sector`` (standard pause / HTOA)."""
     if not disc.tracks:
         return
     t0 = disc.tracks[0]

@@ -268,26 +268,6 @@ def read_raw_toc(device: str) -> RawToc | None:
         return None
 
 
-def read_q_index(device: str, lba: int) -> int | None:
-    """Return Q-subchannel INDEX (0/1/…) at *lba*, or None on failure."""
-    try:
-        with MmcDevice(device) as mmc:
-            return mmc.read_q_index(lba)
-    except OSError as exc:
-        log.debug('Q-index open %s failed: %s', device, exc)
-        return None
-
-
-def read_raw_sector(device: str, lba: int, *, retries: int = _DATA_RETRIES) -> bytes | None:
-    """Read one 2352-byte raw sector (sync+header+user+EDC/ECC)."""
-    try:
-        with MmcDevice(device, nonblock=False) as mmc:
-            return mmc.read_raw_sector(lba, retries=retries)
-    except OSError as exc:
-        log.debug('Raw sector open %s failed: %s', device, exc)
-        return None
-
-
 def detect_sector_mode(sector: bytes) -> int:
     """Mode byte from a 2352-byte yellow-book sector (1 or 2)."""
     if len(sector) >= 16 and sector[15] in (1, 2):

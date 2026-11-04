@@ -12,7 +12,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from ready2rip.disc.mmc import MmcDevice
-from ready2rip.disc.probe import DataTrackInfo, DiscInfo, TrackInfo
+from ready2rip.disc.probe import (
+    DataTrackInfo,
+    DiscInfo,
+    TrackInfo,
+    apply_track1_toc_pregap,
+)
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +50,7 @@ def enrich_pregaps(device: str, disc: DiscInfo) -> str:
         disc.pregap_source = 'none'
         return disc.pregap_source
 
-    _apply_track1_toc_pregap(disc)
+    apply_track1_toc_pregap(disc)
 
     parsed = _pregaps_from_cdrdao(device)
     if parsed:
@@ -214,16 +219,6 @@ def _q_index(mmc: MmcDevice, lba: int) -> int | None:
         if last is not None:
             return last
     return last
-
-
-def _apply_track1_toc_pregap(disc: DiscInfo) -> None:
-    t0 = disc.tracks[0]
-    if t0.number != 1:
-        return
-    pregap = max(0, int(t0.start_sector))
-    if t0.pregap_sectors == pregap:
-        return
-    disc.tracks[0] = replace(t0, pregap_sectors=pregap)
 
 
 def _apply_parsed_gaps(disc: DiscInfo, parsed: list[ParsedGap]) -> None:

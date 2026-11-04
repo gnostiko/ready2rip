@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
+from ready2rip.metadata.providers import AlbumMetadata
 
 log = logging.getLogger(__name__)
 _STUB_LOGGED = False
@@ -26,26 +26,6 @@ class CdTextInfo:
     genre: str = ''
     track_titles: dict[int, str] = field(default_factory=dict)
     track_artists: dict[int, str] = field(default_factory=dict)
-
-    def to_album(self, *, track_count: int = 0) -> AlbumMetadata | None:
-        if not self.album_title and not self.track_titles:
-            return None
-        n = track_count or max(self.track_titles.keys(), default=0)
-        tracks: list[TrackMetadata] = [
-            TrackMetadata(
-                number=num,
-                title=self.track_titles.get(num, ''),
-                artist=self.track_artists.get(num, '') or self.album_artist,
-            )
-            for num in range(1, n + 1)
-        ]
-        return AlbumMetadata(
-            title=self.album_title,
-            artist=self.album_artist,
-            genre=self.genre,
-            tracks=tracks,
-            source='cd-text',
-        )
 
 
 @dataclass

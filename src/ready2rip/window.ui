@@ -88,7 +88,6 @@
                             <property name="name">empty</property>
                             <property name="child">
                               <object class="AdwStatusPage" id="status_page">
-                                <property name="icon-name">media-optical-symbolic</property>
                                 <property name="title" translatable="yes">No disc</property>
                                 <property name="description" translatable="yes">Insert an audio CD.</property>
                                 <child>
