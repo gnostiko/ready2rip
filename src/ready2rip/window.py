@@ -224,6 +224,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._drive_rows: list[Gtk.Widget] = []
         self._lookup_generation = 0
         self._looking_up = False
+        self._lookup_toast: Adw.Toast | None = None
         self._setup_dialog_open = False
         self._pending_auto_lookup = False
         self._artwork: ArtworkImage | None = None
@@ -3557,6 +3558,13 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         generation = self._lookup_generation
         self._looking_up = True
         self._set_lookup_controls_sensitive(False)
+        sources: list[str] = []
+        if use_mb:
+            sources.append('MusicBrainz')
+        if use_fb:
+            sources.append('gnudb')
+        via = ' and '.join(sources) if sources else 'metadata'
+        self._show_lookup_toast(f'Looking up metadata via {via}…')
 
         mb_id = self._ids.musicbrainz_discid
         freedb_id = self._ids.freedb_id
@@ -3603,6 +3611,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         generation = self._lookup_generation
         self._looking_up = True
         self._set_lookup_controls_sensitive(False)
+        self._show_lookup_toast('Loading MusicBrainz release…')
 
         discid = ''
         if self._ids is not None and self._ids.musicbrainz_discid:
@@ -3643,6 +3652,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             return
 
         self._looking_up = False
+        self._dismiss_lookup_toast()
         self._set_lookup_controls_sensitive(
             self._disc is not None and not self._ripping
         )
@@ -3680,6 +3690,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             return
 
         self._looking_up = False
+        self._dismiss_lookup_toast()
         self._set_lookup_controls_sensitive(
             self._disc is not None and not self._ripping
         )
@@ -3933,6 +3944,24 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._sync_cover_action_sensitivity()
         if announce:
             self._toast(self._format_art_origin(image.source))
+
+    def _show_lookup_toast(self, title: str) -> None:
+        """Bottom toast while metadata lookup is in flight (no auto-dismiss)."""
+        self._dismiss_lookup_toast()
+        toast = Adw.Toast(title=GLib.markup_escape_text(title))
+        toast.set_timeout(0)
+        try:
+            toast.set_priority(Adw.ToastPriority.HIGH)
+        except (AttributeError, TypeError):
+            pass
+        self._lookup_toast = toast
+        self.toast_overlay.add_toast(toast)
+
+    def _dismiss_lookup_toast(self) -> None:
+        toast = self._lookup_toast
+        self._lookup_toast = None
+        if toast is not None:
+            toast.dismiss()
 
     def _toast(self, title: str, timeout: int = 3) -> None:
         """Show a transient bottom toast (Adwaita / GNOME HIG).

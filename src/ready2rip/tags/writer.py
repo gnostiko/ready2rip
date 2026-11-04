@@ -11,14 +11,12 @@ from ready2rip.metadata.providers import AlbumMetadata
 from ready2rip.paths import track_meta_for
 from ready2rip.tags.artists import (
     ARTIST_STYLE_FEAT,
-    ARTIST_STYLE_SLASH,
     DEFAULT_ARTIST_STYLE,
     format_artists,
     format_title_with_artists,
     normalize_artist_style,
     normalize_artists,
     primary_artist,
-    split_artists,
 )
 from ready2rip.util import normalize_release_date
 
@@ -51,7 +49,8 @@ class TagWriter:
         raw_title = (
             track.title if track and track.title else f'Track {track_number:02d}'
         )
-        # Multi-artist stored as "A; B; C" in metadata strings.
+        # Canonical in-app form is "A; B; C"; tags get the chosen style literally
+        # so players show ; / or feat. the same way filenames do.
         raw_artist = normalize_artists(
             (track.artist if track and track.artist else None)
             or album.artist
@@ -64,14 +63,10 @@ class TagWriter:
             title = format_title_with_artists(raw_title, raw_artist, style)
             artist = primary_artist(raw_artist) or raw_artist
             album_artist = primary_artist(raw_album_artist) or raw_album_artist
-        elif style == ARTIST_STYLE_SLASH:
-            title = raw_title
-            artist = format_artists(raw_artist, style)
-            album_artist = format_artists(raw_album_artist, style)
         else:
             title = raw_title
-            artist = raw_artist
-            album_artist = raw_album_artist
+            artist = format_artists(raw_artist, style) or raw_artist
+            album_artist = format_artists(raw_album_artist, style) or raw_album_artist
         # Keep full YYYY-MM-DD when available (not year-only).
         date = normalize_release_date(album.date or '')
         total = total_tracks if total_tracks is not None else (
@@ -348,12 +343,10 @@ class TagWriter:
         track_meta=None,
     ) -> None:
         audio['TITLE'] = [title]
-        # Multi-value ARTIST / ALBUMARTIST (one field per name).
-        audio['ARTIST'] = split_artists(artist) or [artist or 'Unknown Artist']
+        # Single-value strings preserve the chosen multi-artist separator.
+        audio['ARTIST'] = [artist or 'Unknown Artist']
         audio['ALBUM'] = [album]
-        audio['ALBUMARTIST'] = (
-            split_artists(album_artist) or [album_artist or 'Unknown Artist']
-        )
+        audio['ALBUMARTIST'] = [album_artist or 'Unknown Artist']
         if date:
             audio['DATE'] = [date]
             # ORIGINALDATE keeps the full release date when DATE is year-only elsewhere.
@@ -409,11 +402,9 @@ class TagWriter:
 
         audio = MP4(path)
         audio['\xa9nam'] = [title]
-        audio['\xa9ART'] = split_artists(artist) or [artist or 'Unknown Artist']
+        audio['\xa9ART'] = [artist or 'Unknown Artist']
         audio['\xa9alb'] = [album]
-        audio['aART'] = (
-            split_artists(album_artist) or [album_artist or 'Unknown Artist']
-        )
+        audio['aART'] = [album_artist or 'Unknown Artist']
         total = total_tracks if total_tracks and total_tracks > 0 else 0
         audio['trkn'] = [(track_number, total)]
         disc_num, disc_total = _disc_numbers(album_meta)
@@ -480,12 +471,9 @@ class TagWriter:
         tags.delall('TDRC')
         tags.delall('TCON')
         tags.add(TIT2(encoding=3, text=title))
-        # Multi-value TPE1 / TPE2 (ID3v2.4 multi-string / mutagen list).
-        tags.add(TPE1(encoding=3, text=split_artists(artist) or [artist]))
+        tags.add(TPE1(encoding=3, text=artist or 'Unknown Artist'))
         tags.add(TALB(encoding=3, text=album))
-        tags.add(
-            TPE2(encoding=3, text=split_artists(album_artist) or [album_artist])
-        )
+        tags.add(TPE2(encoding=3, text=album_artist or 'Unknown Artist'))
         if total_tracks:
             tags.add(TRCK(encoding=3, text=f'{track_number}/{total_tracks}'))
         else:
@@ -557,11 +545,9 @@ class TagWriter:
             if tags is None or not isinstance(tags, ID3):
                 return
             tags.add(TIT2(encoding=3, text=title))
-            tags.add(TPE1(encoding=3, text=split_artists(artist) or [artist]))
+            tags.add(TPE1(encoding=3, text=artist or 'Unknown Artist'))
             tags.add(TALB(encoding=3, text=album))
-            tags.add(
-                TPE2(encoding=3, text=split_artists(album_artist) or [album_artist])
-            )
+            tags.add(TPE2(encoding=3, text=album_artist or 'Unknown Artist'))
             if total_tracks:
                 tags.add(TRCK(encoding=3, text=f'{track_number}/{total_tracks}'))
             else:

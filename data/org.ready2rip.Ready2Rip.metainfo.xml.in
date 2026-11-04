@@ -29,7 +29,17 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-03">
       <description>
         <p>
-          0.4.14: Multi-artist save styles (semicolon, slash, feat.),
+          0.4.15: Write multi-artist separators into tags (semicolon,
+          slash, or feat. on the title), show a bottom toast while
+          looking up metadata, and keep path-migration unit tests
+          free of PyGObject.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.14" date="2026-11-03">
+      <description>
+        <p>
+          Multi-artist save styles (semicolon, slash, feat.),
           multi-disc-safe default filenames ({disc_track}), leaner
           naming presets with hover hints, and Custom templates that
           stay empty until Custom is chosen. Encoder list order

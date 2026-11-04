@@ -5,14 +5,10 @@ In the UI and canonical string form, multiple artists are stored as::
 
     Artist One; Artist Two; Artist Three
 
-Display / filename styles (settings):
+Filename and tag styles (settings):
   * ``semicolon`` — ``A; B; C``
   * ``slash`` — ``A / B / C``
-  * ``feat`` — ``A feat. B & C`` (or ``A feat. B, C & D``)
-
-When tagging:
-  * Vorbis/FLAC/Opus — one ARTIST / ALBUMARTIST field per name
-  * ID3 (MP3/WAV) — multi-value TPE1 / TPE2 text frames
+  * ``feat`` — title ``Song feat. B & C``, artist tag keeps the primary only
 """
 
 from __future__ import annotations
