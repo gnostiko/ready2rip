@@ -32,7 +32,7 @@ def test_is_compilation_various_artists() -> None:
     assert not _is_compilation(AlbumMetadata(artist='Radiohead'))
 
 
-def test_apply_vorbis_splits_track_disc_and_mb_recording() -> None:
+def test_apply_vorbis_keeps_core_fields_only() -> None:
     audio: dict[str, list[str]] = {}
     album = AlbumMetadata(
         title='Album',
@@ -63,21 +63,27 @@ def test_apply_vorbis_splits_track_disc_and_mb_recording() -> None:
         artists=['A', 'B'],
         album='Album',
         album_artists=['A', 'B'],
-        date='1997-06-16',
         track_number=1,
         total_tracks=10,
         album_meta=album,
-        track_meta=album.tracks[0],
     )
+    assert audio['TITLE'] == ['Song']
     assert audio['ARTIST'] == ['A', 'B']
+    assert audio['ALBUM'] == ['Album']
     assert audio['ALBUMARTIST'] == ['A', 'B']
     assert audio['TRACKNUMBER'] == ['1']
     assert audio['TRACKTOTAL'] == ['10']
     assert audio['DISCNUMBER'] == ['2']
     assert audio['DISCTOTAL'] == ['3']
-    assert 'TOTALDISCS' not in audio
-    assert audio['MUSICBRAINZ_RECORDINGID'] == ['rec-id']
-    assert 'MUSICBRAINZ_TRACKID' not in audio
-    assert audio['MEDIA'] == ['CD']
-    assert audio['DATE'] == ['1997-06-16']
-    assert audio['ORIGINALDATE'] == ['1997-06-16']
+    assert audio['GENRE'] == ['Rock']
+    assert audio['LABEL'] == ['Label']
+    # Explicitly omitted extras.
+    assert 'DATE' not in audio
+    assert 'ORIGINALDATE' not in audio
+    assert 'MEDIA' not in audio
+    assert 'MUSICBRAINZ_RECORDINGID' not in audio
+    assert 'MUSICBRAINZ_ALBUMID' not in audio
+    assert 'BARCODE' not in audio
+    assert 'CATALOGNUMBER' not in audio
+    assert 'RELEASECOUNTRY' not in audio
+    assert 'MUSICBRAINZ_DISCID' not in audio

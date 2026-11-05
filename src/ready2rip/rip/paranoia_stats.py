@@ -227,6 +227,17 @@ class ParanoiaStats:
         return 'clean'
 
 
+def progress_frame_from_line(line: str) -> int | None:
+    """Return the PCM frame from a ``##: … @ frame`` progress line, else None."""
+    m = _PROGRESS_RE.search(line)
+    if not m:
+        return None
+    try:
+        return int(m.group(3))
+    except ValueError:
+        return None
+
+
 def parse_paranoia_stderr(text: str, *, exit_code: int | None = None) -> ParanoiaStats:
     """Parse ``cdparanoia -e`` / verbose progress from *text*."""
     stats = ParanoiaStats(exit_code=exit_code)

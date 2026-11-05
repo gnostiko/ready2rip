@@ -1,14 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Write tags, ReplayGain, and embedded pictures via mutagen.
 
-Format conventions (Picard-aligned):
-  * Vorbis (FLAC / Opus) — one ARTIST/ALBUMARTIST field per name;
-    TRACKNUMBER/DISCNUMBER are bare integers with separate *TOTAL fields;
-    recording UUID goes in MUSICBRAINZ_RECORDINGID.
-  * ID3 (MP3 / WAV) — multi-value TPE1/TPE2; TRCK/TPOS use ``N/M``;
-    recording UUID in UFID ``http://musicbrainz.org``.
-  * MP4 (M4A) — multi-value ``©ART`` / ``aART``; ``trkn`` / ``disk`` tuples;
-    Picard freeform atoms for MusicBrainz ids (Track Id = recording).
+Only these fields are written (plus title for usable track identity):
+  Album, Artist, Album Artist, Track N/Total, Disc N/Total, Genre, Label,
+  Compilation (when needed), and ReplayGain. No MusicBrainz / barcode /
+  catalog / country / date / MEDIA tags.
 """
 
 from __future__ import annotations
@@ -17,7 +13,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
+from ready2rip.metadata.providers import AlbumMetadata
 from ready2rip.paths import track_meta_for
 from ready2rip.tags.artists import (
     ARTIST_STYLE_FEAT,
@@ -28,7 +24,6 @@ from ready2rip.tags.artists import (
     primary_artist,
     split_artists,
 )
-from ready2rip.util import normalize_release_date
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +37,7 @@ class ReplayGainValues:
 
 
 class TagWriter:
-    """Write standard tags, ReplayGain, and embedded pictures."""
+    """Write the trimmed tag set, ReplayGain, and embedded pictures."""
 
     def write_album_tags(
         self,
@@ -75,7 +70,6 @@ class TagWriter:
         artists = _artist_names_for_tags(raw_artist, style=style)
         album_artists = _artist_names_for_tags(raw_album_artist, style=style)
 
-        date = normalize_release_date(album.date or '')
         total = total_tracks if total_tracks is not None else (
             len(album.tracks) if album.tracks else None
         )
@@ -84,11 +78,9 @@ class TagWriter:
             artists=artists,
             album=album_title,
             album_artists=album_artists,
-            date=date,
             track_number=track_number,
             total_tracks=total,
             album_meta=album,
-            track_meta=track,
         )
 
         if suffix == '.flac':
@@ -159,7 +151,7 @@ class TagWriter:
                         text=[f'{values.album_peak:.6f}'],
                     )
                 )
-            audio.save()
+            audio.save(v2_version=4)
         elif suffix in {'.m4a', '.mp4', '.aac'}:
             from mutagen.mp4 import MP4
 
@@ -196,7 +188,7 @@ class TagWriter:
                 audio['REPLAYGAIN_ALBUM_PEAK'] = [f'{values.album_peak:.6f}']
             audio.save()
         else:
-            log.debug('ReplayGain not written for %s', path)
+            log.debug('No ReplayGain writer for %s', path)
 
     def embed_artwork(
         self,
@@ -308,19 +300,14 @@ class TagWriter:
         artists: list[str],
         album: str,
         album_artists: list[str],
-        date: str,
         track_number: int,
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
-        track_meta: TrackMetadata | None = None,
     ) -> None:
         audio['TITLE'] = [title]
         audio['ARTIST'] = artists
         audio['ALBUM'] = [album]
         audio['ALBUMARTIST'] = album_artists
-        if date:
-            audio['DATE'] = [date]
-            audio['ORIGINALDATE'] = [date]
         audio['TRACKNUMBER'] = [str(track_number)]
         if total_tracks and total_tracks > 0:
             audio['TRACKTOTAL'] = [str(total_tracks)]
@@ -329,29 +316,12 @@ class TagWriter:
             audio['DISCNUMBER'] = [str(disc_num)]
             if disc_total and disc_total > 0:
                 audio['DISCTOTAL'] = [str(disc_total)]
-        audio['MEDIA'] = ['CD']
-        if _is_compilation(album_meta):
-            audio['COMPILATION'] = ['1']
-        if album_meta and album_meta.musicbrainz_release_id:
-            audio['MUSICBRAINZ_ALBUMID'] = [album_meta.musicbrainz_release_id]
-        if album_meta and album_meta.musicbrainz_release_group_id:
-            audio['MUSICBRAINZ_RELEASEGROUPID'] = [
-                album_meta.musicbrainz_release_group_id
-            ]
-        if track_meta is not None and track_meta.musicbrainz_recording_id:
-            audio['MUSICBRAINZ_RECORDINGID'] = [track_meta.musicbrainz_recording_id]
-        if album_meta and album_meta.barcode:
-            audio['BARCODE'] = [album_meta.barcode]
         if album_meta and album_meta.genre:
             audio['GENRE'] = [album_meta.genre]
         if album_meta and album_meta.label:
             audio['LABEL'] = [album_meta.label]
-        if album_meta and album_meta.catalog_number:
-            audio['CATALOGNUMBER'] = [album_meta.catalog_number]
-        if album_meta and album_meta.country:
-            audio['RELEASECOUNTRY'] = [album_meta.country]
-        if album_meta and album_meta.discid:
-            audio['MUSICBRAINZ_DISCID'] = [album_meta.discid]
+        if _is_compilation(album_meta):
+            audio['COMPILATION'] = ['1']
 
     def _tag_mp4(
         self,
@@ -361,11 +331,9 @@ class TagWriter:
         artists: list[str],
         album: str,
         album_artists: list[str],
-        date: str,
         track_number: int,
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
-        track_meta: TrackMetadata | None = None,
     ) -> None:
         from mutagen.mp4 import MP4
 
@@ -379,44 +347,12 @@ class TagWriter:
         disc_num, disc_total = _disc_numbers(album_meta)
         if disc_num is not None:
             audio['disk'] = [(disc_num, disc_total if disc_total else 0)]
-        if date:
-            audio['\xa9day'] = [date]
         if album_meta and album_meta.genre:
             audio['\xa9gen'] = [album_meta.genre]
         if album_meta and album_meta.label:
             audio['\xa9pub'] = [album_meta.label]
         if _is_compilation(album_meta):
             audio['cpil'] = [True]
-        if album_meta and album_meta.musicbrainz_release_id:
-            audio['----:com.apple.iTunes:MusicBrainz Album Id'] = [
-                album_meta.musicbrainz_release_id.encode('utf-8')
-            ]
-        if album_meta and album_meta.musicbrainz_release_group_id:
-            audio['----:com.apple.iTunes:MusicBrainz Release Group Id'] = [
-                album_meta.musicbrainz_release_group_id.encode('utf-8')
-            ]
-        # Picard names this "Track Id" but the value is the recording UUID.
-        if track_meta is not None and track_meta.musicbrainz_recording_id:
-            audio['----:com.apple.iTunes:MusicBrainz Track Id'] = [
-                track_meta.musicbrainz_recording_id.encode('utf-8')
-            ]
-        if album_meta and album_meta.barcode:
-            audio['----:com.apple.iTunes:BARCODE'] = [
-                album_meta.barcode.encode('utf-8')
-            ]
-        if album_meta and album_meta.catalog_number:
-            audio['----:com.apple.iTunes:CATALOGNUMBER'] = [
-                album_meta.catalog_number.encode('utf-8')
-            ]
-        if album_meta and album_meta.country:
-            audio['----:com.apple.iTunes:MusicBrainz Album Release Country'] = [
-                album_meta.country.encode('utf-8')
-            ]
-        if album_meta and album_meta.discid:
-            audio['----:com.apple.iTunes:MusicBrainz Disc Id'] = [
-                album_meta.discid.encode('utf-8')
-            ]
-        audio['----:com.apple.iTunes:MEDIA'] = [b'CD']
         audio.save()
 
     def _tag_mp3(
@@ -427,17 +363,14 @@ class TagWriter:
         artists: list[str],
         album: str,
         album_artists: list[str],
-        date: str,
         track_number: int,
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
-        track_meta: TrackMetadata | None = None,
     ) -> None:
         from mutagen.id3 import (
             ID3,
             TALB,
             TCON,
-            TDRC,
             TIT2,
             TPE1,
             TPE2,
@@ -445,7 +378,6 @@ class TagWriter:
             TPUB,
             TRCK,
             TXXX,
-            UFID,
         )
         from mutagen.mp3 import MP3
 
@@ -461,12 +393,9 @@ class TagWriter:
             'TPE2',
             'TRCK',
             'TPOS',
-            'TDRC',
-            'TDOR',
             'TCON',
             'TPUB',
             'TCMP',
-            'TMED',
         ):
             tags.delall(frame)
         tags.add(TIT2(encoding=3, text=title))
@@ -481,25 +410,10 @@ class TagWriter:
         if disc_num is not None:
             total = disc_total if disc_total and disc_total > 0 else 1
             tags.add(TPOS(encoding=3, text=f'{disc_num}/{total}'))
-        if date:
-            tags.add(TDRC(encoding=3, text=date))
-            try:
-                from mutagen.id3 import TDOR
-
-                tags.add(TDOR(encoding=3, text=date))
-            except ImportError:
-                pass
         if album_meta and album_meta.genre:
             tags.add(TCON(encoding=3, text=album_meta.genre))
         if album_meta and album_meta.label:
             tags.add(TPUB(encoding=3, text=album_meta.label))
-        try:
-            from mutagen.id3 import TMED
-
-            tags.add(TMED(encoding=3, text='CD'))
-        except ImportError:
-            tags.delall('TXXX:MEDIA')
-            tags.add(TXXX(encoding=3, desc='MEDIA', text=['CD']))
         if _is_compilation(album_meta):
             try:
                 from mutagen.id3 import TCMP
@@ -508,65 +422,7 @@ class TagWriter:
             except ImportError:
                 tags.delall('TXXX:COMPILATION')
                 tags.add(TXXX(encoding=3, desc='COMPILATION', text=['1']))
-        if album_meta and album_meta.musicbrainz_release_id:
-            tags.delall('TXXX:MusicBrainz Album Id')
-            tags.add(
-                TXXX(
-                    encoding=3,
-                    desc='MusicBrainz Album Id',
-                    text=[album_meta.musicbrainz_release_id],
-                )
-            )
-        if album_meta and album_meta.musicbrainz_release_group_id:
-            tags.delall('TXXX:MusicBrainz Release Group Id')
-            tags.add(
-                TXXX(
-                    encoding=3,
-                    desc='MusicBrainz Release Group Id',
-                    text=[album_meta.musicbrainz_release_group_id],
-                )
-            )
-        if track_meta is not None and track_meta.musicbrainz_recording_id:
-            tags.delall('UFID:http://musicbrainz.org')
-            tags.add(
-                UFID(
-                    owner='http://musicbrainz.org',
-                    data=track_meta.musicbrainz_recording_id.encode('ascii'),
-                )
-            )
-        if album_meta and album_meta.barcode:
-            tags.delall('TXXX:BARCODE')
-            tags.add(TXXX(encoding=3, desc='BARCODE', text=[album_meta.barcode]))
-        if album_meta and album_meta.catalog_number:
-            tags.delall('TXXX:CATALOGNUMBER')
-            tags.add(
-                TXXX(
-                    encoding=3,
-                    desc='CATALOGNUMBER',
-                    text=[album_meta.catalog_number],
-                )
-            )
-        if album_meta and album_meta.country:
-            tags.delall('TXXX:MusicBrainz Album Release Country')
-            tags.add(
-                TXXX(
-                    encoding=3,
-                    desc='MusicBrainz Album Release Country',
-                    text=[album_meta.country],
-                )
-            )
-        if album_meta and album_meta.discid:
-            tags.delall('TXXX:MusicBrainz Disc Id')
-            tags.add(
-                TXXX(
-                    encoding=3,
-                    desc='MusicBrainz Disc Id',
-                    text=[album_meta.discid],
-                )
-            )
-        # Drop legacy TXXX:LABEL if present (publisher is TPUB now).
         tags.delall('TXXX:LABEL')
-        # ID3v2.4 keeps full ISO dates in TDRC/TDOR (v2.3 TYER is year-only).
         audio.save(v2_version=4)
 
     def _tag_wav(
@@ -577,13 +433,10 @@ class TagWriter:
         artists: list[str],
         album: str,
         album_artists: list[str],
-        date: str,
         track_number: int,
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
-        track_meta: TrackMetadata | None = None,
     ) -> None:
-        del track_meta  # WAV keeps a minimal ID3 subset.
         try:
             from mutagen.wave import WAVE
         except ImportError:
@@ -594,7 +447,7 @@ class TagWriter:
             audio.add_tags()
         tags = audio.tags
         try:
-            from mutagen.id3 import ID3, TALB, TDRC, TIT2, TPE1, TPE2, TPOS, TRCK
+            from mutagen.id3 import ID3, TALB, TCON, TIT2, TPE1, TPE2, TPOS, TPUB, TRCK
 
             if tags is None or not isinstance(tags, ID3):
                 return
@@ -610,8 +463,10 @@ class TagWriter:
             if disc_num is not None:
                 total = disc_total if disc_total and disc_total > 0 else 1
                 tags.add(TPOS(encoding=3, text=f'{disc_num}/{total}'))
-            if date:
-                tags.add(TDRC(encoding=3, text=date))
+            if album_meta and album_meta.genre:
+                tags.add(TCON(encoding=3, text=album_meta.genre))
+            if album_meta and album_meta.label:
+                tags.add(TPUB(encoding=3, text=album_meta.label))
             audio.save()
         except Exception:
             log.debug('WAV tagging failed for %s', path, exc_info=True)

@@ -29,10 +29,20 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-04">
       <description>
         <p>
-          0.4.18: Remove the empty-state disc icon for all tray/no-disc
-          screens (same as tray-open), grey out track select checkboxes
-          while ripping, and trim unused helpers across CTDB, MMC, and
-          disc modules.
+          0.4.19: Live progress during cdparanoia extract (banner no
+          longer stalls), and a trimmed tag set — title, album, artist,
+          album artist, track/disc totals, genre, label, compilation,
+          and ReplayGain only.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.18" date="2026-11-04">
+      <description>
+        <p>
+          Remove the empty-state disc icon for all tray/no-disc screens
+          (same as tray-open), grey out track select checkboxes while
+          ripping, and trim unused helpers across CTDB, MMC, and disc
+          modules.
         </p>
       </description>
     </release>

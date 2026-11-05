@@ -53,7 +53,12 @@ from ready2rip.rip.encode import (
     opus_encode_argv,
     opus_ffmpeg_argv,
 )
-from ready2rip.rip.paranoia_stats import ParanoiaStats, parse_paranoia_stderr
+from ready2rip.rip.paranoia_stats import (
+    FRAMES_PER_SECTOR,
+    ParanoiaStats,
+    parse_paranoia_stderr,
+    progress_frame_from_line,
+)
 from ready2rip.rip.riplog import (
     RipLog,
     TrackLogEntry,
@@ -1657,18 +1662,30 @@ class RipEngine:
                 attempt_t0 = time.monotonic()
 
                 if job.test_and_copy:
+                    test_label = (
+                        f'Testing track {track_no}'
+                        + (f' (retry {attempt})' if attempt else '')
+                    )
                     report(
                         track_no,
                         RipState.RIPPING,
                         index=idx,
                         sub=0.0,
-                        message=(
-                            f'Testing track {track_no}'
-                            + (f' (retry {attempt})' if attempt else '')
-                            + '…'
-                        ),
+                        message=f'{test_label}…',
                         total_units=total_units,
                     )
+
+                    def _test_progress(local: float, *, _label=test_label) -> None:
+                        pct = max(0, min(99, int(local * 100)))
+                        report(
+                            track_no,
+                            RipState.RIPPING,
+                            index=idx,
+                            sub=0.22 * max(0.0, min(1.0, local)),
+                            message=f'{_label} · {pct}%',
+                            total_units=total_units,
+                        )
+
                     # Secure-only: a burst test against a secure copy is not a real check.
                     attempt_test_mode, st = self._rip_track(
                         job.device,
@@ -1679,6 +1696,8 @@ class RipEngine:
                         burst_fallback=False,
                         force_mode='secure',
                         sample_offset=job.sample_offset,
+                        on_extract_progress=_test_progress,
+                        expected_sectors=sectors,
                     )
                     attempt_stats.merge(st)
                     test_crc = wav_pcm_crc(test_wav)
@@ -1700,18 +1719,39 @@ class RipEngine:
                             avoid_end=avoid1,
                         )
 
+                copy_label = (
+                    f'Copying track {track_no}'
+                    if job.test_and_copy
+                    else f'Extracting track {track_no}'
+                )
+                copy_base = 0.28 if job.test_and_copy else 0.0
+                copy_span = 0.24 if job.test_and_copy else 0.50
                 report(
                     track_no,
                     RipState.RIPPING,
                     index=idx,
-                    sub=0.28 if job.test_and_copy else 0.0,
-                    message=(
-                        f'Copying track {track_no}…'
-                        if job.test_and_copy
-                        else f'Extracting track {track_no}…'
-                    ),
+                    sub=copy_base,
+                    message=f'{copy_label}…',
                     total_units=total_units,
                 )
+
+                def _copy_progress(
+                    local: float,
+                    *,
+                    _label=copy_label,
+                    _base=copy_base,
+                    _span=copy_span,
+                ) -> None:
+                    pct = max(0, min(99, int(local * 100)))
+                    report(
+                        track_no,
+                        RipState.RIPPING,
+                        index=idx,
+                        sub=_base + _span * max(0.0, min(1.0, local)),
+                        message=f'{_label} · {pct}%',
+                        total_units=total_units,
+                    )
+
                 attempt_copy_mode, st = self._rip_track(
                     job.device,
                     track_no,
@@ -1736,6 +1776,8 @@ class RipEngine:
                             total_units=total_units,
                         )
                     ),
+                    on_extract_progress=_copy_progress,
+                    expected_sectors=sectors,
                 )
                 attempt_stats.merge(st)
                 pass_elapsed = time.monotonic() - attempt_t0
@@ -1889,10 +1931,22 @@ class RipEngine:
             track_no,
             RipState.RIPPING,
             index=idx,
-            sub=0.0,
+            sub=0.40,
             message=f'Burst ripping track {track_no}…',
             total_units=total_units,
         )
+
+        def _burst_progress(local: float) -> None:
+            pct = max(0, min(99, int(local * 100)))
+            report(
+                track_no,
+                RipState.RIPPING,
+                index=idx,
+                sub=0.40 + 0.15 * max(0.0, min(1.0, local)),
+                message=f'Burst ripping track {track_no} · {pct}%',
+                total_units=total_units,
+            )
+
         t0 = time.monotonic()
         mode, st = self._rip_track(
             job.device,
@@ -1903,6 +1957,8 @@ class RipEngine:
             burst_fallback=False,
             force_mode='burst',
             sample_offset=job.sample_offset,
+            on_extract_progress=_burst_progress,
+            expected_sectors=sectors,
         )
         elapsed = time.monotonic() - t0
         copy_crc = wav_pcm_crc(copy_wav)
@@ -2050,6 +2106,8 @@ class RipEngine:
         force_mode: str | None = None,
         sample_offset: int = 0,
         on_burst: Callable[[], None] | None = None,
+        on_extract_progress: Callable[[float], None] | None = None,
+        expected_sectors: int = 0,
     ) -> tuple[str, ParanoiaStats]:
         """Extract one track. Returns ``(mode, paranoia_stats)``.
 
@@ -2060,6 +2118,7 @@ class RipEngine:
         """
         secure_timeout = _extract_timeout(expected_bytes, mode='secure')
         burst_timeout = _extract_timeout(expected_bytes, mode='burst')
+        expected_frames = max(0, int(expected_sectors)) * FRAMES_PER_SECTOR
 
         def run_secure() -> ParanoiaStats:
             return self._run_cdparanoia(
@@ -2070,6 +2129,9 @@ class RipEngine:
                 timeout=secure_timeout,
                 allow_nonzero=True,
                 sample_offset=sample_offset,
+                on_extract_progress=on_extract_progress,
+                expected_frames=expected_frames,
+                expected_bytes=expected_bytes,
             )
 
         def run_burst() -> ParanoiaStats:
@@ -2081,6 +2143,9 @@ class RipEngine:
                 timeout=burst_timeout,
                 allow_nonzero=True,
                 sample_offset=sample_offset,
+                on_extract_progress=on_extract_progress,
+                expected_frames=expected_frames,
+                expected_bytes=expected_bytes,
             )
 
         if force_mode == 'burst':
@@ -2126,6 +2191,7 @@ class RipEngine:
         force_mode: str | None = None,
         sample_offset: int = 0,
         on_burst: Callable[[], None] | None = None,
+        on_extract_progress: Callable[[float], None] | None = None,
         timeout_secure: int | None = None,
         timeout_burst: int | None = None,
     ) -> tuple[str, ParanoiaStats]:
@@ -2134,6 +2200,7 @@ class RipEngine:
             timeout_secure = _extract_timeout(expected_bytes, mode='secure')
         if timeout_burst is None:
             timeout_burst = _extract_timeout(expected_bytes, mode='burst')
+        expected_frames = max(0, int(end_sector) - int(start_sector)) * FRAMES_PER_SECTOR
 
         def run_secure() -> ParanoiaStats:
             return self._run_cdparanoia_span(
@@ -2145,6 +2212,9 @@ class RipEngine:
                 timeout=timeout_secure,
                 allow_nonzero=True,
                 sample_offset=sample_offset,
+                on_extract_progress=on_extract_progress,
+                expected_frames=expected_frames,
+                expected_bytes=expected_bytes,
             )
 
         def run_burst() -> ParanoiaStats:
@@ -2157,6 +2227,9 @@ class RipEngine:
                 timeout=timeout_burst,
                 allow_nonzero=True,
                 sample_offset=sample_offset,
+                on_extract_progress=on_extract_progress,
+                expected_frames=expected_frames,
+                expected_bytes=expected_bytes,
             )
 
         if force_mode == 'burst':
@@ -2422,6 +2495,14 @@ class RipEngine:
                 # pass — a burst test vs a secure copy is not a real check.
                 span_timeout_secure = max(600, total_sectors // 5)
                 span_timeout_burst = max(300, total_sectors // 15)
+                def _img_extract_progress(local: float) -> None:
+                    pct = max(0, min(99, int(local * 100)))
+                    report(
+                        RipState.RIPPING,
+                        0.05 + 0.30 * max(0.0, min(1.0, local)),
+                        f'Extracting disc image · {pct}%',
+                    )
+
                 mode, img_stats = self._rip_span(
                     job.device,
                     file_start,
@@ -2438,6 +2519,7 @@ class RipEngine:
                         0.12,
                         'Secure image extract struggled — burst mode…',
                     ),
+                    on_extract_progress=_img_extract_progress,
                 )
                 if mode == 'burst':
                     notes.append(
@@ -2470,6 +2552,14 @@ class RipEngine:
                                 avoid_start=file_start,
                                 avoid_end=end_sector,
                             )
+                            def _img_retry_progress(local: float) -> None:
+                                pct = max(0, min(99, int(local * 100)))
+                                report(
+                                    RipState.RIPPING,
+                                    0.20 + 0.15 * max(0.0, min(1.0, local)),
+                                    f'Retrying disc image · {pct}%',
+                                )
+
                             mode, retry_stats = self._rip_span(
                                 job.device,
                                 file_start,
@@ -2481,6 +2571,7 @@ class RipEngine:
                                 sample_offset=job.sample_offset,
                                 timeout_secure=span_timeout_secure,
                                 timeout_burst=span_timeout_burst,
+                                on_extract_progress=_img_retry_progress,
                             )
                             img_stats.merge(retry_stats)
 
@@ -2498,6 +2589,15 @@ class RipEngine:
                         report(
                             RipState.RIPPING, 0.40, 'Copy pass for disc image…'
                         )
+
+                        def _img_copy_progress(local: float) -> None:
+                            pct = max(0, min(99, int(local * 100)))
+                            report(
+                                RipState.RIPPING,
+                                0.40 + 0.25 * max(0.0, min(1.0, local)),
+                                f'Copy pass for disc image · {pct}%',
+                            )
+
                         copy_mode, copy_stats = self._rip_span(
                             job.device,
                             file_start,
@@ -2509,6 +2609,7 @@ class RipEngine:
                             sample_offset=job.sample_offset,
                             timeout_secure=span_timeout_secure,
                             timeout_burst=span_timeout_burst,
+                            on_extract_progress=_img_copy_progress,
                         )
                         img_stats.merge(copy_stats)
                         copy_crc = wav_pcm_crc(copy_wav)
@@ -2772,6 +2873,9 @@ class RipEngine:
         timeout: int,
         allow_nonzero: bool = False,
         sample_offset: int = 0,
+        on_extract_progress: Callable[[float], None] | None = None,
+        expected_frames: int = 0,
+        expected_bytes: int | None = None,
     ) -> ParanoiaStats:
         binary = find_cdparanoia()
         if not binary:
@@ -2785,6 +2889,10 @@ class RipEngine:
             what=f'cdparanoia {mode} track {track_number}',
             timeout=timeout,
             allow_nonzero=allow_nonzero,
+            on_extract_progress=on_extract_progress,
+            expected_frames=expected_frames,
+            wav_path=wav_path,
+            expected_bytes=expected_bytes,
         )
 
     def _run_cdparanoia_span(
@@ -2798,6 +2906,9 @@ class RipEngine:
         timeout: int,
         allow_nonzero: bool = False,
         sample_offset: int = 0,
+        on_extract_progress: Callable[[float], None] | None = None,
+        expected_frames: int = 0,
+        expected_bytes: int | None = None,
     ) -> ParanoiaStats:
         """Extract absolute sector range ``[start, end)`` to *wav_path*.
 
@@ -2827,6 +2938,10 @@ class RipEngine:
             what=f'cdparanoia {mode} span {span} (sectors [{start}, {end}))',
             timeout=timeout,
             allow_nonzero=allow_nonzero,
+            on_extract_progress=on_extract_progress,
+            expected_frames=expected_frames,
+            wav_path=wav_path,
+            expected_bytes=expected_bytes,
         )
 
     def _assert_wav_ok(
@@ -2905,29 +3020,165 @@ class RipEngine:
         what: str,
         timeout: int | None = None,
         allow_nonzero: bool = False,
+        on_extract_progress: Callable[[float], None] | None = None,
+        expected_frames: int = 0,
+        wav_path: Path | None = None,
+        expected_bytes: int | None = None,
     ) -> ParanoiaStats:
-        """Run cdparanoia, parse ``-e`` progress into :class:`ParanoiaStats`."""
-        code, stderr = self._run_capture(cmd, what=what, timeout=timeout)
-        stats = parse_paranoia_stderr(stderr, exit_code=code)
-        if self._cancelled:
-            return stats
-        if code != 0:
-            detail = (stderr or '').strip() or f'exit {code}'
-            # Prefer a short non-progress diagnostic for the exception text.
-            if stats.raw_excerpt:
-                detail = stats.raw_excerpt
-            elif len(detail) > 400:
-                detail = detail[:400] + '…'
-            if allow_nonzero:
-                log.warning(
-                    '%s exited %s (will validate output); paranoia=%s',
-                    what,
-                    code,
-                    stats.short_status(),
-                )
+        """Run cdparanoia, stream ``-e`` progress, return :class:`ParanoiaStats`."""
+        log.info('Running %s: %s', what, ' '.join(cmd))
+        proc: subprocess.Popen[str] | None = None
+        stderr_chunks: list[str] = []
+        origin_frame: int | None = None
+        last_frac = -1.0
+        last_emit = 0.0
+        pcm_expected = (
+            max(0, int(expected_bytes) - 44)
+            if expected_bytes is not None and expected_bytes > 44
+            else 0
+        )
+
+        def emit(frac: float) -> None:
+            nonlocal last_frac, last_emit
+            if on_extract_progress is None:
+                return
+            frac = max(0.0, min(0.99, frac))
+            now = time.monotonic()
+            if frac < last_frac + 0.008 and (now - last_emit) < 0.2:
+                return
+            last_frac = frac
+            last_emit = now
+            try:
+                on_extract_progress(frac)
+            except Exception:
+                log.debug('Extract progress callback failed', exc_info=True)
+
+        def consider_line(line: str) -> None:
+            nonlocal origin_frame
+            if expected_frames <= 0:
+                return
+            frame = progress_frame_from_line(line)
+            if frame is None or frame < 0:
+                return
+            if origin_frame is None:
+                origin_frame = frame
+            rel = frame - origin_frame
+            if rel < 0:
+                # Absolute cursor jumped backward / different basis — restart.
+                origin_frame = frame
+                rel = 0
+            emit(rel / float(expected_frames))
+
+        def consider_wav_size() -> None:
+            if wav_path is None or pcm_expected <= 0:
+                return
+            try:
+                if not wav_path.is_file():
+                    return
+                size = wav_path.stat().st_size
+            except OSError:
+                return
+            if size <= 44:
+                return
+            emit((size - 44) / float(pcm_expected))
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
+            with self._proc_lock:
+                self._procs.add(proc)
+            assert proc.stderr is not None
+            deadline = (
+                time.monotonic() + timeout if timeout is not None else None
+            )
+            while True:
+                if self._cancelled:
+                    try:
+                        proc.terminate()
+                    except OSError:
+                        pass
+                    break
+                if deadline is not None and time.monotonic() > deadline:
+                    proc.kill()
+                    try:
+                        proc.communicate(timeout=5)
+                    except Exception:
+                        pass
+                    raise RuntimeError(
+                        f'{what} timed out after {timeout}s'
+                    ) from None
+                # Short timed read so we can also poll WAV growth / cancel.
+                ready = True
+                try:
+                    import select
+
+                    ready, _, _ = select.select([proc.stderr], [], [], 0.25)
+                    ready = bool(ready)
+                except (ImportError, ValueError, OSError):
+                    ready = True
+                if ready:
+                    line = proc.stderr.readline()
+                    if line:
+                        stderr_chunks.append(line)
+                        consider_line(line)
+                    elif proc.poll() is not None:
+                        # Drain any remaining buffered stderr.
+                        rest = proc.stderr.read()
+                        if rest:
+                            stderr_chunks.append(rest)
+                            for part in rest.splitlines(keepends=True):
+                                consider_line(part)
+                        break
+                    else:
+                        # Ready with empty read but still running — avoid spin.
+                        consider_wav_size()
+                        time.sleep(0.05)
+                else:
+                    consider_wav_size()
+                    if proc.poll() is not None:
+                        rest = proc.stderr.read()
+                        if rest:
+                            stderr_chunks.append(rest)
+                            for part in rest.splitlines(keepends=True):
+                                consider_line(part)
+                        break
+            code = proc.wait() if proc.returncode is None else proc.returncode
+            if on_extract_progress is not None and not self._cancelled:
+                try:
+                    on_extract_progress(1.0)
+                except Exception:
+                    pass
+            stderr = ''.join(stderr_chunks)
+            stats = parse_paranoia_stderr(stderr, exit_code=code)
+            if self._cancelled:
                 return stats
-            raise RuntimeError(f'{what} failed: {detail}')
-        return stats
+            if code != 0:
+                detail = (stderr or '').strip() or f'exit {code}'
+                if stats.raw_excerpt:
+                    detail = stats.raw_excerpt
+                elif len(detail) > 400:
+                    detail = detail[:400] + '…'
+                if allow_nonzero:
+                    log.warning(
+                        '%s exited %s (will validate output); paranoia=%s',
+                        what,
+                        code,
+                        stats.short_status(),
+                    )
+                    return stats
+                raise RuntimeError(f'{what} failed: {detail}')
+            return stats
+        except OSError as exc:
+            raise RuntimeError(f'Failed to run {what}: {exc}') from exc
+        finally:
+            if proc is not None:
+                with self._proc_lock:
+                    self._procs.discard(proc)
 
     def _run(
         self,
