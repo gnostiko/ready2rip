@@ -29,10 +29,20 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-04">
       <description>
         <p>
-          0.4.19: Live progress during cdparanoia extract (banner no
-          longer stalls), and a trimmed tag set — title, album, artist,
-          album artist, track/disc totals, genre, label, compilation,
-          and ReplayGain only.
+          0.4.20: More reliable rip progress (line-buffered extract
+          updates, monotonic WAV-size progress, correct phase order),
+          plain status labels without percents, and remove the empty-state
+          eject button (header eject remains).
+        </p>
+      </description>
+    </release>
+    <release version="0.4.19" date="2026-11-04">
+      <description>
+        <p>
+          Live progress during cdparanoia extract (banner no longer
+          stalls), and a trimmed tag set — title, album, artist, album
+          artist, track/disc totals, genre, label, compilation, and
+          ReplayGain only.
         </p>
       </description>
     </release>

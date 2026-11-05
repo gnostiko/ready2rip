@@ -163,7 +163,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     rip_button = Gtk.Template.Child()
     lookup_button = Gtk.Template.Child()
     eject_button = Gtk.Template.Child()
-    empty_eject_button = Gtk.Template.Child()
     art_album_row = Gtk.Template.Child()
     art_group = Gtk.Template.Child()
     art_cover_row = Gtk.Template.Child()
@@ -446,7 +445,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         )
         apply_icon(self.lookup_button, 'system-search-symbolic', display=display)
         apply_icon(self.eject_button, 'media-eject-symbolic', display=display)
-        apply_icon(self.empty_eject_button, 'media-eject-symbolic', display=display)
         apply_icon(self.search_art_button, 'system-search-symbolic', display=display)
         apply_icon(self.choose_art_button, 'folder-symbolic', display=display)
         apply_icon(self.clear_art_button, 'user-trash-symbolic', display=display)
@@ -2265,7 +2263,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 self._apply_tracks_edit_mode()
 
         self.eject_button.set_sensitive(idle)
-        self.empty_eject_button.set_sensitive(idle)
         self._set_action_enabled('eject', idle)
         self._set_lookup_controls_sensitive(idle and self._disc is not None)
         self.settings_button.set_sensitive(idle)
@@ -2421,14 +2418,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         """Open the tray / eject media on the configured optical device."""
         device = self.store.get().device or self._device or '/dev/sr0'
         self.eject_button.set_sensitive(False)
-        self.empty_eject_button.set_sensitive(False)
 
         def work() -> None:
             ok, message = eject_drive(device)
 
             def done() -> bool:
-                self.eject_button.set_sensitive(True)
-                self.empty_eject_button.set_sensitive(True)
+                self.eject_button.set_sensitive(not self._ripping)
                 if ok:
                     self._toast('Disc ejected')
                     self._last_tray_state = DriveTrayState.TRAY_OPEN

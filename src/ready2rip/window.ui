@@ -90,18 +90,6 @@
                               <object class="AdwStatusPage" id="status_page">
                                 <property name="title" translatable="yes">No disc</property>
                                 <property name="description" translatable="yes">Insert an audio CD.</property>
-                                <child>
-                                  <object class="GtkButton" id="empty_eject_button">
-                                    <property name="icon-name">media-eject-symbolic</property>
-                                    <property name="halign">center</property>
-                                    <property name="tooltip-text" translatable="yes">Eject</property>
-                                    <property name="action-name">win.eject</property>
-                                    <style>
-                                      <class name="circular"/>
-                                      <class name="flat"/>
-                                    </style>
-                                  </object>
-                                </child>
                               </object>
                             </property>
                           </object>
