@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Live extract-progress streaming (cdparanoia -e / WAV growth)."""
+"""Live extract-progress streaming (cdparanoia -e / WAV growth).
+
+Kept free of PyGObject so CI unit jobs without ``gi`` still collect it.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +10,7 @@ import stat
 import sys
 from pathlib import Path
 
-from ready2rip.rip.engine import RipEngine
+from ready2rip.rip.paranoia_run import run_paranoia_streaming
 from ready2rip.rip.paranoia_stats import progress_frame_from_line
 
 
@@ -42,9 +45,8 @@ print("##: 15 [finished] @ 20000", flush=True, file=sys.stderr)
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
 
     seen: list[float] = []
-    engine = RipEngine()
     expected_bytes = 44 + 2352 * 4 * 6
-    stats = engine._run_paranoia(
+    stats = run_paranoia_streaming(
         [sys.executable, str(script), str(wav)],
         what='fake paranoia',
         timeout=15,

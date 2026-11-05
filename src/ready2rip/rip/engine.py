@@ -53,12 +53,8 @@ from ready2rip.rip.encode import (
     opus_encode_argv,
     opus_ffmpeg_argv,
 )
-from ready2rip.rip.paranoia_stats import (
-    FRAMES_PER_SECTOR,
-    ParanoiaStats,
-    parse_paranoia_stderr,
-    progress_frame_from_line,
-)
+from ready2rip.rip.paranoia_run import run_paranoia_streaming
+from ready2rip.rip.paranoia_stats import FRAMES_PER_SECTOR, ParanoiaStats
 from ready2rip.rip.riplog import (
     RipLog,
     TrackLogEntry,
@@ -3022,172 +3018,29 @@ class RipEngine:
         wav_path: Path | None = None,
         expected_bytes: int | None = None,
     ) -> ParanoiaStats:
-        """Run cdparanoia, stream ``-e`` progress, return :class:`ParanoiaStats`.
+        """Run cdparanoia, stream ``-e`` progress, return :class:`ParanoiaStats`."""
 
-        Progress prefers growing WAV size (monotonic) and also tracks ``-e``
-        frame lines. ``stdbuf`` line-buffers child stderr when available so
-        updates are not stuck behind a full pipe buffer.
-        """
-        run_cmd = list(cmd)
-        stdbuf = shutil.which('stdbuf')
-        if stdbuf is not None and run_cmd and Path(run_cmd[0]).name != 'stdbuf':
-            # Line-buffer stdout/stderr — cdparanoia otherwise often block-buffers
-            # when stderr is a pipe, so the UI never moves until extract ends.
-            run_cmd = [stdbuf, '-oL', '-eL', *run_cmd]
-        log.info('Running %s: %s', what, ' '.join(run_cmd))
-        proc: subprocess.Popen[str] | None = None
-        stderr_chunks: list[str] = []
-        origin_frame: int | None = None
-        last_frac = -1.0
-        last_emit = 0.0
-        pcm_expected = (
-            max(0, int(expected_bytes) - 44)
-            if expected_bytes is not None and expected_bytes > 44
-            else 0
-        )
-
-        def emit(frac: float) -> None:
-            nonlocal last_frac, last_emit
-            if on_extract_progress is None:
-                return
-            frac = max(0.0, min(0.99, frac))
-            # Never move the bar backwards (paranoia re-reads earlier frames).
-            if frac + 1e-9 < last_frac:
-                return
-            now = time.monotonic()
-            if frac < last_frac + 0.005 and (now - last_emit) < 0.15:
-                return
-            last_frac = frac
-            last_emit = now
-            try:
-                on_extract_progress(frac)
-            except Exception:
-                log.debug('Extract progress callback failed', exc_info=True)
-
-        def consider_line(line: str) -> None:
-            nonlocal origin_frame
-            if expected_frames <= 0:
-                return
-            frame = progress_frame_from_line(line)
-            if frame is None or frame < 0:
-                return
-            if origin_frame is None:
-                origin_frame = frame
-            rel = frame - origin_frame
-            if rel < 0:
-                # Ignore backward cursor jumps; keep origin so progress stays
-                # monotonic via emit()'s floor.
-                return
-            emit(rel / float(expected_frames))
-
-        def consider_wav_size() -> None:
-            if wav_path is None or pcm_expected <= 0:
-                return
-            try:
-                if not wav_path.is_file():
-                    return
-                size = wav_path.stat().st_size
-            except OSError:
-                return
-            if size <= 44:
-                return
-            emit((size - 44) / float(pcm_expected))
-
-        try:
-            proc = subprocess.Popen(
-                run_cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-            )
+        def register(proc: subprocess.Popen[str]) -> None:
             with self._proc_lock:
                 self._procs.add(proc)
-            assert proc.stderr is not None
-            deadline = (
-                time.monotonic() + timeout if timeout is not None else None
-            )
-            while True:
-                if self._cancelled:
-                    try:
-                        proc.terminate()
-                    except OSError:
-                        pass
-                    break
-                if deadline is not None and time.monotonic() > deadline:
-                    proc.kill()
-                    try:
-                        proc.communicate(timeout=5)
-                    except Exception:
-                        pass
-                    raise RuntimeError(
-                        f'{what} timed out after {timeout}s'
-                    ) from None
-                # Always sample WAV growth — reliable even when stderr is quiet.
-                consider_wav_size()
-                # Short timed read so cancel / WAV polls stay responsive.
-                ready = True
-                try:
-                    import select
 
-                    ready, _, _ = select.select([proc.stderr], [], [], 0.2)
-                    ready = bool(ready)
-                except (ImportError, ValueError, OSError):
-                    ready = True
-                if ready:
-                    line = proc.stderr.readline()
-                    if line:
-                        stderr_chunks.append(line)
-                        consider_line(line)
-                    elif proc.poll() is not None:
-                        rest = proc.stderr.read()
-                        if rest:
-                            stderr_chunks.append(rest)
-                            for part in rest.splitlines(keepends=True):
-                                consider_line(part)
-                        break
-                    else:
-                        time.sleep(0.05)
-                elif proc.poll() is not None:
-                    rest = proc.stderr.read()
-                    if rest:
-                        stderr_chunks.append(rest)
-                        for part in rest.splitlines(keepends=True):
-                            consider_line(part)
-                    break
-            code = proc.wait() if proc.returncode is None else proc.returncode
-            consider_wav_size()
-            if on_extract_progress is not None and not self._cancelled:
-                try:
-                    on_extract_progress(1.0)
-                except Exception:
-                    pass
-            stderr = ''.join(stderr_chunks)
-            stats = parse_paranoia_stderr(stderr, exit_code=code)
-            if self._cancelled:
-                return stats
-            if code != 0:
-                detail = (stderr or '').strip() or f'exit {code}'
-                if stats.raw_excerpt:
-                    detail = stats.raw_excerpt
-                elif len(detail) > 400:
-                    detail = detail[:400] + '…'
-                if allow_nonzero:
-                    log.warning(
-                        '%s exited %s (will validate output); paranoia=%s',
-                        what,
-                        code,
-                        stats.short_status(),
-                    )
-                    return stats
-                raise RuntimeError(f'{what} failed: {detail}')
-            return stats
-        except OSError as exc:
-            raise RuntimeError(f'Failed to run {what}: {exc}') from exc
-        finally:
-            if proc is not None:
-                with self._proc_lock:
-                    self._procs.discard(proc)
+        def unregister(proc: subprocess.Popen[str]) -> None:
+            with self._proc_lock:
+                self._procs.discard(proc)
+
+        return run_paranoia_streaming(
+            cmd,
+            what=what,
+            timeout=timeout,
+            allow_nonzero=allow_nonzero,
+            on_extract_progress=on_extract_progress,
+            expected_frames=expected_frames,
+            wav_path=wav_path,
+            expected_bytes=expected_bytes,
+            is_cancelled=lambda: self._cancelled,
+            register_proc=register,
+            unregister_proc=unregister,
+        )
 
     def _run(
         self,
