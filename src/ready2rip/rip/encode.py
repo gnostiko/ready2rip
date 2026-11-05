@@ -23,12 +23,8 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 
-from ready2rip.settings import (
-    lame_args_for_mp3_quality,
-    normalize_aac_quality,
-    normalize_mp3_quality,
-    rip_log_aac_quality,
-)
+# Quality helpers live in settings.py (GSettings). Import them lazily so
+# flac/opus argv helpers stay usable in CI without PyGObject.
 
 # FDK VBR mode → approximate CBR (kbps) when only native ffmpeg ``aac`` exists.
 _AAC_VBR_TO_NATIVE_CBR = {
@@ -66,6 +62,8 @@ def flac_encode_argv(
 
 def mp3_encode_argv(wav_path: Path, out_path: Path, quality: str) -> list[str]:
     """Stock LAME VBR (``-V``) or CBR (``-b``); no resample/scale/filter."""
+    from ready2rip.settings import lame_args_for_mp3_quality, normalize_mp3_quality
+
     return [
         'lame',
         '--silent',
@@ -108,6 +106,8 @@ def aac_encode_argv(
     Presets match the Encoding panel (VBR 1–5 / CBR). No resample, profile
     override, or psychoacoustic tweaks beyond encoder defaults.
     """
+    from ready2rip.settings import normalize_aac_quality
+
     q = normalize_aac_quality(quality)
     if use_fdk is None:
         use_fdk = prefer_fdk_aac()
@@ -199,10 +199,14 @@ def encode_command_summary(
         level = max(0, min(8, int(flac_compression)))
         return f'flac -{level} --verify (lossless; PCM unaltered)'
     if fmt == 'mp3':
+        from ready2rip.settings import lame_args_for_mp3_quality, normalize_mp3_quality
+
         q = normalize_mp3_quality(mp3_quality)
         args = ' '.join(lame_args_for_mp3_quality(q))
         return f'lame --noreplaygain {args} (stock LAME; no resample/scale)'
     if fmt == 'aac':
+        from ready2rip.settings import normalize_aac_quality, rip_log_aac_quality
+
         q = normalize_aac_quality(aac_quality)
         if prefer_fdk_aac():
             return (
