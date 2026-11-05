@@ -141,6 +141,9 @@ def write_cue_sheet(
         lines.append(f'  TRACK {ct.number:02d} AUDIO')
         lines.append(f'    TITLE {_cue_quote(ct.title)}')
         lines.append(f'    PERFORMER {_cue_quote(ct.performer)}')
+        isrc = _track_isrc(album, ct.number)
+        if isrc:
+            lines.append(f'    ISRC {isrc}')
         if ct.pregap_sectors > 0:
             lines.append(f'    PREGAP {sectors_to_msf(ct.pregap_sectors)}')
         if ct.index00_sector is not None:
@@ -219,12 +222,16 @@ def write_multi_file_cue_sheet(
         tinfo = track_info.get(number)
         fname = path.name
 
+        isrc = _track_isrc(album, number)
+
         if first_audio and htoa_file is not None:
             htoa_name = Path(htoa_file).name
             lines.append(f'FILE {_cue_quote(htoa_name)} {file_type}')
             lines.append(f'  TRACK {number:02d} AUDIO')
             lines.append(f'    TITLE {_cue_quote(title)}')
             lines.append(f'    PERFORMER {_cue_quote(performer)}')
+            if isrc:
+                lines.append(f'    ISRC {isrc}')
             lines.append(f'    INDEX 00 {sectors_to_msf(0)}')
             lines.append(f'FILE {_cue_quote(fname)} {file_type}')
             lines.append(f'    INDEX 01 {sectors_to_msf(0)}')
@@ -245,6 +252,8 @@ def write_multi_file_cue_sheet(
             lines.append(f'  TRACK {number:02d} AUDIO')
             lines.append(f'    TITLE {_cue_quote(title)}')
             lines.append(f'    PERFORMER {_cue_quote(performer)}')
+            if isrc:
+                lines.append(f'    ISRC {isrc}')
             lines.append(f'    INDEX 00 {sectors_to_msf(rel)}')
             lines.append(f'FILE {_cue_quote(fname)} {file_type}')
             lines.append(f'    INDEX 01 {sectors_to_msf(0)}')
@@ -253,6 +262,8 @@ def write_multi_file_cue_sheet(
             lines.append(f'  TRACK {number:02d} AUDIO')
             lines.append(f'    TITLE {_cue_quote(title)}')
             lines.append(f'    PERFORMER {_cue_quote(performer)}')
+            if isrc:
+                lines.append(f'    ISRC {isrc}')
             if (
                 tinfo is not None
                 and tinfo.number == 1
@@ -272,7 +283,14 @@ def write_multi_file_cue_sheet(
 
 
 def multi_file_cue_basename(album: AlbumMetadata | None, disc: DiscInfo | None) -> str:
-    """Base name for a multi-file album ``.cue`` (no extension)."""
+    """Base name for a multi-file album ``.cue`` (no extension).
+
+    Multi-disc albums use ``CD1`` / ``CD2`` so the sheet sits beside
+    ``01.flac`` inside the per-disc folder. Single-disc keeps Artist - Album.
+    """
+    if album is not None and int(album.medium_count or 1) > 1:
+        disc_no = max(1, int(album.medium_position or 1))
+        return f'CD{disc_no}'
     if album and album.title:
         artist = sanitize_component(album.artist or 'Unknown Artist')
         title = sanitize_component(album.title)
@@ -293,6 +311,15 @@ def _cue_header(album: AlbumMetadata | None, *, comment: str) -> list[str]:
     if date:
         # Full YYYY-MM-DD when known (year-only still valid).
         lines.append(f'REM DATE {date}')
+    if album is not None and int(album.medium_count or 1) > 1:
+        disc_no = max(1, int(album.medium_position or 1))
+        total = max(disc_no, int(album.medium_count or 1))
+        lines.append(f'REM DISCNUMBER {disc_no}')
+        lines.append(f'REM TOTALDISCS {total}')
+    catalog = (album.barcode if album else '') or ''
+    catalog = ''.join(ch for ch in catalog if ch.isdigit())
+    if len(catalog) >= 12:
+        lines.append(f'CATALOG {catalog[:13]}')
     lines.append(f'REM COMMENT {_cue_quote(comment)}')
     lines.append(f'PERFORMER {_cue_quote(album_artist)}')
     lines.append(f'TITLE {_cue_quote(album_title)}')
@@ -301,6 +328,9 @@ def _cue_header(album: AlbumMetadata | None, *, comment: str) -> list[str]:
 
 def image_basename(album: AlbumMetadata | None, disc: DiscInfo) -> str:
     """Sanitized base name for the image / cue pair (no extension)."""
+    if album is not None and int(album.medium_count or 1) > 1:
+        disc_no = max(1, int(album.medium_position or 1))
+        return f'CD{disc_no}'
     if album and album.title:
         artist = sanitize_component(album.artist or 'Unknown Artist')
         title = sanitize_component(album.title)
@@ -387,6 +417,13 @@ def _multi_comment(
     if data_files:
         comment += '; mixed-mode data'
     return comment
+
+
+def _track_isrc(album: AlbumMetadata | None, number: int) -> str:
+    meta = track_meta_for(album, number)
+    raw = (meta.isrc if meta is not None else '') or ''
+    cleaned = ''.join(ch for ch in raw.upper() if ch.isalnum())
+    return cleaned if len(cleaned) == 12 else ''
 
 
 def _cue_quote(value: str) -> str:

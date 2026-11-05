@@ -27,8 +27,9 @@ _WIN_RESERVED = {
     *(f'LPT{i}' for i in range(1, 10)),
 }
 
-DEFAULT_FILENAME_TEMPLATE = '{disc_track} - {title}'
-DEFAULT_ALBUM_FOLDER_TEMPLATE = '{album_artist}/{dated_album}'
+# Track files stay 01/02/…; multi-disc albums use a CD1/ CD2/ subfolder.
+DEFAULT_FILENAME_TEMPLATE = '{track:02d} - {title}'
+DEFAULT_ALBUM_FOLDER_TEMPLATE = '{album_artist}/{dated_album}/{disc_folder}'
 
 # Tokens shown in settings tooltips / docs.
 FOLDER_TEMPLATE_HELP = (
@@ -58,8 +59,7 @@ def scheme_tooltip(scheme: NamingScheme) -> str:
     return f'{head}\n{desc}' if desc else head
 
 
-# Minimal album folder layouts. Multi-disc belongs in the filename
-# ({disc_track}); {disc_folder} remains available in Custom only.
+# Album folder layouts. Presets append {disc_folder} (empty on single-disc).
 FOLDER_SCHEMES: tuple[NamingScheme, ...] = (
     NamingScheme(
         'artist_dated',
@@ -70,13 +70,13 @@ FOLDER_SCHEMES: tuple[NamingScheme, ...] = (
     NamingScheme(
         'artist_album_year',
         'Artist / Album (Year)',
-        '{album_artist}/{album} ({year})',
+        '{album_artist}/{album} ({year})/{disc_folder}',
         'Common library layout — album artist, then album with year.',
     ),
     NamingScheme(
         'artist_album',
         'Artist / Album',
-        '{album_artist}/{album}',
+        '{album_artist}/{album}/{disc_folder}',
         'Album artist and album title only.',
     ),
     NamingScheme(
@@ -87,21 +87,18 @@ FOLDER_SCHEMES: tuple[NamingScheme, ...] = (
     ),
 )
 
-# Minimal track filename layouts. {disc_track} is "01" for single-disc
-# albums and "1-01" when total discs > 1.
 FILENAME_SCHEMES: tuple[NamingScheme, ...] = (
     NamingScheme(
         'smart_disc',
         '01 - Title',
         DEFAULT_FILENAME_TEMPLATE,
-        'Track number and title. Multi-disc albums use 1-01, 2-01, …',
+        'Track number and title.',
     ),
     NamingScheme(
         'va_smart',
         '01 - Artist - Title',
-        '{disc_track} - {artist} - {title}',
-        'Includes the track artist — useful for compilations. '
-        'Multi-disc albums use 1-01, 2-01, …',
+        '{track:02d} - {artist} - {title}',
+        'Includes the track artist — useful for compilations.',
     ),
     NamingScheme(
         'custom',
@@ -124,29 +121,37 @@ def scheme_index(schemes: tuple[NamingScheme, ...], template: str) -> int:
     return custom
 
 
-# Prior *defaults* that should become the current dated-album folder default.
+# Prior defaults → current dated-album + optional CD# folder.
 _LEGACY_DEFAULT_FOLDER_TEMPLATES = {
     '{album_artist}/({date}) - {album}',
     '{album_artist}/({date}) - {album}/{disc_folder}',
+    '{album_artist}/{dated_album}',
     '{album_artist}/{dated_album}/{disc_folder}',
 }
 
-# Prior filename default (no multi-disc prefix) → current {disc_track} default.
+# Presets that lost trailing {disc_folder} under the old filename-prefix scheme.
+_FOLDER_PRESETS_ADD_DISC = {
+    '{album_artist}/{album} ({year})': '{album_artist}/{album} ({year})/{disc_folder}',
+    '{album_artist}/{album}': '{album_artist}/{album}/{disc_folder}',
+}
+
 _LEGACY_DEFAULT_FILENAME_TEMPLATES = {
     '{track:02d} - {title}',
+    '{disc_track} - {title}',
+}
+
+_FILENAME_PRESETS_NORMALIZE = {
+    '{disc_track} - {artist} - {title}': '{track:02d} - {artist} - {title}',
 }
 
 
 def migrate_album_folder_template(template: str | None) -> str:
     """Normalize stored album-folder templates to the current presets."""
     text = (template or '').strip()
-    if not text:
-        return DEFAULT_ALBUM_FOLDER_TEMPLATE
-    # Drop trailing disc subfolders from presets; disc belongs in the filename.
-    if text.endswith('/{disc_folder}'):
-        text = text[: -len('/{disc_folder}')].rstrip('/')
     if not text or text in _LEGACY_DEFAULT_FOLDER_TEMPLATES:
         return DEFAULT_ALBUM_FOLDER_TEMPLATE
+    if text in _FOLDER_PRESETS_ADD_DISC:
+        return _FOLDER_PRESETS_ADD_DISC[text]
     return text
 
 
@@ -155,7 +160,7 @@ def migrate_filename_template(template: str | None) -> str:
     text = (template or '').strip()
     if not text or text in _LEGACY_DEFAULT_FILENAME_TEMPLATES:
         return DEFAULT_FILENAME_TEMPLATE
-    return text
+    return _FILENAME_PRESETS_NORMALIZE.get(text, text)
 
 
 def sanitize_component(name: str, *, fallback: str = 'Unknown') -> str:
@@ -234,16 +239,12 @@ def template_values(
         else:
             track_artist = album_artist
 
-    # Optional Custom-only subfolder (CD1, CD2, …); presets omit this.
+    # Multi-disc → CD1 / CD2 / … subfolder; single-disc → omitted path part.
     disc_folder = f'CD{disc}' if total_discs > 1 else ''
-    # Filename helpers: multi-disc prefixes the track number (1-01); single stays 01.
+    # Filenames always use per-disc track numbers (01, 02, …).
     track_padded = f'{track_number:02d}'
-    if total_discs > 1:
-        disc_prefix = f'{disc}-'
-        disc_track = f'{disc}-{track_padded}'
-    else:
-        disc_prefix = ''
-        disc_track = track_padded
+    disc_prefix = ''
+    disc_track = track_padded
 
     if style == ARTIST_STYLE_FEAT:
         # Title carries guests; keep folder/{artist} as the primary performer.

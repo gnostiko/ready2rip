@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 from ready2rip.settings import (
@@ -39,17 +40,28 @@ _AAC_VBR_TO_NATIVE_CBR = {
 }
 
 
-def flac_encode_argv(wav_path: Path, out_path: Path, compression: int) -> list[str]:
-    """``flac -<0..8>`` — bit-identical PCM, size/speed tradeoff only."""
+def flac_encode_argv(
+    wav_path: Path,
+    out_path: Path,
+    compression: int,
+    *,
+    verify: bool = True,
+) -> list[str]:
+    """``flac -<0..8>`` — bit-identical PCM, size/speed tradeoff only.
+
+    ``--verify`` re-decodes while encoding so encoder bugs fail the rip
+    instead of writing a bad archive file.
+    """
     level = max(0, min(8, int(compression)))
-    return [
+    cmd = [
         'flac',
         f'-{level}',
         '--silent',
-        '-o',
-        str(out_path),
-        str(wav_path),
     ]
+    if verify:
+        cmd.append('--verify')
+    cmd.extend(['-o', str(out_path), str(wav_path)])
+    return cmd
 
 
 def mp3_encode_argv(wav_path: Path, out_path: Path, quality: str) -> list[str]:
@@ -64,8 +76,9 @@ def mp3_encode_argv(wav_path: Path, out_path: Path, quality: str) -> list[str]:
     ]
 
 
+@lru_cache(maxsize=1)
 def prefer_fdk_aac() -> bool:
-    """True when ffmpeg was built with Fraunhofer FDK AAC."""
+    """True when ffmpeg was built with Fraunhofer FDK AAC (cached per process)."""
     ffmpeg = shutil.which('ffmpeg')
     if ffmpeg is None:
         return False
@@ -175,7 +188,7 @@ def opus_ffmpeg_argv(wav_path: Path, out_path: Path, bitrate_kbps: int) -> list[
 def encode_command_summary(
     fmt: str,
     *,
-    flac_compression: int = 5,
+    flac_compression: int = 8,
     mp3_quality: str = 'v0',
     aac_quality: str = 'cbr256',
     opus_bitrate: int = 160,
@@ -184,7 +197,7 @@ def encode_command_summary(
     fmt = (fmt or '').strip().lower()
     if fmt == 'flac':
         level = max(0, min(8, int(flac_compression)))
-        return f'flac -{level} (lossless; PCM unaltered)'
+        return f'flac -{level} --verify (lossless; PCM unaltered)'
     if fmt == 'mp3':
         q = normalize_mp3_quality(mp3_quality)
         args = ' '.join(lame_args_for_mp3_quality(q))

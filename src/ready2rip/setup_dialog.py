@@ -36,13 +36,6 @@ _SETUP_CSS = f"""
 .ready2rip-setup-page {{
     padding: 8px 20px 16px 20px;
 }}
-button.ready2rip-setup-quiet {{
-    font-size: 0.9em;
-    opacity: 0.7;
-}}
-button.ready2rip-setup-quiet:hover {{
-    opacity: 1;
-}}
 """
 
 _setup_css_provider: Gtk.CssProvider | None = None
@@ -101,17 +94,6 @@ class DriveSetupDialog(Adw.Dialog):
         self._start_btn.set_margin_top(8)
         self._start_btn.connect('clicked', self._on_start)
         intro.append(self._start_btn)
-
-        self._skip_btn = Gtk.Button(label='Not now')
-        self._skip_btn.add_css_class('flat')
-        self._skip_btn.add_css_class('ready2rip-setup-quiet')
-        self._skip_btn.set_halign(Gtk.Align.CENTER)
-        self._skip_btn.set_margin_top(2)
-        self._skip_btn.set_tooltip_text(
-            'Use offset 0 for now. You can detect later in Settings → Drive.'
-        )
-        self._skip_btn.connect('clicked', self._on_skip)
-        intro.append(self._skip_btn)
         self._stack.add_named(intro, 'intro')
 
         progress = self._page()
@@ -303,7 +285,6 @@ class DriveSetupDialog(Adw.Dialog):
         self._prog_title.set_label('Detecting…')
         self._prog_status.set_label('Starting')
         self._start_btn.set_sensitive(False)
-        self._skip_btn.set_sensitive(False)
         self._device_row.set_sensitive(False)
         self._cancel_btn.set_sensitive(True)
         self._stack.set_visible_child_name('progress')
@@ -321,7 +302,6 @@ class DriveSetupDialog(Adw.Dialog):
             def done() -> bool:
                 self._busy = False
                 self._start_btn.set_sensitive(True)
-                self._skip_btn.set_sensitive(True)
                 self._device_row.set_sensitive(True)
                 if self._cancel.is_set() and not result.success:
                     self._show_cancelled()
@@ -419,11 +399,6 @@ class DriveSetupDialog(Adw.Dialog):
         self._retry_btn.set_visible(True)
         self._manual_btn.set_visible(True)
         self._leave_progress('result', delay_ms=350)
-
-    def _on_skip(self, *_args) -> None:
-        device = self._device()
-        save_calibration(self._store, device=device, offset=0)
-        self.close()
 
     def _on_manual(self, *_args) -> None:
         self._stack.set_visible_child_name('manual')

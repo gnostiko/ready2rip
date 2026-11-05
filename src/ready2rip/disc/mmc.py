@@ -26,9 +26,12 @@ _SG_DXFER_NONE = -1
 
 _SCSI_READ_CD = 0xBE
 _SCSI_SEEK10 = 0x2B
+_SCSI_READ_TOC = 0x43
+_SCSI_READ_SUBCHANNEL = 0x42
 _DATA_RETRIES = 8
 _SCSI_TIMEOUT_MS = 20_000
 _MAX_SECTORS_PER_READ = 32
+_CDTEXT_MAX = 64 * 1024
 
 
 class _TocHeader(ctypes.Structure):
@@ -189,6 +192,50 @@ class MmcDevice:
         )
         return self._sg_nodata(cdb)
 
+    def read_cd_text_raw(self) -> bytes | None:
+        """READ TOC/PMA/ATIP format 5 (CD-TEXT) response body, or None."""
+        # Two-step: length header, then full allocation.
+        hdr = self._sg_read(_read_toc_cdb(fmt=5, alloc=4), bytearray(4))
+        if hdr is None or len(hdr) < 4:
+            return None
+        data_len = (hdr[0] << 8) | hdr[1]
+        # data_len includes the next two reserved bytes after the length field.
+        total = min(_CDTEXT_MAX, max(4, data_len + 2))
+        body = self._sg_read(_read_toc_cdb(fmt=5, alloc=total), bytearray(total))
+        if body is None or len(body) < 4:
+            return None
+        return bytes(body)
+
+    def read_mcn_raw(self) -> bytes | None:
+        """READ SUB-CHANNEL media catalog (format 02h), or None."""
+        return self._read_subchannel(fmt=0x02, track=0, alloc=24)
+
+    def read_isrc_raw(self, track: int) -> bytes | None:
+        """READ SUB-CHANNEL ISRC for *track* (format 03h), or None."""
+        t = max(1, min(99, int(track)))
+        return self._read_subchannel(fmt=0x03, track=t, alloc=24)
+
+    def _read_subchannel(self, *, fmt: int, track: int, alloc: int) -> bytes | None:
+        buf = bytearray(max(4, int(alloc)))
+        cdb = bytes(
+            [
+                _SCSI_READ_SUBCHANNEL,
+                0x00,  # LBA addressing
+                0x40 | (fmt & 0x0F),  # SubQ + format
+                track & 0xFF,
+                0x00,
+                0x00,
+                0x00,
+                (len(buf) >> 8) & 0xFF,
+                len(buf) & 0xFF,
+                0x00,
+            ]
+        )
+        data = self._sg_read(cdb, buf)
+        if data is None or len(data) < 4:
+            return None
+        return bytes(data)
+
     def _sg_nodata(self, cdb: bytes) -> bool:
         sense = bytearray(32)
         cdb_buf = (ctypes.c_ubyte * len(cdb)).from_buffer_copy(cdb)
@@ -273,6 +320,25 @@ def detect_sector_mode(sector: bytes) -> int:
     if len(sector) >= 16 and sector[15] in (1, 2):
         return int(sector[15])
     return 1
+
+
+def _read_toc_cdb(*, fmt: int, alloc: int) -> bytes:
+    """READ TOC/PMA/ATIP (0x43) CDB with *fmt* and *alloc*ation length."""
+    n = max(4, min(_CDTEXT_MAX, int(alloc)))
+    return bytes(
+        [
+            _SCSI_READ_TOC,
+            0x00,  # LBA
+            fmt & 0xFF,
+            0x00,
+            0x00,
+            0x00,
+            0x00,  # track / session (unused for CD-TEXT)
+            (n >> 8) & 0xFF,
+            n & 0xFF,
+            0x00,
+        ]
+    )
 
 
 def _read_cd_cdb(

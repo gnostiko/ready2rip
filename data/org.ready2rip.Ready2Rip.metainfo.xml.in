@@ -26,13 +26,25 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-11-04">
+    <release version="@APPLICATION_VERSION@" date="2026-11-05">
       <description>
         <p>
-          0.4.20: More reliable rip progress (line-buffered extract
-          updates, monotonic WAV-size progress, correct phase order),
-          plain status labels without percents, and remove the empty-state
-          eject button (header eject remains).
+          0.4.21: Gold-standard archival polish — AccurateRip and CTDB on
+          Copy Image, hard sample-offset gate when verification is on
+          (auto-resume after Detect), live CD-TEXT / MCN / ISRC from the
+          disc, date / barcode / ISRC in tags and UI, multi-disc CD1/
+          folders with matching CUE sheets, FreeDB disc N/M heuristics,
+          FLAC level 8 with verify, and README catch-up.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.20" date="2026-11-04">
+      <description>
+        <p>
+          More reliable rip progress (line-buffered extract updates,
+          monotonic WAV-size progress, correct phase order), plain status
+          labels without percents, and remove the empty-state eject button
+          (header eject remains).
         </p>
       </description>
     </release>

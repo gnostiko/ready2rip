@@ -2,8 +2,9 @@
 
 **ready2rip is a secure CD ripper for Linux.**
 
-It focuses on careful archival extraction with full cdparanoia, AccurateRip and
-CTDB verification, MusicBrainz metadata, and modern tagging
+Careful archival extraction with full cdparanoia, AccurateRip and CTDB
+verification, MusicBrainz / gnudb metadata, disc-native CD-TEXT / MCN / ISRC,
+and modern tagging.
 
 <img width="1050" height="750" alt="ready2rip" src="https://github.com/user-attachments/assets/fd305067-6bb0-426e-b712-7b2b62b59e5d" />
 
@@ -12,24 +13,25 @@ CTDB verification, MusicBrainz metadata, and modern tagging
 
 | Feature | Description |
 |---------|-------------|
-| Secure rip | Full cdparanoia, retries, optional test & copy |
-| AccurateRip | Online CRC database check after extraction |
-| CTDB | CUETools Database verification; optional confirm / new-parity submit |
-| Metadata | MusicBrainz + FreeDB-compatible lookup (e.g. gnudb); editable album and tracks |
-| Tags | mutagen — FLAC / MP3 / AAC (M4A) / Opus / WAV |
+| Secure rip | Full cdparanoia, retries, test & copy (CRC match required) |
+| AccurateRip | Online CRC check after extraction (per-track and Copy image) |
+| CTDB | CUETools Database verify; optional confirm / new-parity submit |
+| Metadata | MusicBrainz + FreeDB-compatible lookup (e.g. gnudb); editable album, tracks, barcode, and ISRC |
+| Disc extras | Live CD-TEXT, MCN (barcode), and per-track ISRC via MMC when the drive supports it |
+| Tags | mutagen — FLAC / MP3 / AAC (M4A) / Opus / WAV, including date, barcode, and ISRC |
 | ReplayGain | Track + album loudness tags |
 | Artwork | Cover Art Archive and iTunes, with optional embed sizes |
-| Logs & CUE | Detailed rip log and multi-file / image CUE sheets (INDEX 00 pregaps, mixed-mode data) |
-| Drive setup | Sample offset calibration |
+| Logs & CUE | Detailed rip log; multi-file or image CUE (INDEX 00 pregaps, CATALOG / ISRC, mixed-mode data) |
+| Drive setup | Sample offset calibration (required when AccurateRip or CTDB is on) |
 
 ## Typical workflow
 
 1. **Install / run** — AppImage is the recommended path (see [Install](#install)). [Gear Lever](https://flathub.org/apps/it.mijorus.gearlever) adds menu integration and update checks.
 2. **Insert an audio CD.** ready2rip detects the disc, reads the TOC, and shows tracks.
-3. **Drive setup** (first run, or when you change drives): calibrate **sample offset**.
-4. **Metadata** (optional): auto-lookup when a disc is detected, or open **Lookup → By disc ID** and pick a release. If the wrong album is matched, use **Lookup → MusicBrainz link…** and paste a `musicbrainz.org/release/…` URL or release UUID. Edit album/track fields if needed. Cover art can be fetched, chosen from disk, or cleared.
-5. **Settings**: choose encoder, test & copy, CUE/log, Copy image, HTOA, and related options. Defaults already match a secure archival setup.
-6. Press **Rip CD**. Progress appears in the bottom banner (status line shows track detail).
+3. **Drive setup** (first run, or when you change drives): calibrate **sample offset**. If AccurateRip or CTDB is enabled, ripping is blocked until the drive is calibrated.
+4. **Metadata** (optional): auto-lookup when a disc is detected, or open **Lookup → By disc ID** and pick a release. If the wrong album is matched, use **Lookup → MusicBrainz link…** and paste a `musicbrainz.org/release/…` URL or release UUID. Edit album fields (including barcode / disc N/M) and track titles, artists, and ISRC as needed. Cover art can be fetched, chosen from disk, or cleared.
+5. **Settings**: encoder, test & copy, CUE/log, Copy image, HTOA, and related options. Defaults already match a secure archival setup.
+6. Press **Rip CD**. Progress appears in the bottom banner (status line shows track detail). After Detect from the offset gate, a successful calibration resumes the rip automatically.
 7. Files land under your **output folder** using the album/track templates — audio, optional `cover`, `.log`, and `.cue`.
 
 ### What a secure rip does (under the hood)
@@ -47,7 +49,21 @@ ready2rip aims for secure archival ripping on Linux via cdparanoia / libcdio-par
 | Error logging | Parses cdparanoia progress into quality / fixups / skips / suspicious positions |
 | Burst fallback | Off by default. Optional insecure `-Z` recovery after secure retries fail — noted in the log |
 
-**Copy image** mode rips one continuous disc image (FLAC/WAV) instead of per-track files; enable **Write CUE sheet** for a matching image CUE. Per-track rips use a multi-file CUE with INDEX 00 pregaps appended to the previous track. Mixed-mode and CD-Extra data tracks are saved as raw `.bin` files (MODE1/2352 or MODE2/2352).
+**Copy image** mode rips one continuous disc image (FLAC/WAV) instead of per-track files. AccurateRip and CTDB still run: the image is TOC-split into per-track PCM for verification (and CTDB submit when enabled). Enable **Write CUE sheet** for a matching image CUE — album tags on the image stay album-level; per-track ISRC lives in the CUE.
+
+Per-track rips use a multi-file CUE with INDEX 00 pregaps appended to the previous track. Mixed-mode and CD-Extra data tracks are saved as raw `.bin` files (MODE1/2352 or MODE2/2352).
+
+### Output layout
+
+Defaults:
+
+| Piece | Template / example |
+|-------|--------------------|
+| Album folder | `{album_artist}/{dated_album}/{disc_folder}` |
+| Track file | `{track:02d} - {title}` → `01 - Title.flac` |
+| Multi-disc | `Artist/(1999) - Album/CD1/…` and `…/CD2/…` with `CD1.cue` / `CD2.cue` beside the audio |
+
+`{disc_folder}` is empty on single-disc releases. Filenames always use per-disc track numbers (`01`, `02`, …).
 
 ## Options
 
@@ -57,15 +73,15 @@ ready2rip aims for secure archival ripping on Linux via cdparanoia / libcdio-par
 |--------|-----------------|
 | **Optical device** | Usually `/dev/sr0` |
 | **Output folder** | `~/Music` |
-| **Album folder scheme** | Few presets (default `Artist / (Date) - Album`) or Custom — hover a preset for the template; tokens include `{album_artist}`, `{dated_album}`, `{album}`, `{year}`, … |
-| **Track filename scheme** | Few presets (default `{disc_track} - {title}` → `01` or multi-disc `1-01`) or Custom — hover for the template; VA preset adds `{artist}` |
+| **Album folder scheme** | Presets (default `Artist / (Date) - Album` with `{disc_folder}`) or Custom — hover a preset for the template; tokens include `{album_artist}`, `{dated_album}`, `{disc_folder}`, `{disc}`, `{totaldiscs}`, … |
+| **Track filename scheme** | Presets (default `01 - Title`) or Custom — VA preset adds `{artist}` |
 
 ### Encoder
 
 | Option | Notes |
 |--------|-------|
 | **Encoder** | WAV, FLAC, Opus, M4A, or MP3 |
-| **FLAC compression** | 0 (fast) … 8 (smallest); default 5 |
+| **FLAC compression** | 0 (fast) … 8 (smallest); default **8** with `--verify` |
 | **MP3 quality** | LAME V0–V5 (VBR) or 128–320 kbps CBR |
 | **AAC quality** | FDK VBR 1–5 or 128–320 kbps CBR (`libfdk_aac` when available) |
 | **Opus bitrate** | VBR kbps (typical 96–256) |
@@ -77,11 +93,11 @@ Copy image forces a lossless container (FLAC or WAV; other formats fall back to 
 | Option | Default | Notes |
 |--------|---------|-------|
 | **Test and copy** | On | Two secure passes; matching CRCs required (retries on mismatch) |
-| **Copy image** | Off | One continuous image instead of separate tracks |
+| **Copy image** | Off | One continuous image instead of separate tracks; AR + CTDB still verify per track |
 | **Pregap / HTOA** | On | Ignore ≤2s track-1 pause; longer non-silent pregap → track `00`; track 1 starts at index 01. Inter-track INDEX 00 is detected at rip start (cdrdao, else Q-subchannel) and written into the CUE |
 | **Data tracks** | On | Mixed-mode / CD-Extra data as raw 2352-byte `.bin` with test & copy when that option is on; listed in the CUE. Failed data extract fails the rip |
-| **AccurateRip** | On | Online CRC verification |
-| **CTDB** | On | CUETools Database track CRC verification |
+| **AccurateRip** | On | Online CRC verification (hard-requires calibrated sample offset) |
+| **CTDB** | On | CUETools Database track CRC verification (same offset requirement) |
 | **Submit to CTDB** | Off | Confirm a full-disc match, or submit new parity when unmatched and quality is 100 |
 | **Burst fallback** | Off | Optional insecure `-Z` recovery after secure retries fail |
 | **Write rip log** | On | Detailed status log in the album folder |
@@ -91,13 +107,15 @@ Copy image forces a lossless container (FLAC or WAV; other formats fall back to 
 
 ### Drive / calibration
 
-Sample offset comes from **Drive setup** (offset scan) or from the public
+Sample offset comes from **Drive setup** (offset scan) or a manual value from the public
 [AccurateRip drive offset list](http://www.accuraterip.com/driveoffsets.htm).
+When AccurateRip or CTDB is on, an uncalibrated drive cannot start a rip until Detect (or a manual offset save) succeeds.
 
 ### Metadata & art
 
 - **Look up automatically** — query when a disc is detected
-- **MusicBrainz / FreeDB** — sources for lookup
+- **MusicBrainz / FreeDB** — sources for lookup (MusicBrainz ISRCs when present; FreeDB disc N/M inferred from title / EXTD markers such as `(disc 2)`)
+- **Disc gap-fill** — CD-TEXT titles/artists, MCN barcode, and subchannel ISRC when online metadata is blank
 - **Download artwork** — iTunes, Cover Art Archive
 - **Embed artwork** — write cover into audio files; configurable max embed edge size
 - **ReplayGain** — track + album tags after the rip set is complete
@@ -117,8 +135,8 @@ Release assets are published for **x86_64** and **aarch64** on
 ### AppImage (recommended)
 
 ```bash
-chmod +x ready2rip-0.4.20-x86_64.AppImage   # or …-aarch64.AppImage
-./ready2rip-0.4.20-x86_64.AppImage
+chmod +x ready2rip-0.4.21-x86_64.AppImage   # or …-aarch64.AppImage
+./ready2rip-0.4.21-x86_64.AppImage
 ```
 
 The AppImage needs a matching CPU architecture, a host **glibc** new enough for
@@ -148,7 +166,7 @@ Release AppImages are GPG-signed. Import the project key from
 ### Debian / Ubuntu
 
 ```bash
-sudo apt install ./ready2rip_0.4.20-1_amd64.deb   # or _arm64.deb
+sudo apt install ./ready2rip_0.4.21-1_amd64.deb   # or _arm64.deb
 ```
 
 Depends on distro packages for GTK 4 / libadwaita, mutagen, Pillow, cdparanoia,
@@ -157,7 +175,7 @@ flac, lame, ffmpeg, and opus-tools.
 ### Fedora / RPM
 
 ```bash
-sudo dnf install ./ready2rip-0.4.20-1.x86_64.rpm   # or .aarch64.rpm
+sudo dnf install ./ready2rip-0.4.21-1.x86_64.rpm   # or .aarch64.rpm
 ```
 
 Same runtime idea as the `.deb`: system UI stack and encoders, ready2rip itself
@@ -166,7 +184,7 @@ from the package.
 ### Flatpak
 
 ```bash
-flatpak install --user ./ready2rip-0.4.20-x86_64.flatpak
+flatpak install --user ./ready2rip-0.4.21-x86_64.flatpak
 flatpak run org.ready2rip.Ready2Rip
 ```
 

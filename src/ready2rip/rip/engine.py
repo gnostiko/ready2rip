@@ -119,7 +119,7 @@ class RipJob:
     track_numbers: list[int]
     output_directory: Path
     encode_format: str = 'flac'  # flac | mp3 | aac | opus | wav
-    flac_compression: int = 5
+    flac_compression: int = 8
     mp3_quality: str = 'v0'  # LAME v0–v5 or cbr128/192/256/320
     aac_quality: str = 'cbr256'  # FDK VBR 1–5 or cbr128/192/256/320
     aac_bitrate: int = 256  # legacy; prefer aac_quality
@@ -139,7 +139,7 @@ class RipJob:
     verify_ctdb: bool = True
     submit_ctdb: bool = False
     sample_offset: int = 0
-    # True after Detect / skip in drive setup (offset 0 can still be configured).
+    # True after Detect or manual save in drive setup (offset may still be 0).
     offset_configured: bool = False
     disc_info: DiscInfo | None = None
     # Total tracks on the disc (for AR first/last sample skip), not just selected.
@@ -359,6 +359,8 @@ class RipEngine:
         if rip_log is not None:
             rip_log.notes.append(target_note)
 
+        last_overall = 0.0
+
         def report(
             track_number: int,
             state: RipState,
@@ -368,16 +370,21 @@ class RipEngine:
             message: str = '',
             total_units: float | None = None,
         ) -> None:
+            nonlocal last_overall
             if on_progress is None:
                 return
             units = total_units if total_units is not None else float(n_audio)
             units = max(1.0, units)
             overall = (index + max(0.0, min(1.0, sub))) / units
+            # Never move the banner backwards (e.g. encode-join for track N-1
+            # after track N is already mid-verify).
+            overall = max(last_overall, max(0.0, min(1.0, overall)))
+            last_overall = overall
             on_progress(
                 RipProgress(
                     track_number=track_number,
                     state=state,
-                    fraction=max(0.0, min(1.0, overall)),
+                    fraction=overall,
                     message=message,
                 )
             )
@@ -1082,9 +1089,13 @@ class RipEngine:
             return None
 
         basename = multi_file_cue_basename(job.album, job.disc_info)
-        # Include format in the CUE basename for clarity next to audio files.
+        # Multi-disc per-folder sheets are plain CD1.cue; single-disc keeps
+        # the encode format in the name when useful (Artist - Album.flac.cue).
         fmt = (ext or pairs[0][1].suffix).lstrip('.').lower() or 'audio'
-        cue_path = album_dir / f'{basename}.{fmt}.cue'
+        if basename.startswith('CD') and basename[2:].isdigit():
+            cue_path = album_dir / f'{basename}.cue'
+        else:
+            cue_path = album_dir / f'{basename}.{fmt}.cue'
         write_multi_file_cue_sheet(
             cue_path,
             track_files=pairs,
@@ -1317,12 +1328,14 @@ class RipEngine:
         disc_track_count: int,
         retitle: str | None = None,
         write_cover: bool = True,
+        tag_as_image: bool = False,
         on_progress: Callable[[int, str, Path], None] | None = None,
     ) -> list[Path]:
         """Encode *wav_path* to the destination(s); return output paths in order.
 
         Tags and optional embedded art are applied after each encode. Folder
-        cover is written once per album directory when missing.
+        cover is written once per album directory when missing. When
+        *tag_as_image* is True, tags are album-level (no track/ISRC).
         """
         # Lossy/lossless encodes first so a final WAV dest can rename the temp.
         ordered = [d for d in dests if d.format != 'wav'] + [
@@ -1364,8 +1377,9 @@ class RipEngine:
                     track_number,
                     total_tracks=total_for_tags or None,
                     artist_style=job.artist_style,
+                    image=tag_as_image,
                 )
-                if retitle:
+                if retitle and not tag_as_image:
                     _retag_title(
                         dest.out_path, retitle, track_number=track_number
                     )
@@ -1439,6 +1453,17 @@ class RipEngine:
                             pass
                     self._unlink_quiet(job_pending.test_wav, job_pending.copy_wav)
                     return album_dir
+                # Blocking join — keep the banner honest while the encoder
+                # finishes (extract of the next track already completed).
+                if not job_pending.future.done():
+                    report(
+                        job_pending.track_no,
+                        RipState.ENCODING,
+                        index=job_pending.idx,
+                        sub=0.95,
+                        message=f'Finishing encode for track {job_pending.track_no}…',
+                        total_units=total_units,
+                    )
                 written = job_pending.future.result()
                 primary_out: Path | None = None
                 for dest, out_path in zip(
@@ -2399,18 +2424,23 @@ class RipEngine:
         if disc is None or not disc.tracks:
             return RipResult(success=False, error='No disc TOC for Copy Image')
 
+        last_overall = 0.0
+
         def report(
             state: RipState,
             frac: float,
             message: str,
         ) -> None:
+            nonlocal last_overall
             if on_progress is None:
                 return
+            overall = max(last_overall, max(0.0, min(1.0, frac)))
+            last_overall = overall
             on_progress(
                 RipProgress(
                     track_number=0,
                     state=state,
-                    fraction=max(0.0, min(1.0, frac)),
+                    fraction=overall,
                     message=message,
                 )
             )
@@ -2685,6 +2715,67 @@ class RipEngine:
                         success=False, cancelled=True, notes=notes, album_dir=album_dir
                     )
 
+                ar_results: list[AccurateRipResult] = []
+                ctdb_results: list[CtdbResult] = []
+                burst_tracks: list[int] = [0] if mode == 'burst' else []
+                image_test_copy_ok = bool(
+                    job.test_and_copy and mode != 'burst'
+                )
+
+                ar_verifier: AccurateRipVerifier | None = None
+                ctdb_verifier: CtdbVerifier | None = None
+                if job.verify_accuraterip:
+                    ar_verifier = AccurateRipVerifier(sample_offset=0)
+                    ar_status = ar_verifier.prepare(disc)
+                    notes.append(ar_status)
+                    ar_verifier.set_total_tracks(disc.track_count)
+                    if rip_log is not None:
+                        rip_log.ar_status = ar_status
+                    if not job.offset_configured:
+                        notes.append(
+                            'WARNING: Drive sample offset was not calibrated — '
+                            'AccurateRip results may be unreliable'
+                        )
+                    report(RipState.VERIFYING, 0.68, ar_status)
+
+                if job.verify_ctdb or job.submit_ctdb:
+                    ctdb_verifier = CtdbVerifier()
+                    ctdb_status = ctdb_verifier.prepare(disc)
+                    notes.append(ctdb_status)
+                    ctdb_verifier.set_totals(
+                        total_tracks=disc.track_count,
+                        total_samples=total_audio_samples(disc),
+                    )
+                    if rip_log is not None:
+                        rip_log.ctdb_status = ctdb_status
+                    report(RipState.VERIFYING, 0.69, ctdb_status)
+
+                if ar_verifier is not None or ctdb_verifier is not None:
+                    self._verify_image_databases(
+                        use_wav,
+                        disc,
+                        file_start=file_start,
+                        extract_mode=mode,
+                        ar_verifier=ar_verifier,
+                        ctdb_verifier=ctdb_verifier,
+                        ar_results=ar_results,
+                        ctdb_results=ctdb_results,
+                        notes=notes,
+                        rip_log=rip_log,
+                        report=report,
+                    )
+
+                if self._cancelled:
+                    return RipResult(
+                        success=False,
+                        cancelled=True,
+                        notes=notes,
+                        album_dir=album_dir,
+                        accuraterip=ar_results,
+                        ctdb=ctdb_results,
+                        burst_tracks=burst_tracks,
+                    )
+
                 dests = self._destinations_for_track(
                     job, 1, filename=basename
                 )
@@ -2722,6 +2813,7 @@ class RipEngine:
                         embed_art=embed_art,
                         disc_track_count=disc.track_count,
                         write_cover=True,
+                        tag_as_image=True,
                         on_progress=_img_progress,
                     )
                 except Exception as enc_exc:
@@ -2799,9 +2891,57 @@ class RipEngine:
                 primary_out = output_files[0] if output_files else None
                 album_dir = primary_album
 
+                if job.submit_ctdb and ctdb_verifier is not None and ctdb_results:
+                    report(RipState.VERIFYING, 0.97, 'Submitting to CTDB…')
+                    drivename = ''
+                    try:
+                        from ready2rip.disc.drive_info import probe_drive
+
+                        drivename = probe_drive(
+                            job.device, allow_optical=False
+                        ).ctdb_drivename
+                    except Exception:
+                        drivename = ''
+                    album = job.album
+                    ctdb_quality = (
+                        100
+                        if image_test_copy_ok and not burst_tracks
+                        else 0
+                    )
+                    if ctdb_quality < 100:
+                        notes.append(
+                            'CTDB submit quality=0 '
+                            '(requires secure test&copy with no burst recovery)'
+                        )
+                    submit = ctdb_verifier.submit(
+                        ctdb_results,
+                        drivename=drivename,
+                        artist=(album.artist if album else '') or '',
+                        title=(album.title if album else '') or '',
+                        barcode=(album.barcode if album else '') or '',
+                        quality=ctdb_quality,
+                    )
+                    notes.append(submit.message)
+                    if rip_log is not None:
+                        rip_log.notes.append(submit.message)
+                    if not submit.ok and any(
+                        r.confidence == CtdbConfidence.MISMATCH
+                        for r in ctdb_results
+                    ):
+                        try:
+                            probe = ctdb_verifier.attempt_repair_for_mismatch(
+                                ctdb_results
+                            )
+                            notes.append(probe.message)
+                            if rip_log is not None:
+                                rip_log.notes.append(probe.message)
+                        except Exception as exc:
+                            log.warning('CTDB repair probe failed: %s', exc)
+
                 log_path = None
                 if rip_log is not None:
                     try:
+                        rip_log.finish()
                         # Always beside the first (primary) encode.
                         log_path = rip_log.write(primary_album)
                         notes.append(f'Rip log written to {log_path}')
@@ -2813,6 +2953,22 @@ class RipEngine:
                     done_label = f'{primary_out.name} + {basename}.cue'
                 if len(dests) > 1:
                     done_label = f'{done_label} · {len(dests)} encodes'
+                if ar_results:
+                    ar_ok = sum(
+                        1
+                        for r in ar_results
+                        if r.confidence == AccurateRipConfidence.MATCH
+                    )
+                    done_label = f'{done_label} · AR {ar_ok}/{len(ar_results)}'
+                if ctdb_results:
+                    ctdb_ok = sum(
+                        1
+                        for r in ctdb_results
+                        if r.confidence == CtdbConfidence.MATCH
+                    )
+                    done_label = (
+                        f'{done_label} · CTDB {ctdb_ok}/{len(ctdb_results)}'
+                    )
                 report(
                     RipState.DONE,
                     1.0,
@@ -2826,6 +2982,9 @@ class RipEngine:
                     log_path=log_path,
                     cover_path=cover_path,
                     htoa_ripped=htoa_in_image,
+                    accuraterip=ar_results,
+                    ctdb=ctdb_results,
+                    burst_tracks=burst_tracks,
                 )
         except Exception as exc:
             log.exception('Copy Image failed')
@@ -3097,6 +3256,105 @@ class RipEngine:
             if proc is not None:
                 with self._proc_lock:
                     self._procs.discard(proc)
+
+    def _verify_image_databases(
+        self,
+        wav_path: Path,
+        disc: DiscInfo,
+        *,
+        file_start: int,
+        extract_mode: str,
+        ar_verifier: AccurateRipVerifier | None,
+        ctdb_verifier: CtdbVerifier | None,
+        ar_results: list[AccurateRipResult],
+        ctdb_results: list[CtdbResult],
+        notes: list[str],
+        rip_log: RipLog | None,
+        report: Callable[[RipState, float, str], None],
+    ) -> None:
+        """TOC-split a continuous image WAV and run AccurateRip + CTDB per track."""
+        if ar_verifier is None and ctdb_verifier is None:
+            return
+        if not disc.tracks:
+            return
+
+        report(RipState.VERIFYING, 0.70, 'Loading disc image for verification…')
+        try:
+            image_pcm = load_cdda_pcm(wav_path)
+        except Exception as exc:
+            msg = f'Image PCM load failed: {exc}'
+            log.warning('%s', msg)
+            notes.append(msg)
+            return
+
+        mode_label = f'{extract_mode} (copy image)'
+        n = max(1, len(disc.tracks))
+        for i, track in enumerate(disc.tracks):
+            if self._cancelled:
+                break
+            frac = 0.70 + 0.05 * ((i + 1) / n)
+            report(
+                RipState.VERIFYING,
+                frac,
+                f'Verifying image track {track.number}…',
+            )
+            expected = max(0, int(track.length_sectors)) * 2352
+            pcm = _image_track_pcm(
+                image_pcm,
+                start_sector=track.start_sector,
+                length_sectors=track.length_sectors,
+                file_start=file_start,
+            )
+            log_entry: TrackLogEntry | None = None
+            if rip_log is not None:
+                log_entry = rip_log.begin_track(
+                    track.number,
+                    title=title_for_track(rip_log.album, track.number),
+                    length_label=track.duration_label,
+                    start_sector=track.start_sector,
+                    length_sectors=track.length_sectors,
+                )
+                log_entry.extract_mode = mode_label
+            if not pcm:
+                msg = (
+                    f'Track {track.number}: empty PCM slice in image '
+                    f'(start={track.start_sector}, file_start={file_start})'
+                )
+                notes.append(msg)
+                if log_entry is not None:
+                    log_entry.status = 'ERROR'
+                    log_entry.notes.append(msg)
+                continue
+            if expected and len(pcm) < expected:
+                msg = (
+                    f'Track {track.number}: short PCM slice in image '
+                    f'({len(pcm)} < {expected} bytes) — verification may fail'
+                )
+                notes.append(msg)
+                if log_entry is not None:
+                    log_entry.notes.append(msg)
+                    log_entry.had_errors = True
+
+            if log_entry is not None:
+                _crc, peak = analyze_pcm_for_log(pcm)
+                if peak is not None:
+                    log_entry.peak_percent = peak
+                if _crc:
+                    log_entry.copy_crc = _crc
+
+            if ar_verifier is not None:
+                ar = ar_verifier.verify_pcm(pcm, track.number)
+                ar_results.append(ar)
+                notes.append(f'Track {track.number} AR: {ar.message}')
+                if log_entry is not None:
+                    log_entry.accuraterip = ar
+
+            if ctdb_verifier is not None:
+                ctdb = ctdb_verifier.verify_pcm(pcm, track.number)
+                ctdb_results.append(ctdb)
+                notes.append(f'Track {track.number} CTDB: {ctdb.message}')
+                if log_entry is not None:
+                    log_entry.ctdb = ctdb
 
     def _verify_track_databases(
         self,
@@ -3437,6 +3695,22 @@ def _finish_result(
         htoa_ripped=htoa_ripped,
         test_copy_mismatches=test_copy_mismatches or [],
     )
+
+
+def _image_track_pcm(
+    image_pcm: bytes,
+    *,
+    start_sector: int,
+    length_sectors: int,
+    file_start: int,
+) -> bytes:
+    """Slice one TOC track's CDDA bytes out of a continuous image PCM blob."""
+    rel = max(0, int(start_sector) - int(file_start))
+    start = rel * 2352
+    length = max(0, int(length_sectors)) * 2352
+    if length <= 0 or start >= len(image_pcm):
+        return b''
+    return image_pcm[start : min(start + length, len(image_pcm))]
 
 
 def _summarize_ar(results: list[AccurateRipResult]) -> str:

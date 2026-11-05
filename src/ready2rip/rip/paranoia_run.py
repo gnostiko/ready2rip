@@ -18,6 +18,10 @@ from ready2rip.rip.paranoia_stats import (
 
 log = logging.getLogger(__name__)
 
+# Map WAV/frame completion into this span; remaining headroom (→0.99) is for
+# secure-mode re-verify when the file is already fully written.
+_WRITE_PROGRESS_SPAN = 0.88
+
 
 def run_paranoia_streaming(
     cmd: list[str],
@@ -38,6 +42,10 @@ def run_paranoia_streaming(
     Progress prefers growing WAV size (monotonic) and also tracks ``-e``
     frame lines. ``stdbuf`` line-buffers child stderr when available so
     updates are not stuck behind a full pipe buffer.
+
+    Measured write progress is scaled into ``0 … _WRITE_PROGRESS_SPAN`` so
+    activity creep can still advance the bar during paranoia's re-verify pass
+    after the WAV has stopped growing.
     """
     run_cmd = list(cmd)
     stdbuf = shutil.which('stdbuf')
@@ -49,6 +57,9 @@ def run_paranoia_streaming(
     origin_frame: int | None = None
     last_frac = -1.0
     last_emit = 0.0
+    # Measured high-water from WAV / forward frames (already scaled).
+    measured_frac = 0.0
+    last_measure_at = 0.0
     pcm_expected = (
         max(0, int(expected_bytes) - 44)
         if expected_bytes is not None and expected_bytes > 44
@@ -56,15 +67,22 @@ def run_paranoia_streaming(
     )
     cancelled = is_cancelled or (lambda: False)
 
-    def emit(frac: float) -> None:
-        nonlocal last_frac, last_emit
+    def emit(frac: float, *, measured: bool = True) -> None:
+        nonlocal last_frac, last_emit, measured_frac, last_measure_at
         if on_extract_progress is None:
             return
         frac = max(0.0, min(0.99, frac))
+        now = time.monotonic()
+        if measured:
+            if frac + 1e-9 < measured_frac:
+                return
+            if frac > measured_frac + 1e-9:
+                measured_frac = frac
+                last_measure_at = now
+            # Equal high-water: do not refresh last_measure_at (allows creep).
         if frac + 1e-9 < last_frac:
             return
-        now = time.monotonic()
-        if frac < last_frac + 0.005 and (now - last_emit) < 0.15:
+        if frac < last_frac + 0.004 and (now - last_emit) < 0.12:
             return
         last_frac = frac
         last_emit = now
@@ -73,19 +91,41 @@ def run_paranoia_streaming(
         except Exception:
             log.debug('Extract progress callback failed', exc_info=True)
 
+    def emit_measured(raw: float) -> None:
+        """Scale raw 0..1 write completion into the write span."""
+        raw = max(0.0, min(1.0, raw))
+        emit(_WRITE_PROGRESS_SPAN * raw, measured=True)
+
+    def emit_activity_creep() -> None:
+        """Nudge the bar when paranoia is busy but WAV/frames are not advancing."""
+        if on_extract_progress is None or last_frac < 0.05:
+            return
+        now = time.monotonic()
+        if last_measure_at <= 0.0 or (now - last_measure_at) < 0.9:
+            return
+        if (now - last_emit) < 0.35:
+            return
+        # ~0.6%/s toward 0.99 after the measured high-water stalls.
+        creep = min(0.99, last_frac + 0.003)
+        if creep <= last_frac + 1e-9:
+            return
+        emit(creep, measured=False)
+
     def consider_line(line: str) -> None:
         nonlocal origin_frame
-        if expected_frames <= 0:
-            return
         frame = progress_frame_from_line(line)
-        if frame is None or frame < 0:
+        if frame is None:
+            return
+        emit_activity_creep()
+        if expected_frames <= 0 or frame < 0:
             return
         if origin_frame is None:
             origin_frame = frame
         rel = frame - origin_frame
         if rel < 0:
+            # Re-read / verify earlier sectors — keep creep alive.
             return
-        emit(rel / float(expected_frames))
+        emit_measured(rel / float(expected_frames))
 
     def consider_wav_size() -> None:
         if wav_path is None or pcm_expected <= 0:
@@ -98,7 +138,7 @@ def run_paranoia_streaming(
             return
         if size <= 44:
             return
-        emit((size - 44) / float(pcm_expected))
+        emit_measured((size - 44) / float(pcm_expected))
 
     try:
         proc = subprocess.Popen(
@@ -127,6 +167,7 @@ def run_paranoia_streaming(
                     pass
                 raise RuntimeError(f'{what} timed out after {timeout}s') from None
             consider_wav_size()
+            emit_activity_creep()
             ready = True
             try:
                 import select
@@ -156,6 +197,9 @@ def run_paranoia_streaming(
                     for part in rest.splitlines(keepends=True):
                         consider_line(part)
                 break
+            else:
+                # No stderr yet — still allow creep while the drive seeks.
+                emit_activity_creep()
         code = proc.wait() if proc.returncode is None else proc.returncode
         consider_wav_size()
         if on_extract_progress is not None and not cancelled():

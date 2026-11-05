@@ -41,14 +41,21 @@ def test_default_schemes_are_first() -> None:
     assert FILENAME_SCHEMES[0].template == DEFAULT_FILENAME_TEMPLATE
     assert FOLDER_SCHEMES[-1].id == 'custom'
     assert FILENAME_SCHEMES[-1].id == 'custom'
-    assert '{disc_folder}' not in DEFAULT_ALBUM_FOLDER_TEMPLATE
+    assert DEFAULT_ALBUM_FOLDER_TEMPLATE.endswith('{disc_folder}')
+    assert 'Multi-disc' not in FILENAME_SCHEMES[0].description
+    assert 'Multi-disc' not in FILENAME_SCHEMES[1].description
+    assert '1-01' not in FILENAME_SCHEMES[0].description
+    assert '1-01' not in FILENAME_SCHEMES[1].description
 
 
 def test_scheme_index_matches_and_custom() -> None:
     assert scheme_index(FOLDER_SCHEMES, DEFAULT_ALBUM_FOLDER_TEMPLATE) == 0
     assert scheme_index(FILENAME_SCHEMES, DEFAULT_FILENAME_TEMPLATE) == 0
-    assert scheme_index(FOLDER_SCHEMES, '{album_artist}/{album} ({year})') == 1
-    assert scheme_index(FOLDER_SCHEMES, '{album_artist}/{album}') == 2
+    assert (
+        scheme_index(FOLDER_SCHEMES, '{album_artist}/{album} ({year})/{disc_folder}')
+        == 1
+    )
+    assert scheme_index(FOLDER_SCHEMES, '{album_artist}/{album}/{disc_folder}') == 2
     assert scheme_index(FOLDER_SCHEMES, '{album_artist}/Weird') == len(FOLDER_SCHEMES) - 1
     assert len(FOLDER_SCHEMES) == 4
     assert len(FILENAME_SCHEMES) == 3
@@ -63,27 +70,32 @@ def test_scheme_tooltip_includes_template_and_description() -> None:
     assert 'template' in custom.lower()
 
 
-def test_migrate_strips_disc_folder() -> None:
+def test_migrate_adds_disc_folder_to_presets() -> None:
+    assert (
+        migrate_album_folder_template('{album_artist}/{dated_album}')
+        == DEFAULT_ALBUM_FOLDER_TEMPLATE
+    )
     assert (
         migrate_album_folder_template('{album_artist}/{dated_album}/{disc_folder}')
         == DEFAULT_ALBUM_FOLDER_TEMPLATE
     )
     assert (
-        migrate_album_folder_template('{album_artist}/{album}/{disc_folder}')
-        == '{album_artist}/{album}'
+        migrate_album_folder_template('{album_artist}/{album}')
+        == '{album_artist}/{album}/{disc_folder}'
     )
     assert (
         migrate_album_folder_template('{genre}/{album_artist}/{album}/{disc_folder}')
-        == '{genre}/{album_artist}/{album}'
+        == '{genre}/{album_artist}/{album}/{disc_folder}'
     )
 
 
-def test_migrate_filename_default_to_disc_track() -> None:
+def test_migrate_filename_drops_disc_prefix_templates() -> None:
+    assert migrate_filename_template('{disc_track} - {title}') == DEFAULT_FILENAME_TEMPLATE
     assert migrate_filename_template('{track:02d} - {title}') == DEFAULT_FILENAME_TEMPLATE
     assert migrate_filename_template('') == DEFAULT_FILENAME_TEMPLATE
     assert (
         migrate_filename_template('{disc_track} - {artist} - {title}')
-        == '{disc_track} - {artist} - {title}'
+        == '{track:02d} - {artist} - {title}'
     )
 
 
@@ -96,30 +108,32 @@ def test_build_output_paths_default() -> None:
         track_number=1,
         extension='.flac',
     )
+    # Single-disc: no CD# folder.
     assert album_dir == Path('/tmp/music/Radiohead/(1997-06-16) - OK Computer')
     assert path == album_dir / '01 - Airbag.flac'
 
 
-def test_build_output_paths_va_and_genre_schemes() -> None:
+def test_build_output_paths_multi_disc_uses_cd_folder() -> None:
     album = _album()
     album.medium_count = 2
+    album.medium_position = 1
     values = template_values(album=album, track_number=2)
-    assert values['disc_folder'] == 'CD1'  # Custom-only token
-    assert values['disc_track'] == '1-02'
-    assert values['disc_prefix'] == '1-'
-    assert values['genre'] == 'Alternative Rock'
-    assert values['albumartist'] == values['album_artist']
+    assert values['disc_folder'] == 'CD1'
+    assert values['disc_track'] == '02'
+    assert values['disc_prefix'] == ''
 
     album_dir, path = build_output_paths(
         base_dir=Path('/tmp/music'),
-        album_folder_template='{genre}/{album_artist}/{album}',
-        filename_template='{disc_track} - {artist} - {title}',
+        album_folder_template=DEFAULT_ALBUM_FOLDER_TEMPLATE,
+        filename_template=DEFAULT_FILENAME_TEMPLATE,
         album=album,
         track_number=2,
         extension='flac',
     )
-    assert album_dir == Path('/tmp/music/Alternative Rock/Radiohead/OK Computer')
-    assert path.name == '1-02 - Radiohead - Paranoid Android.flac'
+    assert album_dir == Path(
+        '/tmp/music/Radiohead/(1997-06-16) - OK Computer/CD1'
+    )
+    assert path.name == '02 - Paranoid Android.flac'
 
 
 def test_empty_genre_token_has_fallback() -> None:
@@ -129,7 +143,7 @@ def test_empty_genre_token_has_fallback() -> None:
     assert values['genre'] == 'Unknown Genre'
 
 
-def test_disc_track_only_prefixes_multi_disc() -> None:
+def test_disc_track_never_prefixes_disc_number() -> None:
     album = _album()
     album.medium_count = 1
     single = template_values(album=album, track_number=1)
@@ -141,8 +155,8 @@ def test_disc_track_only_prefixes_multi_disc() -> None:
     album.medium_position = 2
     multi = template_values(album=album, track_number=4)
     assert multi['disc_folder'] == 'CD2'
-    assert multi['disc_track'] == '2-04'
-    assert multi['disc_prefix'] == '2-'
+    assert multi['disc_track'] == '04'
+    assert multi['disc_prefix'] == ''
 
 
 def test_artist_style_feat_and_slash_in_paths() -> None:
@@ -172,7 +186,7 @@ def test_artist_style_feat_and_slash_in_paths() -> None:
 
     album_dir, path = build_output_paths(
         base_dir=Path('/tmp/music'),
-        album_folder_template='{album_artist}/{album}',
+        album_folder_template='{album_artist}/{album}/{disc_folder}',
         filename_template='{track:02d} - {title}',
         album=album,
         track_number=1,

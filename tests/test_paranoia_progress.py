@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import stat
 import sys
+import time
 from pathlib import Path
 
-from ready2rip.rip.paranoia_run import run_paranoia_streaming
+from ready2rip.rip.paranoia_run import _WRITE_PROGRESS_SPAN, run_paranoia_streaming
 from ready2rip.rip.paranoia_stats import progress_frame_from_line
 
 
@@ -59,4 +60,85 @@ print("##: 15 [finished] @ 20000", flush=True, file=sys.stderr)
     assert seen, 'expected live progress callbacks during extract'
     assert seen[-1] == 1.0
     assert seen == sorted(seen)
-    assert any(0.05 <= v < 1.0 for v in seen)
+    # Write-span mapping: mid-extract values stay below the verify headroom.
+    mid = [v for v in seen if 0.05 <= v < 1.0]
+    assert mid, 'expected intermediate progress'
+    assert max(mid) <= 0.99 + 1e-9
+    assert any(v <= _WRITE_PROGRESS_SPAN + 1e-9 for v in mid)
+
+
+def test_run_paranoia_creeps_during_reread_stall(tmp_path: Path) -> None:
+    """After the WAV is full, re-read -e lines must still advance progress."""
+    script = tmp_path / 'fake_paranoia_stall.py'
+    wav = tmp_path / 'track.wav'
+    script.write_text(
+        '''\
+import sys
+import time
+from pathlib import Path
+
+out = Path(sys.argv[1])
+# Pretend the write pass finished immediately (full TOC-sized WAV).
+header = b"RIFFxxxxWAVEfmt " + bytes(28)
+pcm = b"\\x00" * (2352 * 40)
+out.write_bytes(header + pcm)
+# Forward read to the end, then re-verify earlier frames for a few seconds.
+print("##: 0 [read] @ 0", flush=True, file=sys.stderr)
+time.sleep(0.05)
+print("##: 0 [read] @ 23520", flush=True, file=sys.stderr)
+time.sleep(0.05)
+for frame in (20000, 15000, 10000, 5000, 0, 8000, 12000, 18000, 22000):
+    print(f"##: 2 [verify] @ {frame}", flush=True, file=sys.stderr)
+    time.sleep(0.35)
+print("##: 15 [finished] @ 23520", flush=True, file=sys.stderr)
+''',
+        encoding='utf-8',
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+
+    seen: list[float] = []
+    expected_bytes = 44 + 2352 * 40
+    t0 = time.monotonic()
+    stats = run_paranoia_streaming(
+        [sys.executable, str(script), str(wav)],
+        what='fake paranoia stall',
+        timeout=20,
+        on_extract_progress=seen.append,
+        expected_frames=23_520,
+        wav_path=wav,
+        expected_bytes=expected_bytes,
+    )
+    elapsed = time.monotonic() - t0
+    assert elapsed >= 2.0  # re-verify phase actually ran
+    assert stats.finished or stats.verifies >= 1 or stats.reads >= 1
+    assert seen, 'expected progress callbacks'
+    assert seen == sorted(seen)
+    assert seen[-1] == 1.0
+    # Must keep moving after the write span while re-reads are happening.
+    after_write = [v for v in seen if v > _WRITE_PROGRESS_SPAN]
+    assert after_write, (
+        f'expected creep past write span {_WRITE_PROGRESS_SPAN}; saw {seen!r}'
+    )
+    assert max(after_write) >= _WRITE_PROGRESS_SPAN + 0.01
+
+
+def test_multi_track_overall_fraction_keeps_moving() -> None:
+    """Overall banner fraction must change often enough at 0.1% CSS resolution."""
+    n_tracks = 12
+    copy_base = 0.35
+    copy_span = 0.45
+    # Local extract emits about every 0.4% after write-span mapping.
+    locals_ = [i / 250 for i in range(0, 251)]  # 0..1
+    overalls: list[float] = []
+    for i in range(n_tracks):
+        for local in locals_:
+            # Engine maps extract local into copy_base..copy_base+copy_span.
+            sub = copy_base + copy_span * min(1.0, local)
+            overalls.append((i + sub) / n_tracks)
+    css_bins = {round(o * 1000.0) / 1000.0 for o in overalls}
+    # A full rip should paint dozens of distinct 0.1% steps, not ~3 per track.
+    assert len(css_bins) >= 80, f'only {len(css_bins)} CSS steps for {n_tracks} tracks'
+    # During one track's copy, overall should advance by more than one 0.1% step.
+    track0 = [o for o in overalls if o <= (0 + copy_base + copy_span) / n_tracks]
+    track0_bins = {round(o * 1000.0) / 1000.0 for o in track0}
+    assert len(track0_bins) >= 8, f'track0 only {len(track0_bins)} CSS steps'

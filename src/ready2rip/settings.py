@@ -42,10 +42,10 @@ FLAC_LEVELS = (
     (2, '2'),
     (3, '3'),
     (4, '4'),
-    (5, '5 (default)'),
+    (5, '5'),
     (6, '6'),
     (7, '7'),
-    (8, '8 (smallest)'),
+    (8, '8 (smallest, default)'),
 )
 
 # LAME presets: VBR (-V n) and CBR (-b n). Default is V0.
@@ -265,7 +265,7 @@ class AppSettings:
     color_scheme: str = 'default'
     output_directory: str = ''  # empty → default_output_directory() (Music)
     encode_format: str = 'flac'
-    flac_compression: int = 5
+    flac_compression: int = 8
     # LAME preset id: v0–v5 or cbr128/192/256/320.
     mp3_quality: str = 'v0'
     aac_quality: str = 'cbr256'
@@ -282,8 +282,7 @@ class AppSettings:
     use_freedb: bool = True
     auto_lookup_metadata: bool = True
     filename_template: str = DEFAULT_FILENAME_TEMPLATE
-    # Multi-disc numbering belongs in the filename ({disc_track}); {disc_folder}
-    # is only for Custom folder templates (CD1, CD2, …).
+    # Multi-disc albums use {disc_folder} (CD1, CD2, …); track files stay 01…
     album_folder_template: str = DEFAULT_ALBUM_FOLDER_TEMPLATE
     # How multi-artist strings appear in filenames/tags: semicolon | slash | feat.
     artist_style: str = DEFAULT_ARTIST_STYLE

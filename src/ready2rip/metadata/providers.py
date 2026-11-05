@@ -64,6 +64,7 @@ class TrackMetadata:
     title: str = ''
     artist: str = ''
     musicbrainz_recording_id: str = ''
+    isrc: str = ''
 
 
 @dataclass
@@ -130,7 +131,7 @@ class MusicBrainzProvider(MetadataProvider):
             'fmt': 'json',
             'inc': (
                 'artists+recordings+release-groups+labels'
-                '+artist-credits+genres+tags'
+                '+artist-credits+genres+tags+isrcs'
             ),
         }
         url = (
@@ -206,7 +207,7 @@ class MusicBrainzProvider(MetadataProvider):
             'fmt': 'json',
             'inc': (
                 'artists+recordings+release-groups+labels'
-                '+artist-credits+media+genres+tags'
+                '+artist-credits+media+genres+tags+isrcs'
             ),
         }
         url = f'{MB_BASE}/release/{urllib.parse.quote(release_id)}?{urllib.parse.urlencode(params)}'
@@ -389,6 +390,13 @@ class MusicBrainzProvider(MetadataProvider):
                     number = int(re.sub(r'\D', '', str(number_raw)) or track.get('position') or 0)
                 except (TypeError, ValueError):
                     number = int(track.get('position') or 0)
+                isrcs = recording.get('isrcs') or []
+                isrc = ''
+                if isinstance(isrcs, list) and isrcs:
+                    raw = str(isrcs[0] or '').strip().upper()
+                    cleaned = ''.join(ch for ch in raw if ch.isalnum())
+                    if len(cleaned) == 12:
+                        isrc = cleaned
                 tracks.append(
                     TrackMetadata(
                         number=number,
@@ -398,6 +406,7 @@ class MusicBrainzProvider(MetadataProvider):
                         )
                         or artist,
                         musicbrainz_recording_id=recording.get('id') or '',
+                        isrc=isrc,
                     )
                 )
 
@@ -772,6 +781,7 @@ def _parse_cddb_entry(
     dtitle = ''
     dyear = ''
     dgenre = ''
+    extd = ''
     tracks: dict[int, str] = {}
 
     for raw in text.splitlines():
@@ -784,6 +794,8 @@ def _parse_cddb_entry(
             dyear = normalize_release_date(line[6:].strip())
         elif line.startswith('DGENRE='):
             dgenre = line[7:].strip()
+        elif line.startswith('EXTD='):
+            extd += line[5:]
         else:
             match = re.match(r'TTITLE(\d+)=(.*)', line)
             if match:
@@ -794,6 +806,11 @@ def _parse_cddb_entry(
     title = dtitle
     if ' / ' in dtitle:
         artist, title = dtitle.split(' / ', 1)
+
+    title = title.strip()
+    medium_position, medium_count, title = _disc_fields_from_cddb_text(
+        title, extd
+    )
 
     track_list = [
         TrackMetadata(number=i + 1, title=tracks[i], artist=artist)
@@ -813,7 +830,62 @@ def _parse_cddb_entry(
         genre=genre,
         tracks=track_list,
         source=source,
+        medium_position=medium_position,
+        medium_count=medium_count,
     )
+
+
+# FreeDB has no native disc-number field; multi-disc sets encode it in DTITLE/EXTD.
+# Escape \# — (?x) treats bare # as a comment to end-of-line.
+_DISC_MARK_RE = re.compile(
+    r'(?i)'
+    r'[\(\[{]?\s*'
+    r'(?:disc|disk|cd|dvd)\s*(?:#\s*)?'
+    r'(?P<pos>\d{1,2})'
+    r'(?:\s*(?:of|/)\s*(?P<total>\d{1,2}))?'
+    r'\s*[)\]}]?'
+    r'|'
+    r'[\(\[]\s*(?P<pos2>\d{1,2})\s*/\s*(?P<total2>\d{1,2})\s*[)\]]'
+)
+
+
+def _disc_fields_from_cddb_text(
+    title: str, extd: str = ''
+) -> tuple[int, int, str]:
+    """Extract disc N[/M] from a FreeDB title or EXTD blob.
+
+    Returns ``(medium_position, medium_count, cleaned_title)``. Defaults to
+    ``(1, 1, title)`` when no disc marker is found.
+    """
+    position = 1
+    total = 1
+    cleaned = (title or '').strip()
+
+    def _apply(match: re.Match[str], *, strip_from_title: bool) -> None:
+        nonlocal position, total, cleaned
+        pos_raw = match.group('pos') or match.group('pos2')
+        tot_raw = match.group('total') or match.group('total2')
+        if not pos_raw:
+            return
+        pos = int(pos_raw)
+        tot = int(tot_raw) if tot_raw else max(pos, 1)
+        if pos < 1:
+            return
+        position = pos
+        total = max(tot, pos)
+        if strip_from_title:
+            cleaned = (cleaned[: match.start()] + cleaned[match.end() :]).strip()
+            cleaned = re.sub(r'[\s\-–—:/]+$', '', cleaned).strip()
+
+    title_match = _DISC_MARK_RE.search(cleaned)
+    if title_match is not None:
+        _apply(title_match, strip_from_title=True)
+    elif extd:
+        extd_match = _DISC_MARK_RE.search(extd)
+        if extd_match is not None:
+            _apply(extd_match, strip_from_title=False)
+
+    return position, total, cleaned or (title or '').strip()
 
 
 def parse_musicbrainz_release_id(text: str) -> str | None:

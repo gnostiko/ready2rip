@@ -69,7 +69,7 @@ class RipLog:
         self.sample_offset: int = 0
         self.offset_configured: bool = False
         self.encode_format: str = 'flac'
-        self.flac_compression: int = 5
+        self.flac_compression: int = 8
         self.mp3_quality: str = 'v0'
         self.aac_quality: str = 'cbr256'
         self.aac_bitrate: int = 256

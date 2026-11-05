@@ -6,8 +6,11 @@ from __future__ import annotations
 from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
 from ready2rip.tags.writer import (
     TagWriter,
+    _album_barcode,
+    _album_date,
     _artist_names_for_tags,
     _is_compilation,
+    _track_isrc,
 )
 
 
@@ -32,7 +35,7 @@ def test_is_compilation_various_artists() -> None:
     assert not _is_compilation(AlbumMetadata(artist='Radiohead'))
 
 
-def test_apply_vorbis_keeps_core_fields_only() -> None:
+def test_apply_vorbis_writes_date_barcode_isrc() -> None:
     audio: dict[str, list[str]] = {}
     album = AlbumMetadata(
         title='Album',
@@ -40,7 +43,7 @@ def test_apply_vorbis_keeps_core_fields_only() -> None:
         date='1997-06-16',
         genre='Rock',
         label='Label',
-        barcode='123',
+        barcode='0123456789012',
         catalog_number='CAT',
         country='GB',
         discid='disc',
@@ -54,6 +57,7 @@ def test_apply_vorbis_keeps_core_fields_only() -> None:
                 title='Song',
                 artist='A; B',
                 musicbrainz_recording_id='rec-id',
+                isrc='USRC17607839',
             )
         ],
     )
@@ -77,13 +81,59 @@ def test_apply_vorbis_keeps_core_fields_only() -> None:
     assert audio['DISCTOTAL'] == ['3']
     assert audio['GENRE'] == ['Rock']
     assert audio['LABEL'] == ['Label']
-    # Explicitly omitted extras.
-    assert 'DATE' not in audio
-    assert 'ORIGINALDATE' not in audio
+    assert audio['DATE'] == ['1997-06-16']
+    assert audio['BARCODE'] == ['0123456789012']
+    assert audio['ISRC'] == ['USRC17607839']
+    # Still omitted extras.
     assert 'MEDIA' not in audio
     assert 'MUSICBRAINZ_RECORDINGID' not in audio
     assert 'MUSICBRAINZ_ALBUMID' not in audio
-    assert 'BARCODE' not in audio
     assert 'CATALOGNUMBER' not in audio
     assert 'RELEASECOUNTRY' not in audio
     assert 'MUSICBRAINZ_DISCID' not in audio
+
+
+def test_date_barcode_isrc_helpers() -> None:
+    album = AlbumMetadata(
+        date='1997',
+        barcode='0123456789012',
+        tracks=[TrackMetadata(number=1, isrc='usrc17607839')],
+    )
+    assert _album_date(album) == '1997'
+    assert _album_barcode(album) == '0123456789012'
+    assert _track_isrc(album, 1) == 'USRC17607839'
+    assert _album_barcode(AlbumMetadata(barcode='123')) == ''
+    assert _track_isrc(AlbumMetadata(tracks=[]), 1) == ''
+
+
+def test_apply_vorbis_image_mode_omits_track_and_isrc() -> None:
+    audio: dict[str, list[str]] = {
+        'TRACKNUMBER': ['1'],
+        'ISRC': ['USRC17607839'],
+    }
+    album = AlbumMetadata(
+        title='Whole Album',
+        artist='Band',
+        date='2001',
+        barcode='0123456789012',
+        tracks=[
+            TrackMetadata(
+                number=1, title='Song One', artist='Band', isrc='USRC17607839'
+            )
+        ],
+    )
+    TagWriter()._apply_vorbis(
+        audio,
+        title='Whole Album',
+        artists=['Band'],
+        album='Whole Album',
+        album_artists=['Band'],
+        track_number=0,
+        total_tracks=None,
+        album_meta=album,
+    )
+    assert audio['TITLE'] == ['Whole Album']
+    assert audio['DATE'] == ['2001']
+    assert audio['BARCODE'] == ['0123456789012']
+    assert 'TRACKNUMBER' not in audio
+    assert 'ISRC' not in audio
