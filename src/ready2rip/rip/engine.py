@@ -1676,13 +1676,12 @@ class RipEngine:
                     )
 
                     def _test_progress(local: float, *, _label=test_label) -> None:
-                        pct = max(0, min(99, int(local * 100)))
                         report(
                             track_no,
                             RipState.RIPPING,
                             index=idx,
                             sub=0.22 * max(0.0, min(1.0, local)),
-                            message=f'{_label} · {pct}%',
+                            message=f'{_label}…',
                             total_units=total_units,
                         )
 
@@ -1742,13 +1741,12 @@ class RipEngine:
                     _base=copy_base,
                     _span=copy_span,
                 ) -> None:
-                    pct = max(0, min(99, int(local * 100)))
                     report(
                         track_no,
                         RipState.RIPPING,
                         index=idx,
                         sub=_base + _span * max(0.0, min(1.0, local)),
-                        message=f'{_label} · {pct}%',
+                        message=f'{_label}…',
                         total_units=total_units,
                     )
 
@@ -1937,13 +1935,12 @@ class RipEngine:
         )
 
         def _burst_progress(local: float) -> None:
-            pct = max(0, min(99, int(local * 100)))
             report(
                 track_no,
                 RipState.RIPPING,
                 index=idx,
                 sub=0.40 + 0.15 * max(0.0, min(1.0, local)),
-                message=f'Burst ripping track {track_no} · {pct}%',
+                message=f'Burst ripping track {track_no}…',
                 total_units=total_units,
             )
 
@@ -2496,11 +2493,10 @@ class RipEngine:
                 span_timeout_secure = max(600, total_sectors // 5)
                 span_timeout_burst = max(300, total_sectors // 15)
                 def _img_extract_progress(local: float) -> None:
-                    pct = max(0, min(99, int(local * 100)))
                     report(
                         RipState.RIPPING,
                         0.05 + 0.30 * max(0.0, min(1.0, local)),
-                        f'Extracting disc image · {pct}%',
+                        'Extracting disc image…',
                     )
 
                 mode, img_stats = self._rip_span(
@@ -2553,11 +2549,10 @@ class RipEngine:
                                 avoid_end=end_sector,
                             )
                             def _img_retry_progress(local: float) -> None:
-                                pct = max(0, min(99, int(local * 100)))
                                 report(
                                     RipState.RIPPING,
                                     0.20 + 0.15 * max(0.0, min(1.0, local)),
-                                    f'Retrying disc image · {pct}%',
+                                    'Retrying disc image…',
                                 )
 
                             mode, retry_stats = self._rip_span(
@@ -2591,11 +2586,10 @@ class RipEngine:
                         )
 
                         def _img_copy_progress(local: float) -> None:
-                            pct = max(0, min(99, int(local * 100)))
                             report(
                                 RipState.RIPPING,
                                 0.40 + 0.25 * max(0.0, min(1.0, local)),
-                                f'Copy pass for disc image · {pct}%',
+                                'Copy pass for disc image…',
                             )
 
                         copy_mode, copy_stats = self._rip_span(
