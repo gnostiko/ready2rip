@@ -29,12 +29,22 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-05">
       <description>
         <p>
-          0.4.21: Gold-standard archival polish — AccurateRip and CTDB on
-          Copy Image, hard sample-offset gate when verification is on
+          0.4.22: Remove barcode and ISRC edit fields from the UI and
+          restore the previous Title / Artist track-row sizing. Tags and
+          CUE sheets still receive barcode and ISRC when metadata or the
+          disc provides them.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.21" date="2026-11-05">
+      <description>
+        <p>
+          Gold-standard archival polish — AccurateRip and CTDB on Copy
+          Image, hard sample-offset gate when verification is on
           (auto-resume after Detect), live CD-TEXT / MCN / ISRC from the
-          disc, date / barcode / ISRC in tags and UI, multi-disc CD1/
-          folders with matching CUE sheets, FreeDB disc N/M heuristics,
-          FLAC level 8 with verify, and README catch-up.
+          disc, date / barcode / ISRC in tags, multi-disc CD1/ folders
+          with matching CUE sheets, FreeDB disc N/M heuristics, FLAC
+          level 8 with verify, and README catch-up.
         </p>
       </description>
     </release>

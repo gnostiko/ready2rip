@@ -198,14 +198,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._track_checks: dict[int, Gtk.CheckButton] = {}
         self._track_title_entries: dict[int, Gtk.Entry] = {}
         self._track_artist_entries: dict[int, Gtk.Entry] = {}
-        self._track_isrc_entries: dict[int, Gtk.Entry] = {}
         self._track_title_labels: dict[int, Gtk.Label] = {}
         self._track_artist_labels: dict[int, Gtk.Label] = {}
-        self._track_isrc_labels: dict[int, Gtk.Label] = {}
         self._track_status_labels: dict[int, Gtk.Label] = {}
         self._track_title_stacks: dict[int, Gtk.Stack] = {}
         self._track_artist_stacks: dict[int, Gtk.Stack] = {}
-        self._track_isrc_stacks: dict[int, Gtk.Stack] = {}
         self._tracks_editing = False
         self._track_edit_button: Gtk.Button | None = None
         self._track_artist_button: Gtk.Button | None = None
@@ -215,16 +212,15 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         # Last Custom templates (kept when switching to presets; restored on Custom).
         self._custom_album_folder_template = ''
         self._custom_filename_template = ''
-        # Lead (#) and Time stay locked; Title|Artist share space; ISRC is fixed.
+        # Lead (#) and Time stay locked; Title|Artist use a fixed 50/50 grid
+        # so column headers do not drift when the window is resized.
         self._track_lead_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
         self._track_dur_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
-        self._track_isrc_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
         self._album_field_rows: list[Gtk.Widget] = []
         self._album_title_row: Adw.EntryRow | None = None
         self._album_artist_row: Adw.EntryRow | None = None
         self._album_date_row: Adw.EntryRow | None = None
         self._album_genre_row: Adw.EntryRow | None = None
-        self._album_barcode_row: Adw.EntryRow | None = None
         self._album_disc_row: Adw.EntryRow | None = None
         self._track_header_suffix: Gtk.Widget | None = None
         self._disc_rows: list[Adw.ActionRow] = []
@@ -3060,15 +3056,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._album_field_rows.append(genre_row)
         self._album_genre_row = genre_row
 
-        barcode_row = Adw.EntryRow(title='Barcode')
-        barcode_row.set_tooltip_text(
-            'UPC/EAN barcode (MCN). Written as BARCODE / CATALOG in tags and CUE.'
-        )
-        barcode_row.connect('changed', self._on_album_field_changed)
-        self.album_edit_group.add(barcode_row)
-        self._album_field_rows.append(barcode_row)
-        self._album_barcode_row = barcode_row
-
         disc_row = Adw.EntryRow(title='Disc')
         disc_row.set_text('1/1')
         disc_row.set_tooltip_text(
@@ -3138,8 +3125,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 )
             if self._album_genre_row is not None:
                 self._album_genre_row.set_text(album.genre if album else '')
-            if self._album_barcode_row is not None:
-                self._album_barcode_row.set_text(album.barcode if album else '')
             disc_num = max(1, int(album.medium_position)) if album else 1
             disc_total = max(1, int(album.medium_count)) if album else 1
             if self._album_disc_row is not None:
@@ -3159,8 +3144,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             album.date = normalize_release_date(self._album_date_row.get_text())
         if self._album_genre_row is not None:
             album.genre = self._album_genre_row.get_text().strip()
-        if self._album_barcode_row is not None:
-            album.barcode = self._album_barcode_row.get_text().strip()
         if self._album_disc_row is not None:
             disc_num, disc_total = parse_disc_field(
                 self._album_disc_row.get_text()
@@ -3214,14 +3197,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._track_checks.clear()
         self._track_title_entries.clear()
         self._track_artist_entries.clear()
-        self._track_isrc_entries.clear()
         self._track_title_labels.clear()
         self._track_artist_labels.clear()
-        self._track_isrc_labels.clear()
         self._track_status_labels.clear()
         self._track_title_stacks = {}
         self._track_artist_stacks = {}
-        self._track_isrc_stacks = {}
         self._track_edit_button = None
         self._track_artist_button = None
         self._track_select_all = None
@@ -3233,7 +3213,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         # Fresh size groups so rebuilt widgets align cleanly.
         self._track_lead_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
         self._track_dur_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
-        self._track_isrc_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
 
         if info is None:
             group.set_title('Tracks')
@@ -3243,7 +3222,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         btn_edit = Gtk.Button(label='Edit')
         btn_edit.add_css_class('flat')
-        btn_edit.set_tooltip_text('Edit titles, artists, and ISRC')
+        btn_edit.set_tooltip_text('Edit titles and artists')
         btn_edit.connect('clicked', self._on_tracks_edit_toggled)
         btn_artist = Gtk.Button(label='Album artist')
         btn_artist.add_css_class('flat')
@@ -3273,7 +3252,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 meta = track_meta_for(album, track.number)
                 title = meta.title if meta else ''
                 artist = normalize_artists((meta.artist if meta else '') or '')
-                isrc = (meta.isrc if meta else '') or ''
                 if (
                     not artist
                     and album_artist
@@ -3285,7 +3263,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                     track.number,
                     title=title,
                     artist=artist,
-                    isrc=isrc,
                     duration_label=track.duration_label,
                 )
                 group.add(row)
@@ -3299,25 +3276,19 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._set_track_select_sensitive(not self._ripping)
 
     @staticmethod
-    def _make_title_artist_grid(
-        title: Gtk.Widget,
-        artist: Gtk.Widget,
-        isrc: Gtk.Widget | None = None,
-    ) -> Gtk.Box:
-        """Title | Artist share space; optional fixed-width ISRC column."""
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        box.set_hexpand(True)
-        box.set_halign(Gtk.Align.FILL)
+    def _make_title_artist_grid(title: Gtk.Widget, artist: Gtk.Widget) -> Gtk.Grid:
+        """Homogeneous 2-col grid: Title and Artist each take half."""
+        grid = Gtk.Grid()
+        grid.set_column_homogeneous(True)
+        grid.set_column_spacing(12)
+        grid.set_hexpand(True)
+        grid.set_halign(Gtk.Align.FILL)
         for child in (title, artist):
             child.set_hexpand(True)
             child.set_halign(Gtk.Align.FILL)
-        box.append(title)
-        box.append(artist)
-        if isrc is not None:
-            isrc.set_hexpand(False)
-            isrc.set_halign(Gtk.Align.FILL)
-            box.append(isrc)
-        return box
+        grid.attach(title, 0, 0, 1, 1)
+        grid.attach(artist, 1, 0, 1, 1)
+        return grid
 
     @staticmethod
     def _track_caption(
@@ -3401,10 +3372,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         title_h.set_halign(Gtk.Align.START)
         artist_h = self._track_caption('Artist', 'heading', 'ready2rip-track-artist')
         artist_h.set_halign(Gtk.Align.START)
-        isrc_h = self._track_caption('ISRC', 'heading', 'ready2rip-track-isrc')
-        isrc_h.set_halign(Gtk.Align.START)
-        self._track_isrc_size.add_widget(isrc_h)
-        box.append(self._make_title_artist_grid(title_h, artist_h, isrc_h))
+        box.append(self._make_title_artist_grid(title_h, artist_h))
 
         dur_h = self._track_caption('Time', 'ready2rip-track-dur', xalign=1.0)
         self._track_dur_size.add_widget(dur_h)
@@ -3419,20 +3387,17 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         *,
         title: str,
         artist: str,
-        isrc: str = '',
         duration_label: str,
     ) -> Gtk.ListBoxRow:
-        """Flat track row: checkbox · # · title · artist · ISRC · status · time.
+        """Flat track row: checkbox · # · title · artist · status · time.
 
-        View mode shows labels; Edit mode swaps in entries for title/artist/ISRC.
+        View mode shows labels; Edit mode swaps in entries for title/artist.
+        Title/Artist share remaining width equally (1/2 each).
         """
         row = Gtk.ListBoxRow()
         row.set_activatable(False)
         row.set_selectable(False)
-        tip = f'Track {number:02d} · {duration_label}'
-        if isrc:
-            tip = f'{tip} · ISRC {isrc}'
-        row.set_tooltip_text(tip)
+        row.set_tooltip_text(f'Track {number:02d} · {duration_label}')
 
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         box.add_css_class('ready2rip-track-row')
@@ -3472,18 +3437,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             ),
             css_class='ready2rip-track-artist',
         )
-        isrc_stack, isrc_label, isrc_entry = self._make_track_field_stack(
-            number=number,
-            value=isrc,
-            empty_display='—',
-            placeholder='ISRC',
-            tooltip=f'ISRC for track {number:02d} (12 characters)',
-            css_class='ready2rip-track-isrc',
-        )
-        self._track_isrc_size.add_widget(isrc_stack)
-        box.append(
-            self._make_title_artist_grid(title_stack, artist_stack, isrc_stack)
-        )
+        box.append(self._make_title_artist_grid(title_stack, artist_stack))
 
         status = Gtk.Label(label='')
         status.add_css_class('caption')
@@ -3506,14 +3460,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._track_checks[number] = check
         self._track_title_entries[number] = title_entry
         self._track_artist_entries[number] = artist_entry
-        self._track_isrc_entries[number] = isrc_entry
         self._track_title_labels[number] = title_label
         self._track_artist_labels[number] = artist_label
-        self._track_isrc_labels[number] = isrc_label
         self._track_status_labels[number] = status
         self._track_title_stacks[number] = title_stack
         self._track_artist_stacks[number] = artist_stack
-        self._track_isrc_stacks[number] = isrc_stack
         return row
 
     def _on_tracks_edit_toggled(self, *_args) -> None:
@@ -3530,9 +3481,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if self._track_edit_button is not None:
             self._track_edit_button.set_label('Done' if editing else 'Edit')
             self._track_edit_button.set_tooltip_text(
-                'Finish editing'
-                if editing
-                else 'Edit titles, artists, and ISRC'
+                'Finish editing' if editing else 'Edit titles and artists'
             )
         if self._track_artist_button is not None:
             self._track_artist_button.set_visible(editing)
@@ -3541,13 +3490,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         for num in self._track_title_entries:
             ts = self._track_title_stacks.get(num)
             as_ = self._track_artist_stacks.get(num)
-            is_ = self._track_isrc_stacks.get(num)
             if ts is not None:
                 ts.set_visible_child_name(child)
             if as_ is not None:
                 as_.set_visible_child_name(child)
-            if is_ is not None:
-                is_.set_visible_child_name(child)
 
         if editing and self._track_title_entries:
             first = min(self._track_title_entries)
@@ -3557,9 +3503,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         for num, title_entry in self._track_title_entries.items():
             title = title_entry.get_text().strip()
             artist = normalize_artists(self._track_artist_entries[num].get_text())
-            isrc_entry = self._track_isrc_entries.get(num)
-            isrc_raw = isrc_entry.get_text().strip() if isrc_entry else ''
-            isrc = ''.join(ch for ch in isrc_raw.upper() if ch.isalnum())
             # Keep entry text canonical (A; B not A;B).
             if self._track_artist_entries[num].get_text().strip() != artist:
                 self._suppress_meta_write = True
@@ -3567,15 +3510,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                     self._track_artist_entries[num].set_text(artist)
                 finally:
                     self._suppress_meta_write = False
-            if isrc_entry is not None and isrc_entry.get_text().strip() != isrc:
-                self._suppress_meta_write = True
-                try:
-                    isrc_entry.set_text(isrc)
-                finally:
-                    self._suppress_meta_write = False
             tlab = self._track_title_labels[num]
             alab = self._track_artist_labels[num]
-            ilab = self._track_isrc_labels.get(num)
             tlab.set_label(title or f'Track {num:02d}')
             tlab.remove_css_class('dim-label')
             if not title:
@@ -3584,11 +3520,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             alab.remove_css_class('dim-label')
             if not artist:
                 alab.add_css_class('dim-label')
-            if ilab is not None:
-                ilab.set_label(isrc or '—')
-                ilab.remove_css_class('dim-label')
-                if not isrc:
-                    ilab.add_css_class('dim-label')
 
     def _on_track_field_changed(self, track_number: int) -> None:
         if self._suppress_meta_write or self._disc is None:
@@ -3598,13 +3529,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         album = self._ensure_album_tracks()
         title_entry = self._track_title_entries.get(track_number)
         artist_entry = self._track_artist_entries.get(track_number)
-        isrc_entry = self._track_isrc_entries.get(track_number)
         title = title_entry.get_text().strip() if title_entry else ''
         artist = (
             normalize_artists(artist_entry.get_text()) if artist_entry else ''
         )
-        isrc_raw = isrc_entry.get_text().strip() if isrc_entry else ''
-        isrc = ''.join(ch for ch in isrc_raw.upper() if ch.isalnum())
 
         found = None
         for t in album.tracks:
@@ -3617,7 +3545,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             album.tracks.sort(key=lambda x: x.number)
         found.title = title
         found.artist = artist
-        found.isrc = isrc
 
         _mark_album_edited(album)
         self._schedule_cache_save()
@@ -4024,16 +3951,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 meta = track_meta_for(album, num)
                 title = meta.title if meta else ''
                 artist = normalize_artists((meta.artist if meta else '') or '')
-                isrc = (meta.isrc if meta else '') or ''
                 if not artist and album_artist and useful:
                     artist = album_artist
                 title_entry.set_text(title)
                 artist_entry = self._track_artist_entries.get(num)
                 if artist_entry is not None:
                     artist_entry.set_text(artist)
-                isrc_entry = self._track_isrc_entries.get(num)
-                if isrc_entry is not None:
-                    isrc_entry.set_text(isrc)
             self._sync_track_labels_from_entries()
         finally:
             self._suppress_meta_write = False

@@ -16,9 +16,9 @@ and modern tagging.
 | Secure rip | Full cdparanoia, retries, test & copy (CRC match required) |
 | AccurateRip | Online CRC check after extraction (per-track and Copy image) |
 | CTDB | CUETools Database verify; optional confirm / new-parity submit |
-| Metadata | MusicBrainz + FreeDB-compatible lookup (e.g. gnudb); editable album, tracks, barcode, and ISRC |
+| Metadata | MusicBrainz + FreeDB-compatible lookup (e.g. gnudb); editable album and tracks |
 | Disc extras | Live CD-TEXT, MCN (barcode), and per-track ISRC via MMC when the drive supports it |
-| Tags | mutagen — FLAC / MP3 / AAC (M4A) / Opus / WAV, including date, barcode, and ISRC |
+| Tags | mutagen — FLAC / MP3 / AAC (M4A) / Opus / WAV (date, barcode, and ISRC when known) |
 | ReplayGain | Track + album loudness tags |
 | Artwork | Cover Art Archive and iTunes, with optional embed sizes |
 | Logs & CUE | Detailed rip log; multi-file or image CUE (INDEX 00 pregaps, CATALOG / ISRC, mixed-mode data) |
@@ -29,7 +29,7 @@ and modern tagging.
 1. **Install / run** — AppImage is the recommended path (see [Install](#install)). [Gear Lever](https://flathub.org/apps/it.mijorus.gearlever) adds menu integration and update checks.
 2. **Insert an audio CD.** ready2rip detects the disc, reads the TOC, and shows tracks.
 3. **Drive setup** (first run, or when you change drives): calibrate **sample offset**. If AccurateRip or CTDB is enabled, ripping is blocked until the drive is calibrated.
-4. **Metadata** (optional): auto-lookup when a disc is detected, or open **Lookup → By disc ID** and pick a release. If the wrong album is matched, use **Lookup → MusicBrainz link…** and paste a `musicbrainz.org/release/…` URL or release UUID. Edit album fields (including barcode / disc N/M) and track titles, artists, and ISRC as needed. Cover art can be fetched, chosen from disk, or cleared.
+4. **Metadata** (optional): auto-lookup when a disc is detected, or open **Lookup → By disc ID** and pick a release. If the wrong album is matched, use **Lookup → MusicBrainz link…** and paste a `musicbrainz.org/release/…` URL or release UUID. Edit album/track fields if needed. Cover art can be fetched, chosen from disk, or cleared.
 5. **Settings**: encoder, test & copy, CUE/log, Copy image, HTOA, and related options. Defaults already match a secure archival setup.
 6. Press **Rip CD**. Progress appears in the bottom banner (status line shows track detail). After Detect from the offset gate, a successful calibration resumes the rip automatically.
 7. Files land under your **output folder** using the album/track templates — audio, optional `cover`, `.log`, and `.cue`.
@@ -135,8 +135,8 @@ Release assets are published for **x86_64** and **aarch64** on
 ### AppImage (recommended)
 
 ```bash
-chmod +x ready2rip-0.4.21-x86_64.AppImage   # or …-aarch64.AppImage
-./ready2rip-0.4.21-x86_64.AppImage
+chmod +x ready2rip-0.4.22-x86_64.AppImage   # or …-aarch64.AppImage
+./ready2rip-0.4.22-x86_64.AppImage
 ```
 
 The AppImage needs a matching CPU architecture, a host **glibc** new enough for
@@ -166,7 +166,7 @@ Release AppImages are GPG-signed. Import the project key from
 ### Debian / Ubuntu
 
 ```bash
-sudo apt install ./ready2rip_0.4.21-1_amd64.deb   # or _arm64.deb
+sudo apt install ./ready2rip_0.4.22-1_amd64.deb   # or _arm64.deb
 ```
 
 Depends on distro packages for GTK 4 / libadwaita, mutagen, Pillow, cdparanoia,
@@ -175,7 +175,7 @@ flac, lame, ffmpeg, and opus-tools.
 ### Fedora / RPM
 
 ```bash
-sudo dnf install ./ready2rip-0.4.21-1.x86_64.rpm   # or .aarch64.rpm
+sudo dnf install ./ready2rip-0.4.22-1.x86_64.rpm   # or .aarch64.rpm
 ```
 
 Same runtime idea as the `.deb`: system UI stack and encoders, ready2rip itself
@@ -184,7 +184,7 @@ from the package.
 ### Flatpak
 
 ```bash
-flatpak install --user ./ready2rip-0.4.21-x86_64.flatpak
+flatpak install --user ./ready2rip-0.4.22-x86_64.flatpak
 flatpak run org.ready2rip.Ready2Rip
 ```
 
