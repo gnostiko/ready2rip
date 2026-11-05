@@ -1584,7 +1584,7 @@ class RipEngine:
                     track_no,
                     RipState.ENCODING,
                     index=idx,
-                    sub=0.62,
+                    sub=0.90,
                     message=(
                         f'Encoding track {track_no}'
                         + (f' ({n_targets} formats)' if n_targets > 1 else '')
@@ -1680,7 +1680,8 @@ class RipEngine:
                             track_no,
                             RipState.RIPPING,
                             index=idx,
-                            sub=0.22 * max(0.0, min(1.0, local)),
+                            # Test pass owns most of the first half of the track unit.
+                            sub=0.32 * max(0.0, min(1.0, local)),
                             message=f'{_label}…',
                             total_units=total_units,
                         )
@@ -1706,7 +1707,7 @@ class RipEngine:
                             track_no,
                             RipState.RIPPING,
                             index=idx,
-                            sub=0.22,
+                            sub=0.33,
                             message='Defeating drive cache…',
                             total_units=total_units,
                         )
@@ -1723,8 +1724,10 @@ class RipEngine:
                     if job.test_and_copy
                     else f'Extracting track {track_no}'
                 )
-                copy_base = 0.28 if job.test_and_copy else 0.0
-                copy_span = 0.24 if job.test_and_copy else 0.50
+                # Extract is the slow phase — give it most of the track unit so
+                # the banner keeps moving; verify/encode keep the last fifth.
+                copy_base = 0.35 if job.test_and_copy else 0.0
+                copy_span = 0.45 if job.test_and_copy else 0.78
                 report(
                     track_no,
                     RipState.RIPPING,
@@ -3019,8 +3022,19 @@ class RipEngine:
         wav_path: Path | None = None,
         expected_bytes: int | None = None,
     ) -> ParanoiaStats:
-        """Run cdparanoia, stream ``-e`` progress, return :class:`ParanoiaStats`."""
-        log.info('Running %s: %s', what, ' '.join(cmd))
+        """Run cdparanoia, stream ``-e`` progress, return :class:`ParanoiaStats`.
+
+        Progress prefers growing WAV size (monotonic) and also tracks ``-e``
+        frame lines. ``stdbuf`` line-buffers child stderr when available so
+        updates are not stuck behind a full pipe buffer.
+        """
+        run_cmd = list(cmd)
+        stdbuf = shutil.which('stdbuf')
+        if stdbuf is not None and run_cmd and Path(run_cmd[0]).name != 'stdbuf':
+            # Line-buffer stdout/stderr — cdparanoia otherwise often block-buffers
+            # when stderr is a pipe, so the UI never moves until extract ends.
+            run_cmd = [stdbuf, '-oL', '-eL', *run_cmd]
+        log.info('Running %s: %s', what, ' '.join(run_cmd))
         proc: subprocess.Popen[str] | None = None
         stderr_chunks: list[str] = []
         origin_frame: int | None = None
@@ -3037,8 +3051,11 @@ class RipEngine:
             if on_extract_progress is None:
                 return
             frac = max(0.0, min(0.99, frac))
+            # Never move the bar backwards (paranoia re-reads earlier frames).
+            if frac + 1e-9 < last_frac:
+                return
             now = time.monotonic()
-            if frac < last_frac + 0.008 and (now - last_emit) < 0.2:
+            if frac < last_frac + 0.005 and (now - last_emit) < 0.15:
                 return
             last_frac = frac
             last_emit = now
@@ -3058,9 +3075,9 @@ class RipEngine:
                 origin_frame = frame
             rel = frame - origin_frame
             if rel < 0:
-                # Absolute cursor jumped backward / different basis — restart.
-                origin_frame = frame
-                rel = 0
+                # Ignore backward cursor jumps; keep origin so progress stays
+                # monotonic via emit()'s floor.
+                return
             emit(rel / float(expected_frames))
 
         def consider_wav_size() -> None:
@@ -3078,7 +3095,7 @@ class RipEngine:
 
         try:
             proc = subprocess.Popen(
-                cmd,
+                run_cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -3106,12 +3123,14 @@ class RipEngine:
                     raise RuntimeError(
                         f'{what} timed out after {timeout}s'
                     ) from None
-                # Short timed read so we can also poll WAV growth / cancel.
+                # Always sample WAV growth — reliable even when stderr is quiet.
+                consider_wav_size()
+                # Short timed read so cancel / WAV polls stay responsive.
                 ready = True
                 try:
                     import select
 
-                    ready, _, _ = select.select([proc.stderr], [], [], 0.25)
+                    ready, _, _ = select.select([proc.stderr], [], [], 0.2)
                     ready = bool(ready)
                 except (ImportError, ValueError, OSError):
                     ready = True
@@ -3121,7 +3140,6 @@ class RipEngine:
                         stderr_chunks.append(line)
                         consider_line(line)
                     elif proc.poll() is not None:
-                        # Drain any remaining buffered stderr.
                         rest = proc.stderr.read()
                         if rest:
                             stderr_chunks.append(rest)
@@ -3129,19 +3147,16 @@ class RipEngine:
                                 consider_line(part)
                         break
                     else:
-                        # Ready with empty read but still running — avoid spin.
-                        consider_wav_size()
                         time.sleep(0.05)
-                else:
-                    consider_wav_size()
-                    if proc.poll() is not None:
-                        rest = proc.stderr.read()
-                        if rest:
-                            stderr_chunks.append(rest)
-                            for part in rest.splitlines(keepends=True):
-                                consider_line(part)
-                        break
+                elif proc.poll() is not None:
+                    rest = proc.stderr.read()
+                    if rest:
+                        stderr_chunks.append(rest)
+                        for part in rest.splitlines(keepends=True):
+                            consider_line(part)
+                    break
             code = proc.wait() if proc.returncode is None else proc.returncode
+            consider_wav_size()
             if on_extract_progress is not None and not self._cancelled:
                 try:
                     on_extract_progress(1.0)
@@ -3253,7 +3268,7 @@ class RipEngine:
             track_no,
             RipState.VERIFYING,
             index=idx,
-            sub=0.55,
+            sub=0.82,
             message=f'Verifying track {track_no}…',
             total_units=total_units,
         )
@@ -3280,7 +3295,7 @@ class RipEngine:
                 track_no,
                 RipState.VERIFYING,
                 index=idx,
-                sub=0.58,
+                sub=0.85,
                 message=ar.message,
                 total_units=total_units,
             )
@@ -3290,7 +3305,7 @@ class RipEngine:
                 track_no,
                 RipState.VERIFYING,
                 index=idx,
-                sub=0.59,
+                sub=0.86,
                 message=f'CTDB check track {track_no}…',
                 total_units=total_units,
             )
@@ -3305,7 +3320,7 @@ class RipEngine:
                 track_no,
                 RipState.VERIFYING,
                 index=idx,
-                sub=0.60,
+                sub=0.88,
                 message=ctdb.message,
                 total_units=total_units,
             )

@@ -144,7 +144,8 @@ def banner_fill_css(fraction: float) -> str:
     """GNOME success-green left-to-right fill for rip + offset banners."""
     selector = '.ready2rip-rip-bar'
     percent = max(0.0, min(100.0, fraction * 100.0))
-    if percent <= 0.05:
+    # Show even early single-digit percent so the first track does not look stuck.
+    if percent <= 0.01:
         return f'{selector} {{ background-image: none; }}'
     edge = max(0.0, percent - 2.5)
     return f"""

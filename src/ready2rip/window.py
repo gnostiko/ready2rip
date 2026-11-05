@@ -2302,7 +2302,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._pending_progress = progress
         if self._progress_idle_id is not None:
             return
-        self._progress_idle_id = GLib.idle_add(self._flush_rip_progress)
+        # DEFAULT (not DEFAULT_IDLE) so the banner keeps up under UI load.
+        self._progress_idle_id = GLib.idle_add(
+            self._flush_rip_progress,
+            priority=GLib.PRIORITY_DEFAULT,
+        )
 
     def _flush_rip_progress(self) -> bool:
         self._progress_idle_id = None
