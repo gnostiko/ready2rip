@@ -29,6 +29,14 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-06">
       <description>
         <p>
+          0.4.31: Restore the green rip banner; advance progress once per
+          finished track so the fill no longer stalls mid-extract.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.30" date="2026-11-06">
+      <description>
+        <p>
           0.4.30: Replace the custom CSS rip banner with a standard
           Gtk.ProgressBar.
         </p>

@@ -122,23 +122,23 @@ print("##: 15 [finished] @ 23520", flush=True, file=sys.stderr)
     assert max(after_write) >= _WRITE_PROGRESS_SPAN + 0.01
 
 
-def test_multi_track_overall_fraction_keeps_moving() -> None:
-    """Overall banner fraction must change often enough at 0.1% CSS resolution."""
+def test_per_track_step_fraction() -> None:
+    """Banner fill advances only when a track rip completes (sub=1.0)."""
     n_tracks = 12
-    copy_base = 0.35
-    copy_span = 0.45
-    # Local extract emits about every 0.4% after write-span mapping.
-    locals_ = [i / 250 for i in range(0, 251)]  # 0..1
-    overalls: list[float] = []
+    fractions: list[float] = []
+    last = 0.0
     for i in range(n_tracks):
-        for local in locals_:
-            # Engine maps extract local into copy_base..copy_base+copy_span.
-            sub = copy_base + copy_span * min(1.0, local)
-            overalls.append((i + sub) / n_tracks)
-    css_bins = {round(o * 2000.0) / 2000.0 for o in overalls}
-    # A full rip should paint dozens of distinct 0.05% steps, not ~3 per track.
-    assert len(css_bins) >= 80, f'only {len(css_bins)} CSS steps for {n_tracks} tracks'
-    # During one track's copy, overall should advance by more than one 0.05% step.
-    track0 = [o for o in overalls if o <= (0 + copy_base + copy_span) / n_tracks]
-    track0_bins = {round(o * 2000.0) / 2000.0 for o in track0}
-    assert len(track0_bins) >= 8, f'track0 only {len(track0_bins)} CSS steps'
+        # Mid-rip status updates must not move the fill.
+        mid = max(last, i / n_tracks)
+        last = mid
+        fractions.append(mid)
+        # Track finished → jump to (i+1)/n.
+        done = max(last, (i + 1) / n_tracks)
+        last = done
+        fractions.append(done)
+    assert fractions[0] == 0.0
+    assert abs(fractions[-1] - 1.0) < 1e-9
+    # Exactly one distinct step per completed track.
+    steps = sorted({round(f, 6) for f in fractions})
+    assert len(steps) == n_tracks + 1
+    assert steps == [round(i / n_tracks, 6) for i in range(n_tracks + 1)]

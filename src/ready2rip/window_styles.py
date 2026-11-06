@@ -70,6 +70,7 @@ label.ready2rip-cover-bubble {{
 
 .ready2rip-rip-bar {{
     background-color: @window_bg_color;
+    min-height: 48px;
 }}
 
 .ready2rip-flash-veil {{
@@ -135,6 +136,27 @@ button.ready2rip-cover-trash:active {{
 }}
 entry.ready2rip-track-entry {{
     min-height: 34px;
+}}
+"""
+
+
+def banner_fill_css(fraction: float) -> str:
+    """GNOME success-green left-to-right fill for the rip banner."""
+    selector = '.ready2rip-rip-bar'
+    percent = max(0.0, min(100.0, fraction * 100.0))
+    if percent <= 0.001:
+        return f'{selector} {{ background-image: none; }}'
+    soft = min(2.5, max(0.15, percent * 0.35))
+    edge = max(0.0, percent - soft)
+    return f"""
+{selector} {{
+    background-image: linear-gradient(
+        to right,
+        alpha(@success_bg_color, 0.72) 0%,
+        alpha(@success_bg_color, 0.72) {edge:.2f}%,
+        alpha(@success_bg_color, 0.28) {percent:.2f}%,
+        transparent {percent:.2f}%
+    );
 }}
 """
 

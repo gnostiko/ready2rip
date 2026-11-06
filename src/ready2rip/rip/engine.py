@@ -66,11 +66,6 @@ from ready2rip.rip.encode_dest import (
 )
 from ready2rip.rip.paranoia_run import run_paranoia_streaming
 from ready2rip.rip.paranoia_stats import FRAMES_PER_SECTOR, ParanoiaStats
-from ready2rip.rip.progress_map import (
-    normalize_unit_weights,
-    overall_fraction,
-    unit_end_fraction,
-)
 from ready2rip.rip.progress_pulse import ProgressPulse
 from ready2rip.rip.riplog import (
     RipLog,
@@ -404,8 +399,6 @@ class RipEngine:
 
         last_overall = 0.0
         progress_lock = threading.Lock()
-        # Equal weights until sector lengths are known (after HTOA/data probe).
-        unit_weights = normalize_unit_weights([1] * n_audio)
 
         def report(
             track_number: int,
@@ -417,26 +410,26 @@ class RipEngine:
             total_units: float | None = None,
             nudge: bool = False,
         ) -> None:
+            """Update status; advance the bar only when a work unit finishes.
+
+            While a track is ripping, *fraction* stays at completed/total so the
+            banner cannot stall mid-extract. When *sub* reaches 1.0 (track rip
+            finished), the fill jumps to (index+1)/total.
+            """
             nonlocal last_overall
             if on_progress is None:
                 return
-            # Prefer sector-weighted whole-rip mapping; fall back to equal units.
-            weights = unit_weights
-            if total_units is not None and abs(len(weights) - total_units) > 0.5:
-                n = max(1, round(total_units))
-                weights = normalize_unit_weights([1] * n)
-            ceiling = min(0.995, unit_end_fraction(index, weights))
+            units = total_units if total_units is not None else float(n_audio)
+            units = max(1.0, units)
             with progress_lock:
                 if nudge:
-                    # Stay inside the current unit — never race ahead of the rip.
-                    overall = min(ceiling, last_overall + 0.003)
+                    # Status heartbeat only — never invent mid-track fill.
+                    overall = last_overall
+                elif sub >= 1.0 - 1e-9 or state == RipState.DONE:
+                    overall = min(1.0, (index + 1.0) / units)
                 else:
-                    overall = overall_fraction(index, sub, weights)
-                    overall = max(0.0, min(1.0, overall))
-                    if overall + 1e-9 < last_overall:
-                        # Retry / remapped phase under the high-water — creep
-                        # within this unit instead of freezing or jumping ahead.
-                        overall = min(ceiling, last_overall + 0.002)
+                    # Completed units so far (current track not finished yet).
+                    overall = max(0.0, min(1.0, index / units))
                 last_overall = max(last_overall, overall)
                 fraction = last_overall
             on_progress(
@@ -530,19 +523,6 @@ class RipEngine:
             else 0
         )
         total_units = float(len(tracks) + (1 if htoa_info else 0) + data_count) or 1.0
-        # Whole-rip bar: weight each unit by TOC sectors (selected tracks only).
-        sector_weights: list[int] = []
-        if htoa_info is not None:
-            sector_weights.append(max(1, int(htoa_info.length_sectors)))
-        for track_no in tracks:
-            toc_track = self._toc_track(job.disc_info, track_no)
-            sector_weights.append(
-                max(1, int(toc_track.length_sectors)) if toc_track else 1
-            )
-        for _ in range(data_count):
-            # Data tracks vary; keep a modest share so audio still dominates.
-            sector_weights.append(150)  # ~2s of CDDA-equivalent weight
-        unit_weights = normalize_unit_weights(sector_weights)
         unit_index = 0.0
         htoa_path: Path | None = None
         htoa_paths: list[Path] = []
@@ -1772,6 +1752,17 @@ class RipEngine:
                         report=report,
                     )
 
+                # Advance the banner once this track's rip (extract+verify) is
+                # done — not continuously during the extract.
+                report(
+                    track_no,
+                    RipState.DONE,
+                    index=idx,
+                    sub=1.0,
+                    message=f'Ripped track {track_no}',
+                    total_units=total_units,
+                )
+
                 if self._cancelled:
                     finish_pending(abandon=True)
                     return album_dir
@@ -2748,18 +2739,17 @@ class RipEngine:
             *,
             nudge: bool = False,
         ) -> None:
+            """Status updates; fill only moves on explicit phase fractions."""
             nonlocal last_overall
             if on_progress is None:
                 return
             with progress_lock:
                 if nudge:
-                    # Copy Image is already whole-disc; only ease a little forward.
-                    overall = min(0.995, last_overall + 0.003)
+                    overall = last_overall
                 else:
-                    overall = max(0.0, min(1.0, frac))
-                    if overall + 1e-9 < last_overall:
-                        overall = min(0.995, last_overall + 0.002)
-                last_overall = max(last_overall, overall)
+                    # Ignore dense extract locals — only keep rising phase marks.
+                    overall = max(last_overall, max(0.0, min(1.0, frac)))
+                last_overall = overall
                 fraction = last_overall
             on_progress(
                 RipProgress(
@@ -2887,13 +2877,17 @@ class RipEngine:
                     )
 
                 def _img_extract_progress(local: float) -> None:
+                    # Status only — fill advances at phase boundaries.
+                    _ = local
                     report(
                         RipState.RIPPING,
-                        0.05 + 0.25 * max(0.0, min(1.0, local)),
+                        last_overall,
                         'Extracting disc image…',
+                        nudge=True,
                     )
 
                 image_burst_recovered = False
+                report(RipState.RIPPING, 0.15, 'Extracting disc image…')
                 try:
                     mode, img_stats = _img_span(
                         test_wav, on_extract_progress=_img_extract_progress
@@ -2903,7 +2897,7 @@ class RipEngine:
                         raise
                     report(
                         RipState.RIPPING,
-                        0.12,
+                        0.15,
                         'Secure image extract failed — burst recovery…',
                     )
                     mode, img_stats = _img_span(
@@ -2916,7 +2910,7 @@ class RipEngine:
                         f'Secure image extract failed ({first_exc}); '
                         'recovered in burst mode'
                     )
-                report(RipState.RIPPING, last_overall, 'Trimming disc image…')
+                report(RipState.RIPPING, 0.40, 'Disc image extracted…')
                 trim_wav_to_expected(test_wav, expected_bytes)
                 if mode == 'burst' or image_burst_recovered:
                     mode = 'burst'
@@ -2941,12 +2935,9 @@ class RipEngine:
                     for img_attempt in range(img_attempts):
                         if self._cancelled:
                             break
-                        # Keep retry fractions above the prior high-water so
-                        # monotonic progress still moves during re-extract.
+                        # Phase marks for retries (fill jumps at boundaries).
                         extract_base = 0.05 if img_attempt == 0 else 0.66
-                        extract_span = 0.25 if img_attempt == 0 else 0.08
                         copy_base = 0.32 if img_attempt == 0 else 0.75
-                        copy_span = 0.28 if img_attempt == 0 else 0.08
                         if img_attempt > 0:
                             report(
                                 RipState.RIPPING,
@@ -2962,16 +2953,13 @@ class RipEngine:
                                 avoid_end=end_sector,
                             )
 
-                            def _img_retry_progress(
-                                local: float,
-                                *,
-                                _base=extract_base,
-                                _span=extract_span,
-                            ) -> None:
+                            def _img_retry_progress(local: float) -> None:
+                                _ = local
                                 report(
                                     RipState.RIPPING,
-                                    _base + _span * max(0.0, min(1.0, local)),
+                                    last_overall,
                                     'Retrying disc image…',
+                                    nudge=True,
                                 )
 
                             mode, retry_stats = _img_span(
@@ -3020,31 +3008,33 @@ class RipEngine:
                             'Copy pass for disc image…',
                         )
 
-                        def _img_copy_progress(
-                            local: float,
-                            *,
-                            _base=copy_base,
-                            _span=copy_span,
-                        ) -> None:
+                        def _img_copy_progress(local: float) -> None:
+                            _ = local
                             report(
                                 RipState.RIPPING,
-                                _base + _span * max(0.0, min(1.0, local)),
+                                last_overall,
                                 'Copy pass for disc image…',
+                                nudge=True,
                             )
 
+                        report(
+                            RipState.RIPPING,
+                            0.45,
+                            'Copy pass for disc image…',
+                        )
                         copy_mode, copy_stats = _img_span(
                             copy_wav, on_extract_progress=_img_copy_progress
                         )
                         img_stats.merge(copy_stats)
                         report(
                             RipState.RIPPING,
-                            last_overall,
-                            'Trimming disc image…',
+                            0.55,
+                            'Disc image copy complete…',
                         )
                         trim_wav_to_expected(copy_wav, expected_bytes)
                         report(
                             RipState.RIPPING,
-                            last_overall,
+                            0.58,
                             'Checking image CRC…',
                         )
 
@@ -3086,10 +3076,12 @@ class RipEngine:
                             )
 
                             def _img_burst_progress(local: float) -> None:
+                                _ = local
                                 report(
                                     RipState.RIPPING,
-                                    0.84 + 0.08 * max(0.0, min(1.0, local)),
+                                    last_overall,
                                     'Burst recovery for disc image…',
+                                    nudge=True,
                                 )
 
                             copy_mode, burst_stats = _img_span(

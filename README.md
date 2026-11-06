@@ -135,8 +135,8 @@ Release assets are published for **x86_64** and **aarch64** on
 ### AppImage (recommended)
 
 ```bash
-chmod +x ready2rip-0.4.30-x86_64.AppImage   # or …-aarch64.AppImage
-./ready2rip-0.4.30-x86_64.AppImage
+chmod +x ready2rip-0.4.31-x86_64.AppImage   # or …-aarch64.AppImage
+./ready2rip-0.4.31-x86_64.AppImage
 ```
 
 The AppImage needs a matching CPU architecture, a host **glibc** new enough for
@@ -166,7 +166,7 @@ Release AppImages are GPG-signed. Import the project key from
 ### Debian / Ubuntu
 
 ```bash
-sudo apt install ./ready2rip_0.4.30-1_amd64.deb   # or _arm64.deb
+sudo apt install ./ready2rip_0.4.31-1_amd64.deb   # or _arm64.deb
 ```
 
 Depends on distro packages for GTK 4 / libadwaita, mutagen, Pillow, cdparanoia,
@@ -175,7 +175,7 @@ flac, lame, ffmpeg, and opus-tools.
 ### Fedora / RPM
 
 ```bash
-sudo dnf install ./ready2rip-0.4.30-1.x86_64.rpm   # or .aarch64.rpm
+sudo dnf install ./ready2rip-0.4.31-1.x86_64.rpm   # or .aarch64.rpm
 ```
 
 Same runtime idea as the `.deb`: system UI stack and encoders, ready2rip itself
@@ -184,7 +184,7 @@ from the package.
 ### Flatpak
 
 ```bash
-flatpak install --user ./ready2rip-0.4.30-x86_64.flatpak
+flatpak install --user ./ready2rip-0.4.31-x86_64.flatpak
 flatpak run org.ready2rip.Ready2Rip
 ```
 
