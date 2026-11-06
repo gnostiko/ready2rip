@@ -62,6 +62,8 @@ from ready2rip.paths import (
 from ready2rip.rip.engine import RipEngine, RipJob, RipProgress, RipResult, RipState
 from ready2rip.settings import (
     AAC_QUALITIES,
+    ALSO_ENCODERS,
+    ALSO_FOLDER_LAYOUTS,
     ARTWORK_SIZES,
     DEFAULT_ARTWORK_MAX_SIZE,
     ENCODERS,
@@ -71,6 +73,8 @@ from ready2rip.settings import (
     SettingsStore,
     default_output_directory,
     normalize_aac_quality,
+    normalize_also_encode_folder,
+    normalize_also_encode_format,
     normalize_mp3_quality,
     opus_bitrate_label,
 )
@@ -283,7 +287,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._mp3_qualities = [qid for qid, _label in MP3_QUALITIES]
         self._aac_qualities = [qid for qid, _label in AAC_QUALITIES]
         self._opus_values = list(OPUS_BITRATES)
+        self._also_formats = [fid for fid, _label in ALSO_ENCODERS]
+        self._also_folders = [fid for fid, _label in ALSO_FOLDER_LAYOUTS]
         self._quality_kind: str | None = None
+        self._also_quality_kind: str | None = None
 
         self._setup_window_actions()
         self._setup_header_icons()
@@ -893,6 +900,62 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._quality_row = Adw.ComboRow(title='Quality')
         self._quality_row.connect('notify::selected', self._on_quality_changed)
         self._add_option_row(self._quality_row, self.encoding_group)
+
+        self._also_encode_row = Adw.SwitchRow(
+            title='Also encode',
+            active=bool(settings.also_encode),
+        )
+        self._also_encode_row.set_tooltip_text(
+            'Encode a second lossy format from the same verified rip'
+        )
+        self._also_encode_row.connect(
+            'notify::active', self._on_also_encode_toggled
+        )
+        self._add_option_row(self._also_encode_row, self.encoding_group)
+
+        self._also_format_row = Adw.ComboRow(title='Also format')
+        self._also_format_row.set_model(
+            Gtk.StringList.new([label for _id, label in ALSO_ENCODERS])
+        )
+        try:
+            self._also_format_row.set_selected(
+                self._also_formats.index(
+                    normalize_also_encode_format(settings.also_encode_format)
+                )
+            )
+        except ValueError:
+            self._also_format_row.set_selected(0)
+        self._also_format_row.connect(
+            'notify::selected', self._on_also_format_changed
+        )
+        self._add_option_row(self._also_format_row, self.encoding_group)
+
+        self._also_quality_row = Adw.ComboRow(title='Also quality')
+        self._also_quality_row.connect(
+            'notify::selected', self._on_also_quality_changed
+        )
+        self._add_option_row(self._also_quality_row, self.encoding_group)
+
+        self._also_folder_row = Adw.ComboRow(title='Also folder')
+        self._also_folder_row.set_model(
+            Gtk.StringList.new([label for _id, label in ALSO_FOLDER_LAYOUTS])
+        )
+        self._also_folder_row.set_tooltip_text(
+            'Subfolder by format → Album/FLAC and Album/MP3; '
+            'Same album folder → both extensions together'
+        )
+        try:
+            self._also_folder_row.set_selected(
+                self._also_folders.index(
+                    normalize_also_encode_folder(settings.also_encode_folder)
+                )
+            )
+        except ValueError:
+            self._also_folder_row.set_selected(0)
+        self._also_folder_row.connect(
+            'notify::selected', self._on_also_folder_changed
+        )
+        self._add_option_row(self._also_folder_row, self.encoding_group)
         self._sync_encoding_ui()
 
         # —— Encoding page: files ——
@@ -1201,6 +1264,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             (self._artist_style_row, self._on_artist_style_changed),
             (self._encoder_row, self._on_encoder_changed),
             (self._quality_row, self._on_quality_changed),
+            (self._also_encode_row, self._on_also_encode_toggled),
+            (self._also_format_row, self._on_also_format_changed),
+            (self._also_quality_row, self._on_also_quality_changed),
+            (self._also_folder_row, self._on_also_folder_changed),
             (self._offset_row, self._on_offset_changed),
             (self._test_copy_row, self._on_test_copy_toggled),
             (self._htoa_row, self._on_htoa_toggled),
@@ -1259,6 +1326,24 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 pass
             # Force quality combo to reload from store values.
             self._quality_kind = None
+            self._also_quality_kind = None
+            self._also_encode_row.set_active(bool(settings.also_encode))
+            try:
+                self._also_format_row.set_selected(
+                    self._also_formats.index(
+                        normalize_also_encode_format(settings.also_encode_format)
+                    )
+                )
+            except ValueError:
+                self._also_format_row.set_selected(0)
+            try:
+                self._also_folder_row.set_selected(
+                    self._also_folders.index(
+                        normalize_also_encode_folder(settings.also_encode_folder)
+                    )
+                )
+            except ValueError:
+                self._also_folder_row.set_selected(0)
             self._sync_encoding_ui()
             self._offset_row.set_value(settings.drive_sample_offset)
             self._update_calibration_row()
@@ -1376,6 +1461,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         finally:
             row.handler_unblock_by_func(handler)
 
+    def _also_encode_format(self) -> str:
+        idx = self._also_format_row.get_selected()
+        if 0 <= idx < len(self._also_formats):
+            return self._also_formats[idx]
+        return normalize_also_encode_format(self.store.get().also_encode_format)
+
     def _sync_encoding_ui(self) -> None:
         self._fill_quality_combo(
             self._quality_row,
@@ -1383,6 +1474,34 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             kind_attr='_quality_kind',
             handler=self._on_quality_changed,
         )
+        also_on = bool(self._also_encode_row.get_active())
+        primary = self._primary_encode_format()
+        also_fmt = self._also_encode_format()
+        # Hide also-format when it would duplicate the primary codec.
+        also_usable = also_fmt != primary
+        for row in (
+            self._also_format_row,
+            self._also_quality_row,
+            self._also_folder_row,
+        ):
+            row.set_visible(also_on)
+        if also_on:
+            self._fill_quality_combo(
+                self._also_quality_row,
+                also_fmt,
+                kind_attr='_also_quality_kind',
+                handler=self._on_also_quality_changed,
+            )
+            self._also_quality_row.set_sensitive(also_usable)
+            self._also_folder_row.set_sensitive(also_usable)
+            if not also_usable:
+                self._also_format_row.set_subtitle(
+                    'Pick a different codec than Format'
+                )
+            else:
+                self._also_format_row.set_subtitle('')
+        else:
+            self._also_format_row.set_subtitle('')
 
     def _apply_quality_selection(self, fmt: str, index: int) -> None:
         if fmt == 'flac' and 0 <= index < len(self._flac_levels):
@@ -1696,6 +1815,26 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _on_quality_changed(self, row: Adw.ComboRow, *_args) -> None:
         fmt = self._quality_kind or self._primary_encode_format()
         self._apply_quality_selection(fmt, row.get_selected())
+
+    def _on_also_encode_toggled(self, row: Adw.SwitchRow, *_args) -> None:
+        self.store.update(also_encode=row.get_active())
+        self._sync_encoding_ui()
+
+    def _on_also_format_changed(self, row: Adw.ComboRow, *_args) -> None:
+        idx = row.get_selected()
+        if 0 <= idx < len(self._also_formats):
+            self.store.update(also_encode_format=self._also_formats[idx])
+            self._also_quality_kind = None
+            self._sync_encoding_ui()
+
+    def _on_also_quality_changed(self, row: Adw.ComboRow, *_args) -> None:
+        fmt = self._also_quality_kind or self._also_encode_format()
+        self._apply_quality_selection(fmt, row.get_selected())
+
+    def _on_also_folder_changed(self, row: Adw.ComboRow, *_args) -> None:
+        idx = row.get_selected()
+        if 0 <= idx < len(self._also_folders):
+            self.store.update(also_encode_folder=self._also_folders[idx])
 
     def _on_offset_changed(self, row: Adw.SpinRow) -> None:
         device = self.store.get().device or self._device or '/dev/sr0'
@@ -2055,6 +2194,13 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             aac_quality=settings.aac_quality,
             aac_bitrate=settings.aac_bitrate,
             opus_bitrate=settings.opus_bitrate,
+            also_encode=bool(settings.also_encode),
+            also_encode_format=normalize_also_encode_format(
+                settings.also_encode_format
+            ),
+            also_encode_folder=normalize_also_encode_folder(
+                settings.also_encode_folder
+            ),
             apply_replaygain=settings.apply_replaygain,
             embed_artwork=settings.embed_artwork,
             artwork=embed_art if settings.embed_artwork else None,

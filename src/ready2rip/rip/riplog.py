@@ -75,6 +75,9 @@ class RipLog:
         self.aac_quality: str = 'cbr256'
         self.aac_bitrate: int = 256
         self.opus_bitrate: int = 160
+        self.also_encode: bool = False
+        self.also_encode_format: str = 'mp3'
+        self.also_encode_folder: str = 'format_subdir'
         self.burst_fallback: bool = False
         self.verify_accuraterip: bool = True
         self.verify_ctdb: bool = True
@@ -118,6 +121,13 @@ class RipLog:
         )
         self.aac_bitrate = job.aac_bitrate
         self.opus_bitrate = job.opus_bitrate
+        self.also_encode = bool(getattr(job, 'also_encode', False))
+        self.also_encode_format = (
+            getattr(job, 'also_encode_format', None) or 'mp3'
+        )
+        self.also_encode_folder = (
+            getattr(job, 'also_encode_folder', None) or 'format_subdir'
+        )
         self.burst_fallback = job.burst_fallback
         self.verify_accuraterip = job.verify_accuraterip
         self.verify_ctdb = getattr(job, 'verify_ctdb', True)
@@ -321,6 +331,20 @@ class RipLog:
                 opus_bitrate=self.opus_bitrate,
             )
         )
+        if self.also_encode:
+            also = (self.also_encode_format or 'mp3').upper()
+            layout = self.also_encode_folder or 'format_subdir'
+            lines.append(f'Also encode                     : {also} ({layout})')
+            lines.append(
+                'Also encoder command            : '
+                + encode_command_summary(
+                    self.also_encode_format,
+                    flac_compression=self.flac_compression,
+                    mp3_quality=self.mp3_quality,
+                    aac_quality=self.aac_quality,
+                    opus_bitrate=self.opus_bitrate,
+                )
+            )
         lines.append(
             'Audio pre-process               : None '
             '(no gain, EQ, fade, remix, or forced resample before encode)'

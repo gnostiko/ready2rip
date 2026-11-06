@@ -35,6 +35,38 @@ ENCODERS = (
     ('mp3', 'MP3'),
 )
 
+# Secondary “Also encode” codecs (lossy companions to a primary encode).
+ALSO_ENCODERS = (
+    ('mp3', 'MP3'),
+    ('aac', 'M4A'),
+    ('opus', 'Opus'),
+)
+
+ALSO_ENCODER_IDS = frozenset(e[0] for e in ALSO_ENCODERS)
+
+# Where secondary encodes are written relative to the album folder.
+ALSO_FOLDER_LAYOUTS = (
+    ('format_subdir', 'Subfolder by format'),
+    ('same_folder', 'Same album folder'),
+)
+
+ALSO_FOLDER_LAYOUT_IDS = frozenset(e[0] for e in ALSO_FOLDER_LAYOUTS)
+
+
+def normalize_also_encode_format(value: str | None) -> str:
+    raw = (value or '').strip().lower()
+    if raw in ALSO_ENCODER_IDS:
+        return raw
+    return 'mp3'
+
+
+def normalize_also_encode_folder(value: str | None) -> str:
+    raw = (value or '').strip().lower()
+    if raw in ALSO_FOLDER_LAYOUT_IDS:
+        return raw
+    return 'format_subdir'
+
+
 # FLAC compression levels shown in the Encoding panel.
 FLAC_LEVELS = (
     (0, '0 (Fastest)'),
@@ -272,6 +304,10 @@ class AppSettings:
     # Legacy mirror of CBR aac_quality for older code paths; prefer aac_quality.
     aac_bitrate: int = 256
     opus_bitrate: int = 160
+    # Optional second encode from the same verified WAV (lossy companion).
+    also_encode: bool = False
+    also_encode_format: str = 'mp3'
+    also_encode_folder: str = 'format_subdir'
     apply_replaygain: bool = True
     embed_artwork: bool = True
     fetch_artwork: bool = True
@@ -420,6 +456,13 @@ class SettingsStore:
                     else _get_int(s, 'aac-bitrate', 256)
                 ),
                 opus_bitrate=s.get_int('opus-bitrate'),
+                also_encode=_get_bool(s, 'also-encode', False),
+                also_encode_format=normalize_also_encode_format(
+                    _get_string(s, 'also-encode-format', 'mp3')
+                ),
+                also_encode_folder=normalize_also_encode_folder(
+                    _get_string(s, 'also-encode-folder', 'format_subdir')
+                ),
                 apply_replaygain=s.get_boolean('apply-replaygain'),
                 embed_artwork=s.get_boolean('embed-artwork'),
                 fetch_artwork=s.get_boolean('fetch-artwork'),
@@ -496,6 +539,9 @@ class SettingsStore:
             'aac_quality': ('aac-quality', 'string'),
             'aac_bitrate': ('aac-bitrate', 'int'),
             'opus_bitrate': ('opus-bitrate', 'int'),
+            'also_encode': ('also-encode', 'bool'),
+            'also_encode_format': ('also-encode-format', 'string'),
+            'also_encode_folder': ('also-encode-folder', 'string'),
             'apply_replaygain': ('apply-replaygain', 'bool'),
             'embed_artwork': ('embed-artwork', 'bool'),
             'fetch_artwork': ('fetch-artwork', 'bool'),
@@ -549,6 +595,12 @@ class SettingsStore:
                 elif attr == 'artist_style':
                     value = normalize_artist_style(str(value))
                     current = replace(current, artist_style=value)
+                elif attr == 'also_encode_format':
+                    value = normalize_also_encode_format(str(value))
+                    current = replace(current, also_encode_format=value)
+                elif attr == 'also_encode_folder':
+                    value = normalize_also_encode_folder(str(value))
+                    current = replace(current, also_encode_folder=value)
                 s.set_string(gkey, str(value))
             elif kind == 'int':
                 s.set_int(gkey, int(value))

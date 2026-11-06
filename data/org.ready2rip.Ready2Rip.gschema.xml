@@ -100,6 +100,30 @@
       <summary>Opus bitrate (kbps)</summary>
     </key>
 
+    <key name="also-encode" type="b">
+      <default>false</default>
+      <summary>Also encode a second (lossy) format from the same rip</summary>
+    </key>
+
+    <key name="also-encode-format" type="s">
+      <choices>
+        <choice value="mp3"/>
+        <choice value="aac"/>
+        <choice value="opus"/>
+      </choices>
+      <default>'mp3'</default>
+      <summary>Secondary encode format when Also encode is on</summary>
+    </key>
+
+    <key name="also-encode-folder" type="s">
+      <choices>
+        <choice value="format_subdir"/>
+        <choice value="same_folder"/>
+      </choices>
+      <default>'format_subdir'</default>
+      <summary>Where secondary encodes are written</summary>
+    </key>
+
     <key name="embed-artwork" type="b">
       <default>true</default>
       <summary>Embed album artwork in files</summary>

@@ -26,7 +26,15 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-11-05">
+    <release version="@APPLICATION_VERSION@" date="2026-11-06">
+      <description>
+        <p>
+          0.4.27: Optional Also encode (lossy companion), Copy Image
+          progress/overread trim fixes, and per-track edge overread.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.26" date="2026-11-05">
       <description>
         <p>
           0.4.26: Keep AAC encode argv helpers free of PyGObject (fix CI).

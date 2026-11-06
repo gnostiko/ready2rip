@@ -60,6 +60,10 @@ from ready2rip.rip.encode import (
     opus_encode_argv,
     opus_ffmpeg_argv,
 )
+from ready2rip.rip.encode_dest import (
+    audio_dir_for_format,
+    encode_format_list,
+)
 from ready2rip.rip.paranoia_run import run_paranoia_streaming
 from ready2rip.rip.paranoia_stats import FRAMES_PER_SECTOR, ParanoiaStats
 from ready2rip.rip.riplog import (
@@ -133,6 +137,10 @@ class RipJob:
     aac_quality: str = 'cbr256'  # FDK VBR 1–5 or cbr128/192/256/320
     aac_bitrate: int = 256  # legacy; prefer aac_quality
     opus_bitrate: int = 160
+    # Optional second (lossy) encode from the same verified WAV.
+    also_encode: bool = False
+    also_encode_format: str = 'mp3'
+    also_encode_folder: str = 'format_subdir'
     apply_replaygain: bool = True
     embed_artwork: bool = True
     # Embed-sized image written into each audio file.
@@ -230,8 +238,12 @@ class _EncodeDest:
 
     format: str
     base_dir: Path
+    # Directory that holds this format's audio files.
     album_dir: Path
     out_path: Path
+    # Album root for cover / log / CUE (may be the parent of album_dir).
+    meta_dir: Path
+    primary: bool = False
 
     @property
     def extension(self) -> str:
@@ -326,6 +338,12 @@ class RipEngine:
         missing = self._missing_encoder(fmt)
         if missing:
             return RipResult(success=False, error=missing)
+        if job.also_encode and not job.copy_image:
+            also_fmt = (job.also_encode_format or 'mp3').strip().lower()
+            if also_fmt != fmt:
+                also_missing = self._missing_encoder(also_fmt)
+                if also_missing:
+                    return RipResult(success=False, error=also_missing)
 
         job.encode_format = fmt
         job.output_directory = base
@@ -367,11 +385,14 @@ class RipEngine:
                 success=False,
                 error=f'Cannot create output folder(s): {exc}',
             )
-        album_dir = dests0[0].album_dir
-        target_note = f'Encode target: {dests0[0].format.upper()} → {album_dir}'
-        notes.append(target_note)
-        if rip_log is not None:
-            rip_log.notes.append(target_note)
+        album_dir = dests0[0].meta_dir
+        for dest in dests0:
+            target_note = (
+                f'Encode target: {dest.format.upper()} → {dest.album_dir}'
+            )
+            notes.append(target_note)
+            if rip_log is not None:
+                rip_log.notes.append(target_note)
 
         last_overall = 0.0
 
@@ -1293,42 +1314,73 @@ class RipEngine:
         *,
         filename: str | None = None,
     ) -> list[_EncodeDest]:
-        """Resolve album folder + output path for the job's encode format."""
-        enc_fmt = (job.encode_format or 'flac').strip().lower()
-        if enc_fmt not in self.EXTENSIONS:
-            enc_fmt = 'flac'
-        enc_base = Path(job.output_directory).expanduser().resolve()
-        enc_ext = self.EXTENSIONS[enc_fmt]
-        album_dir, templated = build_output_paths(
-            base_dir=enc_base,
-            album_folder_template=job.album_folder_template,
-            filename_template=job.filename_template,
-            album=job.album,
-            track_number=max(1, track_number),
-            extension=enc_ext,
-            artist_style=job.artist_style,
+        """Resolve album folder + output path(s) for primary (+ optional also)."""
+        formats = encode_format_list(
+            job.encode_format,
+            also_encode=job.also_encode,
+            also_format=job.also_encode_format,
+            # Copy Image stays a single lossless/container encode.
+            allow_also=not job.copy_image,
         )
-        if filename:
-            stem = Path(filename).name
-            if stem.lower().endswith(enc_ext.lower()):
-                out_path = album_dir / stem
-            else:
-                out_path = album_dir / f'{stem}{enc_ext}'
-        else:
-            out_path = templated
-        return [
-            _EncodeDest(
-                format=enc_fmt,
+        multi = len(formats) > 1
+        enc_base = Path(job.output_directory).expanduser().resolve()
+        dests: list[_EncodeDest] = []
+        for i, enc_fmt in enumerate(formats):
+            if enc_fmt not in self.EXTENSIONS:
+                enc_fmt = 'flac'
+            enc_ext = self.EXTENSIONS[enc_fmt]
+            meta_dir, templated = build_output_paths(
                 base_dir=enc_base,
-                album_dir=album_dir,
-                out_path=out_path,
+                album_folder_template=job.album_folder_template,
+                filename_template=job.filename_template,
+                album=job.album,
+                track_number=max(1, track_number),
+                extension=enc_ext,
+                artist_style=job.artist_style,
             )
-        ]
+            audio_dir = audio_dir_for_format(
+                meta_dir,
+                enc_fmt,
+                folder_layout=job.also_encode_folder,
+                multi_format=multi,
+            )
+            if filename:
+                stem = Path(filename).name
+                if stem.lower().endswith(enc_ext.lower()):
+                    out_name = stem
+                else:
+                    # Strip a known audio suffix then apply this format's ext.
+                    stem_path = Path(stem)
+                    if stem_path.suffix.lower() in {
+                        '.flac',
+                        '.wav',
+                        '.mp3',
+                        '.m4a',
+                        '.opus',
+                    }:
+                        out_name = f'{stem_path.stem}{enc_ext}'
+                    else:
+                        out_name = f'{stem}{enc_ext}'
+                out_path = audio_dir / out_name
+            else:
+                out_path = audio_dir / templated.name
+            dests.append(
+                _EncodeDest(
+                    format=enc_fmt,
+                    base_dir=enc_base,
+                    album_dir=audio_dir,
+                    out_path=out_path,
+                    meta_dir=meta_dir,
+                    primary=i == 0,
+                )
+            )
+        return dests
 
     def _ensure_destination_dirs(self, dests: list[_EncodeDest]) -> None:
         """Create every destination album folder (and its base) up front."""
         for dest in dests:
             dest.base_dir.mkdir(parents=True, exist_ok=True)
+            dest.meta_dir.mkdir(parents=True, exist_ok=True)
             dest.album_dir.mkdir(parents=True, exist_ok=True)
 
     def _encode_wav_to_destinations(
@@ -1361,16 +1413,18 @@ class RipEngine:
         wav_left = sum(1 for d in ordered if d.format == 'wav')
         for i, dest in enumerate(ordered):
             dest.album_dir.mkdir(parents=True, exist_ok=True)
+            dest.meta_dir.mkdir(parents=True, exist_ok=True)
+            cover_dir = dest.meta_dir
             if (
                 write_cover
                 and job.save_cover_file
-                and dest.album_dir not in covered
+                and cover_dir not in covered
                 and (job.folder_artwork is not None or job.artwork is not None)
-                and not (dest.album_dir / 'cover.jpg').is_file()
-                and not (dest.album_dir / 'cover.png').is_file()
+                and not (cover_dir / 'cover.jpg').is_file()
+                and not (cover_dir / 'cover.png').is_file()
             ):
-                _prepare_artwork(job, dest.album_dir)
-                covered.add(dest.album_dir)
+                _prepare_artwork(job, cover_dir)
+                covered.add(cover_dir)
 
             if on_progress is not None:
                 on_progress(i, dest.format, dest.out_path)
@@ -1484,10 +1538,13 @@ class RipEngine:
                     job_pending.dests, written, strict=True
                 ):
                     outputs.append(out_path)
-                    track_output_pairs.append((job_pending.track_no, out_path))
-                    if primary_out is None:
-                        primary_out = out_path
-                        album_dir = dest.album_dir
+                    if dest.primary:
+                        track_output_pairs.append(
+                            (job_pending.track_no, out_path)
+                        )
+                        if primary_out is None:
+                            primary_out = out_path
+                            album_dir = dest.meta_dir
                 self._unlink_quiet(job_pending.test_wav, job_pending.copy_wav)
                 if job_pending.log_entry is not None and primary_out is not None:
                     job_pending.log_entry.output_path = primary_out
@@ -2990,7 +3047,7 @@ class RipEngine:
                         success=False,
                         error=str(enc_exc),
                         notes=notes,
-                        album_dir=dests[0].album_dir if dests else album_dir,
+                        album_dir=dests[0].meta_dir if dests else album_dir,
                     )
 
                 for dest, this_out in zip(dests, output_files, strict=True):
@@ -2999,10 +3056,10 @@ class RipEngine:
                             success=False,
                             error='Image encode produced no output',
                             notes=notes,
-                            album_dir=dest.album_dir,
+                            album_dir=dest.meta_dir,
                         )
 
-                album_dirs = _unique_album_dirs(output_files, dests[0].album_dir)
+                album_dirs = _unique_album_dirs(output_files, dests[0].meta_dir)
                 data_pairs, data_paths = self._rip_data_tracks(
                     job,
                     album_dirs,
