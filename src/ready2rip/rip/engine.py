@@ -181,7 +181,7 @@ class RipJob:
     # Write multi-file (or image) CUE sheet after a secure rip (lossless only).
     write_cue_file: bool = True
     # Write Encoded by / ENCODER tag (ready2rip + version).
-    add_ripper_tag: bool = False
+    add_ripper_tag: bool = True
     # Double-rip each track and require matching CRCs (test & copy).
     test_and_copy: bool = True
     # Extra secure test+copy cycles after a CRC mismatch.

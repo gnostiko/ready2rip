@@ -313,6 +313,8 @@ class AppSettings:
     # Second output root when also_encode_folder is custom_folder.
     also_encode_directory: str = ''
     apply_replaygain: bool = True
+    # Write Encoded by / ENCODER / ©too with ready2rip + version.
+    add_ripper_tag: bool = True
     embed_artwork: bool = True
     fetch_artwork: bool = True
     artwork_source_itunes: bool = True
@@ -478,6 +480,7 @@ class SettingsStore:
                     s, 'also-encode-directory', ''
                 ),
                 apply_replaygain=s.get_boolean('apply-replaygain'),
+                add_ripper_tag=_get_bool(s, 'add-ripper-tag', True),
                 embed_artwork=s.get_boolean('embed-artwork'),
                 fetch_artwork=s.get_boolean('fetch-artwork'),
                 artwork_source_itunes=_get_bool(s, 'artwork-source-itunes', True),
@@ -558,6 +561,7 @@ class SettingsStore:
             'also_encode_folder': ('also-encode-folder', 'string'),
             'also_encode_directory': ('also-encode-directory', 'string'),
             'apply_replaygain': ('apply-replaygain', 'bool'),
+            'add_ripper_tag': ('add-ripper-tag', 'bool'),
             'embed_artwork': ('embed-artwork', 'bool'),
             'fetch_artwork': ('fetch-artwork', 'bool'),
             'artwork_source_itunes': ('artwork-source-itunes', 'bool'),

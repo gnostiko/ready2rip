@@ -168,6 +168,11 @@
       <summary>Compute and write ReplayGain tags</summary>
     </key>
 
+    <key name="add-ripper-tag" type="b">
+      <default>true</default>
+      <summary>Write Encoded by / ENCODER tag with ready2rip and version</summary>
+    </key>
+
     <key name="use-musicbrainz" type="b">
       <default>true</default>
       <summary>Look up metadata on MusicBrainz</summary>

@@ -1277,6 +1277,18 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._rg_row.connect('notify::active', self._on_rg_toggled)
         self._add_metadata_row(self._rg_row, self.tags_group)
 
+        self._ripper_tag_row = Adw.SwitchRow(
+            title='Encoded by',
+            active=settings.add_ripper_tag,
+        )
+        self._ripper_tag_row.set_tooltip_text(
+            'Write an Encoded by / ENCODER tag with ready2rip and its version'
+        )
+        self._ripper_tag_row.connect(
+            'notify::active', self._on_ripper_tag_toggled
+        )
+        self._add_metadata_row(self._ripper_tag_row, self.tags_group)
+
     def sync_options_from_store(self) -> None:
         """Refresh settings widgets from store (e.g. after Drive setup)."""
         settings = self.store.get()
@@ -1315,6 +1327,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             (self._freedb_row, self._on_freedb_toggled),
             (self._auto_lookup_row, self._on_auto_lookup_toggled),
             (self._rg_row, self._on_rg_toggled),
+            (self._ripper_tag_row, self._on_ripper_tag_toggled),
             (self._embed_art_row, self._on_embed_art_toggled),
             (self._fetch_art_row, self._on_fetch_art_toggled),
             (self._art_itunes_row, self._on_art_itunes_toggled),
@@ -1402,6 +1415,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._freedb_row.set_active(settings.use_freedb)
             self._sync_lookup_source_sensitivity(settings.auto_lookup_metadata)
             self._rg_row.set_active(settings.apply_replaygain)
+            self._ripper_tag_row.set_active(settings.add_ripper_tag)
             self._embed_art_row.set_active(settings.embed_artwork)
             self._art_size_row.set_sensitive(settings.embed_artwork)
             self._fetch_art_row.set_enable_expansion(settings.fetch_artwork)
@@ -1983,6 +1997,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _on_rg_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(apply_replaygain=row.get_active())
 
+    def _on_ripper_tag_toggled(self, row: Adw.SwitchRow, *_args) -> None:
+        self.store.update(add_ripper_tag=row.get_active())
+
     def _on_ar_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(verify_accuraterip=row.get_active())
 
@@ -2308,6 +2325,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 else ''
             ),
             apply_replaygain=settings.apply_replaygain,
+            add_ripper_tag=settings.add_ripper_tag,
             embed_artwork=settings.embed_artwork,
             artwork=embed_art if settings.embed_artwork else None,
             folder_artwork=folder_art,
