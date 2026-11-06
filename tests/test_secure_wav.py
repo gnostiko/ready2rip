@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""WAV size gate + overread helpers (no optical hardware)."""
+"""WAV size gate + overread helpers (no optical hardware / no PyGObject)."""
 
 from __future__ import annotations
+
+from types import SimpleNamespace
 
 from ready2rip.disc.overread import (
     OverreadCapability,
     offset_margin_sectors,
+    overread_span,
 )
-from ready2rip.rip.engine import _ctdb_submit_quality, _overread_span
+from ready2rip.rip.ctdb_quality import ctdb_submit_quality
 from ready2rip.rip.paranoia_stats import ParanoiaStats
 from ready2rip.rip.secure import (
     SECURE_MIN_WAV_RATIO,
@@ -33,7 +36,7 @@ def test_offset_margin_sectors() -> None:
 
 def test_overread_span_expands_when_capable() -> None:
     over = OverreadCapability(lead_in=True, lead_out=True)
-    start, end = _overread_span(
+    start, end = overread_span(
         0,
         1000,
         sample_offset=667,
@@ -45,7 +48,7 @@ def test_overread_span_expands_when_capable() -> None:
     assert end > 1000
 
     none = OverreadCapability()
-    start2, end2 = _overread_span(
+    start2, end2 = overread_span(
         0,
         1000,
         sample_offset=667,
@@ -57,34 +60,29 @@ def test_overread_span_expands_when_capable() -> None:
 
 
 def test_ctdb_submit_quality_requires_clean_paranoia() -> None:
-    from pathlib import Path
-
-    from ready2rip.rip.engine import RipJob
-    from ready2rip.rip.riplog import RipLog, TrackLogEntry
-
-    job = RipJob(
-        device='/dev/sr0',
-        track_numbers=[1],
-        output_directory=Path('/tmp'),
-        test_and_copy=True,
+    entry = SimpleNamespace(
+        number=1,
+        quality_percent=100.0,
+        had_errors=False,
+        extract_mode='secure (test & copy)',
     )
-    rip_log = RipLog()
-    entry = TrackLogEntry(number=1)
-    entry.quality_percent = 100.0
-    entry.had_errors = False
-    entry.extract_mode = 'secure (test & copy)'
-    rip_log.tracks.append(entry)
     assert (
-        _ctdb_submit_quality(
-            job, burst_tracks=[], test_copy_mismatches=[], rip_log=rip_log
+        ctdb_submit_quality(
+            test_and_copy=True,
+            burst_tracks=[],
+            test_copy_mismatches=[],
+            track_entries=[entry],
         )
         == 100
     )
 
     entry.quality_percent = 99.5
     assert (
-        _ctdb_submit_quality(
-            job, burst_tracks=[], test_copy_mismatches=[], rip_log=rip_log
+        ctdb_submit_quality(
+            test_and_copy=True,
+            burst_tracks=[],
+            test_copy_mismatches=[],
+            track_entries=[entry],
         )
         == 0
     )
@@ -94,11 +92,11 @@ def test_ctdb_submit_quality_requires_clean_paranoia() -> None:
     stats.wrote = 10
     stats.finished = True
     assert (
-        _ctdb_submit_quality(
-            job,
+        ctdb_submit_quality(
+            test_and_copy=True,
             burst_tracks=[],
             test_copy_mismatches=[],
-            rip_log=None,
+            track_entries=None,
             image_stats=stats,
             image_sectors=100,
         )

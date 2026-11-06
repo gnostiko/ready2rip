@@ -29,6 +29,13 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-05">
       <description>
         <p>
+          0.4.25: Keep secure-WAV unit tests free of PyGObject (fix CI).
+        </p>
+      </description>
+    </release>
+    <release version="0.4.24" date="2026-11-05">
+      <description>
+        <p>
           0.4.24: Same as 0.4.23; fix Ruff import/branch lint that failed CI.
         </p>
       </description>

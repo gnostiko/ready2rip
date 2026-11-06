@@ -31,10 +31,7 @@ from ready2rip.disc.htoa import (
     htoa_display_title,
     is_digitally_silent,
 )
-from ready2rip.disc.overread import (
-    OverreadCapability,
-    offset_margin_sectors,
-)
+from ready2rip.disc.overread import OverreadCapability, overread_span
 from ready2rip.disc.probe import DiscInfo, attach_mmc_toc
 from ready2rip.metadata.providers import AlbumMetadata
 from ready2rip.paths import (
@@ -43,6 +40,7 @@ from ready2rip.paths import (
     build_output_paths,
 )
 from ready2rip.replaygain import apply_replaygain
+from ready2rip.rip.ctdb_quality import ctdb_submit_quality
 from ready2rip.rip.cue import (
     cue_file_type_for_extension,
     image_basename,
@@ -717,11 +715,11 @@ class RipEngine:
             except Exception:
                 drivename = ''
             album = job.album
-            ctdb_quality = _ctdb_submit_quality(
-                job,
+            ctdb_quality = ctdb_submit_quality(
+                test_and_copy=job.test_and_copy,
                 burst_tracks=burst_tracks,
                 test_copy_mismatches=test_copy_mismatches,
-                rip_log=rip_log,
+                track_entries=rip_log.tracks if rip_log is not None else None,
             )
             if ctdb_quality < 100:
                 notes.append(
@@ -2526,7 +2524,7 @@ class RipEngine:
                 )
                 # Expand TOC edges into lead-in/out when the drive overreads
                 # so -O offset correction has real samples (then trim back).
-                read_start, read_end = _overread_span(
+                read_start, read_end = overread_span(
                     file_start,
                     end_sector,
                     sample_offset=job.sample_offset,
@@ -2961,13 +2959,15 @@ class RipEngine:
                     except Exception:
                         drivename = ''
                     album = job.album
-                    ctdb_quality = _ctdb_submit_quality(
-                        job,
+                    ctdb_quality = ctdb_submit_quality(
+                        test_and_copy=job.test_and_copy,
                         burst_tracks=burst_tracks,
                         test_copy_mismatches=(
                             [] if image_test_copy_ok else [0]
                         ),
-                        rip_log=rip_log,
+                        track_entries=(
+                            rip_log.tracks if rip_log is not None else None
+                        ),
                         image_stats=img_stats,
                         image_sectors=total_sectors,
                     )
@@ -3786,33 +3786,6 @@ def _image_track_pcm(
     return image_pcm[start : min(start + length, len(image_pcm))]
 
 
-def _overread_span(
-    start_sector: int,
-    end_sector: int,
-    *,
-    sample_offset: int,
-    overread: OverreadCapability,
-    at_disc_start: bool,
-    at_disc_end: bool,
-) -> tuple[int, int]:
-    """Widen a TOC span into lead-in/out when offset correction needs it."""
-    margin = offset_margin_sectors(sample_offset)
-    if margin <= 0:
-        return int(start_sector), int(end_sector)
-    start = int(start_sector)
-    end = int(end_sector)
-    off = int(sample_offset)
-    # Non-zero offset needs samples past TOC edges (lead-in / lead-out).
-    if off != 0:
-        if at_disc_start and overread.lead_in:
-            start -= margin
-        if at_disc_end and overread.lead_out:
-            end += margin
-    if end <= start:
-        return int(start_sector), int(end_sector)
-    return start, end
-
-
 def _trim_wav_to_expected(path: Path, expected_bytes: int) -> None:
     """Crop an over-long CDDA WAV back to the TOC-expected byte size."""
     expected = int(expected_bytes)
@@ -3841,40 +3814,6 @@ def _trim_wav_to_expected(path: Path, expected_bytes: int) -> None:
             writer.writeframes(frames)
     except Exception as exc:
         log.warning('WAV trim failed for %s: %s', path, exc)
-
-
-def _ctdb_submit_quality(
-    job: RipJob,
-    *,
-    burst_tracks: list[int],
-    test_copy_mismatches: list[int],
-    rip_log: RipLog | None,
-    image_stats: ParanoiaStats | None = None,
-    image_sectors: int = 0,
-) -> int:
-    """Return 100 only for clean secure test&copy with perfect paranoia quality."""
-    if not job.test_and_copy or burst_tracks or test_copy_mismatches:
-        return 0
-    if image_stats is not None:
-        if image_stats.had_errors:
-            return 0
-        q = image_stats.quality_percent(image_sectors)
-        if q is None or q < 100.0:
-            return 0
-    if rip_log is not None:
-        audio = [t for t in rip_log.tracks if int(t.number) > 0]
-        if not audio:
-            return 0
-        for entry in audio:
-            if entry.had_errors:
-                return 0
-            mode = (entry.extract_mode or '').lower()
-            if 'burst' in mode:
-                return 0
-            q = entry.quality_percent
-            if q is None or float(q) < 100.0:
-                return 0
-    return 100
 
 
 def _summarize_ar(results: list[AccurateRipResult]) -> str:

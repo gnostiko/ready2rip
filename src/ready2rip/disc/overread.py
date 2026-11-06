@@ -52,6 +52,32 @@ def offset_margin_sectors(sample_offset: int) -> int:
     return (off + _SAMPLES_PER_SECTOR - 1) // _SAMPLES_PER_SECTOR
 
 
+def overread_span(
+    start_sector: int,
+    end_sector: int,
+    *,
+    sample_offset: int,
+    overread: OverreadCapability,
+    at_disc_start: bool,
+    at_disc_end: bool,
+) -> tuple[int, int]:
+    """Widen a TOC span into lead-in/out when offset correction needs it."""
+    margin = offset_margin_sectors(sample_offset)
+    if margin <= 0:
+        return int(start_sector), int(end_sector)
+    start = int(start_sector)
+    end = int(end_sector)
+    # Non-zero offset needs samples past TOC edges (lead-in / lead-out).
+    if int(sample_offset) != 0:
+        if at_disc_start and overread.lead_in:
+            start -= margin
+        if at_disc_end and overread.lead_out:
+            end += margin
+    if end <= start:
+        return int(start_sector), int(end_sector)
+    return start, end
+
+
 def probe_overread(
     device: str,
     *,
