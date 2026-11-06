@@ -306,7 +306,7 @@
             </child>
           </object>
         </child>
-        <!-- Bottom slide-up progress banner with green fill. -->
+        <!-- Bottom slide-up rip status with a standard Gtk.ProgressBar. -->
         <child type="bottom">
           <object class="GtkRevealer" id="rip_revealer">
             <property name="reveal-child">false</property>
@@ -316,38 +316,38 @@
               <object class="GtkBox" id="rip_banner">
                 <property name="orientation">vertical</property>
                 <property name="hexpand">true</property>
+                <property name="spacing">6</property>
+                <property name="margin-start">18</property>
+                <property name="margin-end">18</property>
+                <property name="margin-top">12</property>
+                <property name="margin-bottom">12</property>
                 <style>
                   <class name="ready2rip-rip-bar"/>
                 </style>
                 <child>
-                  <object class="GtkBox">
-                    <property name="orientation">horizontal</property>
-                    <property name="spacing">12</property>
-                    <property name="margin-start">18</property>
-                    <property name="margin-end">18</property>
-                    <property name="margin-top">12</property>
-                    <property name="margin-bottom">4</property>
-                    <child>
-                      <object class="GtkLabel" id="rip_title_label">
-                        <property name="label" translatable="yes">Ripping disc</property>
-                        <property name="xalign">0</property>
-                        <property name="halign">start</property>
-                        <property name="hexpand">true</property>
-                        <property name="selectable">false</property>
-                        <style>
-                          <class name="heading"/>
-                        </style>
-                      </object>
-                    </child>
+                  <object class="GtkLabel" id="rip_title_label">
+                    <property name="label" translatable="yes">Ripping disc</property>
+                    <property name="xalign">0</property>
+                    <property name="halign">start</property>
+                    <property name="hexpand">true</property>
+                    <property name="selectable">false</property>
+                    <style>
+                      <class name="heading"/>
+                    </style>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkProgressBar" id="rip_progress">
+                    <property name="hexpand">true</property>
+                    <property name="fraction">0</property>
+                    <property name="show-text">false</property>
+                    <property name="pulse-step">0.05</property>
                   </object>
                 </child>
                 <child>
                   <object class="GtkLabel" id="rip_status_label">
                     <property name="label">Preparing…</property>
                     <property name="xalign">0</property>
-                    <property name="margin-start">18</property>
-                    <property name="margin-end">18</property>
-                    <property name="margin-bottom">12</property>
                     <property name="wrap">true</property>
                     <property name="wrap-mode">word-char</property>
                     <property name="ellipsize">end</property>

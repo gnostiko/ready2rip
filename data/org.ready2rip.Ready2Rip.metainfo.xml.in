@@ -29,6 +29,14 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-06">
       <description>
         <p>
+          0.4.30: Replace the custom CSS rip banner with a standard
+          Gtk.ProgressBar.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.29" date="2026-11-06">
+      <description>
+        <p>
           0.4.29: Whole-rip progress (selected tracks or full disc), and fix
           extract progress stalling on partial cdparanoia stderr lines.
         </p>

@@ -82,7 +82,7 @@ from ready2rip.settings import (
 from ready2rip.setup_dialog import DriveSetupDialog
 from ready2rip.tags.artists import ARTIST_STYLES, normalize_artist_style, normalize_artists
 from ready2rip.util import normalize_release_date, parse_disc_field, validate_device_path
-from ready2rip.window_styles import banner_fill_css, install_window_styles
+from ready2rip.window_styles import install_window_styles
 
 log = logging.getLogger(__name__)
 
@@ -187,6 +187,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     rip_revealer = Gtk.Template.Child()
     rip_banner = Gtk.Template.Child()
     rip_title_label = Gtk.Template.Child()
+    rip_progress = Gtk.Template.Child()
     rip_status_label = Gtk.Template.Child()
 
     _COVER_SIZE = 280
@@ -259,16 +260,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._poll_in_flight = False
         self._pending_progress: RipProgress | None = None
         self._progress_idle_id: int | None = None
-        self._progress_watchdog_id: int | None = None
+        self._progress_pulse_id: int | None = None
         self._last_progress_mono = 0.0
-        self._last_engine_fraction = 0.0
-        self._banner_shown = 0.0
-        self._banner_target = 0.0
-        self._banner_css_frac = -1.0
-        self._banner_tick_id: int | None = None
-        self._banner_last_us = 0
-        self._banner_hold = False
-        self._banner_provider = Gtk.CssProvider()
+        self._progress_hold = False
         self._flash_id: int | None = None
         self._cover_fit_id: int | None = None
         self._drive_tray_row: Adw.ActionRow | None = None
@@ -471,9 +465,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if self._flash_id is not None:
             GLib.source_remove(self._flash_id)
             self._flash_id = None
-        if self._banner_tick_id is not None:
-            self.remove_tick_callback(self._banner_tick_id)
-            self._banner_tick_id = None
+        self._stop_progress_pulse()
         return False
 
     def _setup_settings_dialog(self) -> None:
@@ -696,17 +688,13 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self.cover_picture.set_content_fit(Gtk.ContentFit.FILL)
 
     def _setup_progress_styles(self) -> None:
-        """Install cover / track / progress CSS and wire the rip banner fill."""
+        """Install cover / track / window CSS."""
         install_window_styles(self.get_display())
         self.flash_veil.set_halign(Gtk.Align.FILL)
         self.flash_veil.set_valign(Gtk.Align.FILL)
         self.flash_veil.set_hexpand(True)
         self.flash_veil.set_vexpand(True)
-        self.rip_banner.get_style_context().add_provider(
-            self._banner_provider,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 20,
-        )
-        self._apply_banner_fill()
+        self.rip_progress.set_fraction(0.0)
 
     def _set_cover_actions_visible(self, visible: bool) -> None:
         opacity = 1.0 if visible else 0.0
@@ -2315,7 +2303,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self.rip_status_label.set_label(
                 f'Starting {fmt} · {n} track{"s" if n != 1 else ""}…'
             )
-        self._banner_hold = False
+        self._progress_hold = False
         self._set_progress_fraction(0.02)
 
         engine = self._rip_engine
@@ -2340,11 +2328,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._progress_hide_id = None
 
     def _set_progress_fraction(self, fraction: float) -> None:
-        self._set_banner_target(max(0.0, min(1.0, fraction)))
+        """Set the standard Gtk.ProgressBar to a determinate whole-rip fraction."""
+        self.rip_progress.set_fraction(max(0.0, min(1.0, fraction)))
 
     def _show_progress_panel(self, *, title: str | None = None) -> None:
         self._cancel_progress_hide()
-        self._banner_hold = False
+        self._progress_hold = False
         self.rip_title_label.set_label(title or 'Ripping disc')
         # Reveal the ToolbarView bottom bar first so content slides up cleanly
         # without a pre-existing separator line sitting at the window edge.
@@ -2366,7 +2355,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
         def _hide() -> bool:
             self._progress_hide_id = None
-            if not self._ripping and not self._banner_hold:
+            if not self._ripping and not self._progress_hold:
                 _hide_now()
             return GLib.SOURCE_REMOVE
 
@@ -2375,61 +2364,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _finish_hide_bottom_bar(self) -> bool:
         if (
             not self._ripping
-            and not self._banner_hold
+            and not self._progress_hold
             and not self.rip_revealer.get_reveal_child()
         ):
             self.toolbar_view.set_reveal_bottom_bars(False)
-            self._reset_banner_fill()
-        return GLib.SOURCE_REMOVE
-
-    def _set_banner_target(self, fraction: float) -> None:
-        self._banner_target = max(0.0, min(1.0, fraction))
-        self._ensure_banner_tick()
-
-    def _ensure_banner_tick(self) -> None:
-        if self._banner_tick_id is not None:
-            return
-        self._banner_last_us = 0
-        self._banner_tick_id = self.add_tick_callback(self._on_banner_tick)
-
-    def _on_banner_tick(self, _widget, clock) -> bool:
-        frame = clock.get_frame_time()
-        if self._banner_last_us == 0:
-            self._banner_last_us = frame
-            self._apply_banner_fill()
-            return GLib.SOURCE_CONTINUE
-        dt = min(0.05, (frame - self._banner_last_us) / 1_000_000)
-        self._banner_last_us = frame
-        t = min(1.0, dt * 12.0)
-        self._banner_shown += (self._banner_target - self._banner_shown) * t
-        # Snap below one CSS quantum (0.05%) so fine extract updates still paint.
-        if abs(self._banner_target - self._banner_shown) < 0.0004:
-            self._banner_shown = self._banner_target
-            self._apply_banner_fill()
-            self._banner_tick_id = None
-            return GLib.SOURCE_REMOVE
-        self._apply_banner_fill()
-        return GLib.SOURCE_CONTINUE
-
-    def _apply_banner_fill(self) -> None:
-        # Quantize to 0.05% so multi-track whole-rip extracts still paint when
-        # each track owns only a few percent of the bar.
-        q = round(self._banner_shown * 2000.0) / 2000.0
-        if q == self._banner_css_frac:
-            return
-        self._banner_css_frac = q
-        self._banner_provider.load_from_string(banner_fill_css(q))
-
-    def _reset_banner_fill(self) -> bool:
-        if self._ripping or self._banner_hold:
-            return GLib.SOURCE_REMOVE
-        self._banner_shown = 0.0
-        self._banner_target = 0.0
-        self._banner_css_frac = -1.0
-        if self._banner_tick_id is not None:
-            self.remove_tick_callback(self._banner_tick_id)
-            self._banner_tick_id = None
-        self._apply_banner_fill()
+            self.rip_progress.set_fraction(0.0)
         return GLib.SOURCE_REMOVE
 
     def _flash(self, kind: str) -> None:
@@ -2461,13 +2400,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self.flash_veil.remove_css_class('error')
         return GLib.SOURCE_REMOVE
 
-    def _release_banner(self) -> bool:
+    def _release_progress_panel(self) -> bool:
         if self._ripping:
-            self._banner_hold = False
+            self._progress_hold = False
             return GLib.SOURCE_REMOVE
-        self._banner_hold = False
+        self._progress_hold = False
         self._hide_progress_panel()
-        GLib.timeout_add(220, self._reset_banner_fill)
         return GLib.SOURCE_REMOVE
 
     def _set_lookup_controls_sensitive(self, sensitive: bool) -> None:
@@ -2493,14 +2431,13 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _set_ripping_ui(self, active: bool) -> None:
         idle = not active
         if active:
-            self._last_engine_fraction = 0.0
             self._show_progress_panel(title='Ripping disc')
-            self._start_progress_watchdog()
+            self._start_progress_pulse()
             if self._tracks_editing:
                 self._tracks_editing = False
                 self._apply_tracks_edit_mode()
         else:
-            self._stop_progress_watchdog()
+            self._stop_progress_pulse()
 
         self.eject_button.set_sensitive(idle)
         self._set_action_enabled('eject', idle)
@@ -2553,42 +2490,31 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._on_rip_progress(progress)
         return GLib.SOURCE_REMOVE
 
-    def _start_progress_watchdog(self) -> None:
-        """Creep the banner slightly when the engine goes quiet (CRC / encode)."""
+    def _start_progress_pulse(self) -> None:
+        """Pulse the Gtk.ProgressBar while the engine is quiet (CRC / encode)."""
         self._last_progress_mono = time.monotonic()
-        self._last_engine_fraction = max(self._last_engine_fraction, self._banner_target)
-        if self._progress_watchdog_id is not None:
+        if self._progress_pulse_id is not None:
             return
-        self._progress_watchdog_id = GLib.timeout_add(
-            200, self._on_progress_watchdog
-        )
+        self._progress_pulse_id = GLib.timeout_add(200, self._on_progress_pulse)
 
-    def _stop_progress_watchdog(self) -> None:
-        if self._progress_watchdog_id is not None:
-            GLib.source_remove(self._progress_watchdog_id)
-            self._progress_watchdog_id = None
+    def _stop_progress_pulse(self) -> None:
+        if self._progress_pulse_id is not None:
+            GLib.source_remove(self._progress_pulse_id)
+            self._progress_pulse_id = None
 
-    def _on_progress_watchdog(self) -> bool:
+    def _on_progress_pulse(self) -> bool:
         if not self._ripping:
-            self._progress_watchdog_id = None
+            self._progress_pulse_id = None
             return GLib.SOURCE_REMOVE
-        # Soft creep while the engine is quiet (CRC / encode / verify). Cap well
-        # short of 100% so one phase cannot finish the whole-rip bar, but keep
-        # enough headroom that a long stall still paints (~3%/s, +8% max).
-        if (time.monotonic() - self._last_progress_mono) >= 0.25:
-            ceiling = min(0.995, self._last_engine_fraction + 0.08)
-            nxt = min(ceiling, self._banner_target + 0.006)
-            if nxt > self._banner_target + 1e-9:
-                self._set_banner_target(nxt)
+        # Traditional GNOME activity pulse when determinate updates pause.
+        if (time.monotonic() - self._last_progress_mono) >= 0.35:
+            self.rip_progress.pulse()
         return GLib.SOURCE_CONTINUE
 
     def _on_rip_progress(self, progress: RipProgress) -> None:
         if not self._ripping:
             return
         self._last_progress_mono = time.monotonic()
-        self._last_engine_fraction = max(
-            self._last_engine_fraction, float(progress.fraction)
-        )
         self.rip_title_label.set_label('Ripping disc')
         self._set_progress_fraction(progress.fraction)
         if progress.message:
@@ -2663,10 +2589,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self.rip_status_label.set_label(detail)
         self._set_progress_fraction(1.0)
         self._flash_success()
-        self._banner_hold = True
+        self._progress_hold = True
         self.toolbar_view.set_reveal_bottom_bars(True)
         self.rip_revealer.set_reveal_child(True)
-        GLib.timeout_add(560, self._release_banner)
+        GLib.timeout_add(560, self._release_progress_panel)
         if result.burst_tracks:
             n_burst = len(result.burst_tracks)
             self._toast(
