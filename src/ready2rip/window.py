@@ -261,6 +261,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._progress_idle_id: int | None = None
         self._progress_watchdog_id: int | None = None
         self._last_progress_mono = 0.0
+        self._last_engine_fraction = 0.0
         self._banner_shown = 0.0
         self._banner_target = 0.0
         self._banner_css_frac = -1.0
@@ -2401,8 +2402,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._banner_last_us = frame
         t = min(1.0, dt * 12.0)
         self._banner_shown += (self._banner_target - self._banner_shown) * t
-        # Snap below one CSS quantum (0.1%) so fine extract updates still paint.
-        if abs(self._banner_target - self._banner_shown) < 0.0008:
+        # Snap below one CSS quantum (0.05%) so fine extract updates still paint.
+        if abs(self._banner_target - self._banner_shown) < 0.0004:
             self._banner_shown = self._banner_target
             self._apply_banner_fill()
             self._banner_tick_id = None
@@ -2411,9 +2412,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         return GLib.SOURCE_CONTINUE
 
     def _apply_banner_fill(self) -> None:
-        # Quantize to 0.1% — 1% steps look frozen on multi-track rips where
-        # each track owns only a few percent of the overall bar.
-        q = round(self._banner_shown * 1000.0) / 1000.0
+        # Quantize to 0.05% so multi-track whole-rip extracts still paint when
+        # each track owns only a few percent of the bar.
+        q = round(self._banner_shown * 2000.0) / 2000.0
         if q == self._banner_css_frac:
             return
         self._banner_css_frac = q
@@ -2492,6 +2493,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _set_ripping_ui(self, active: bool) -> None:
         idle = not active
         if active:
+            self._last_engine_fraction = 0.0
             self._show_progress_panel(title='Ripping disc')
             self._start_progress_watchdog()
             if self._tracks_editing:
@@ -2552,8 +2554,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         return GLib.SOURCE_REMOVE
 
     def _start_progress_watchdog(self) -> None:
-        """Creep the banner when the engine goes quiet (CRC / encode / RG)."""
+        """Creep the banner slightly when the engine goes quiet (CRC / encode)."""
         self._last_progress_mono = time.monotonic()
+        self._last_engine_fraction = max(self._last_engine_fraction, self._banner_target)
         if self._progress_watchdog_id is not None:
             return
         self._progress_watchdog_id = GLib.timeout_add(
@@ -2569,9 +2572,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if not self._ripping:
             self._progress_watchdog_id = None
             return GLib.SOURCE_REMOVE
-        # Soft creep so long blocking phases never freeze the fill.
-        if (time.monotonic() - self._last_progress_mono) >= 0.35:
-            nxt = min(0.995, self._banner_target + 0.004)
+        # Soft creep while the engine is quiet (CRC / encode / verify). Cap well
+        # short of 100% so one phase cannot finish the whole-rip bar, but keep
+        # enough headroom that a long stall still paints (~3%/s, +8% max).
+        if (time.monotonic() - self._last_progress_mono) >= 0.25:
+            ceiling = min(0.995, self._last_engine_fraction + 0.08)
+            nxt = min(ceiling, self._banner_target + 0.006)
             if nxt > self._banner_target + 1e-9:
                 self._set_banner_target(nxt)
         return GLib.SOURCE_CONTINUE
@@ -2580,6 +2586,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if not self._ripping:
             return
         self._last_progress_mono = time.monotonic()
+        self._last_engine_fraction = max(
+            self._last_engine_fraction, float(progress.fraction)
+        )
         self.rip_title_label.set_label('Ripping disc')
         self._set_progress_fraction(progress.fraction)
         if progress.message:

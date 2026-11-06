@@ -66,6 +66,11 @@ from ready2rip.rip.encode_dest import (
 )
 from ready2rip.rip.paranoia_run import run_paranoia_streaming
 from ready2rip.rip.paranoia_stats import FRAMES_PER_SECTOR, ParanoiaStats
+from ready2rip.rip.progress_map import (
+    normalize_unit_weights,
+    overall_fraction,
+    unit_end_fraction,
+)
 from ready2rip.rip.progress_pulse import ProgressPulse
 from ready2rip.rip.riplog import (
     RipLog,
@@ -287,7 +292,7 @@ class RipEngine:
     def __init__(self) -> None:
         self._cancelled = False
         self._proc_lock = threading.Lock()
-        self._procs: set[subprocess.Popen[str]] = set()
+        self._procs: set[subprocess.Popen] = set()
         self._encode_pending: _PendingEncode | None = None
         self._tags = TagWriter()
 
@@ -399,6 +404,8 @@ class RipEngine:
 
         last_overall = 0.0
         progress_lock = threading.Lock()
+        # Equal weights until sector lengths are known (after HTOA/data probe).
+        unit_weights = normalize_unit_weights([1] * n_audio)
 
         def report(
             track_number: int,
@@ -413,19 +420,23 @@ class RipEngine:
             nonlocal last_overall
             if on_progress is None:
                 return
-            units = total_units if total_units is not None else float(n_audio)
-            units = max(1.0, units)
+            # Prefer sector-weighted whole-rip mapping; fall back to equal units.
+            weights = unit_weights
+            if total_units is not None and abs(len(weights) - total_units) > 0.5:
+                n = max(1, round(total_units))
+                weights = normalize_unit_weights([1] * n)
+            ceiling = min(0.995, unit_end_fraction(index, weights))
             with progress_lock:
                 if nudge:
-                    # Heartbeat during CRC / encode / RG — keep the banner alive.
-                    overall = min(0.995, last_overall + 0.004)
+                    # Stay inside the current unit — never race ahead of the rip.
+                    overall = min(ceiling, last_overall + 0.003)
                 else:
-                    overall = (index + max(0.0, min(1.0, sub))) / units
+                    overall = overall_fraction(index, sub, weights)
                     overall = max(0.0, min(1.0, overall))
                     if overall + 1e-9 < last_overall:
                         # Retry / remapped phase under the high-water — creep
-                        # forward instead of freezing for a whole extract pass.
-                        overall = min(0.995, last_overall + 0.0025)
+                        # within this unit instead of freezing or jumping ahead.
+                        overall = min(ceiling, last_overall + 0.002)
                 last_overall = max(last_overall, overall)
                 fraction = last_overall
             on_progress(
@@ -519,6 +530,19 @@ class RipEngine:
             else 0
         )
         total_units = float(len(tracks) + (1 if htoa_info else 0) + data_count) or 1.0
+        # Whole-rip bar: weight each unit by TOC sectors (selected tracks only).
+        sector_weights: list[int] = []
+        if htoa_info is not None:
+            sector_weights.append(max(1, int(htoa_info.length_sectors)))
+        for track_no in tracks:
+            toc_track = self._toc_track(job.disc_info, track_no)
+            sector_weights.append(
+                max(1, int(toc_track.length_sectors)) if toc_track else 1
+            )
+        for _ in range(data_count):
+            # Data tracks vary; keep a modest share so audio still dominates.
+            sector_weights.append(150)  # ~2s of CDDA-equivalent weight
+        unit_weights = normalize_unit_weights(sector_weights)
         unit_index = 0.0
         htoa_path: Path | None = None
         htoa_paths: list[Path] = []
@@ -2729,11 +2753,12 @@ class RipEngine:
                 return
             with progress_lock:
                 if nudge:
-                    overall = min(0.995, last_overall + 0.004)
+                    # Copy Image is already whole-disc; only ease a little forward.
+                    overall = min(0.995, last_overall + 0.003)
                 else:
                     overall = max(0.0, min(1.0, frac))
                     if overall + 1e-9 < last_overall:
-                        overall = min(0.995, last_overall + 0.0025)
+                        overall = min(0.995, last_overall + 0.002)
                 last_overall = max(last_overall, overall)
                 fraction = last_overall
             on_progress(
@@ -3595,11 +3620,11 @@ class RipEngine:
     ) -> ParanoiaStats:
         """Run cdparanoia, stream ``-e`` progress, return :class:`ParanoiaStats`."""
 
-        def register(proc: subprocess.Popen[str]) -> None:
+        def register(proc: subprocess.Popen) -> None:
             with self._proc_lock:
                 self._procs.add(proc)
 
-        def unregister(proc: subprocess.Popen[str]) -> None:
+        def unregister(proc: subprocess.Popen) -> None:
             with self._proc_lock:
                 self._procs.discard(proc)
 

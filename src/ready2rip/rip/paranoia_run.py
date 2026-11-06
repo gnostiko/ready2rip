@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import select
 import shutil
 import subprocess
 import time
@@ -34,14 +36,17 @@ def run_paranoia_streaming(
     wav_path: Path | None = None,
     expected_bytes: int | None = None,
     is_cancelled: Callable[[], bool] | None = None,
-    register_proc: Callable[[subprocess.Popen[str]], None] | None = None,
-    unregister_proc: Callable[[subprocess.Popen[str]], None] | None = None,
+    register_proc: Callable[[subprocess.Popen], None] | None = None,
+    unregister_proc: Callable[[subprocess.Popen], None] | None = None,
 ) -> ParanoiaStats:
     """Run *cmd*, stream ``-e`` / WAV progress, return :class:`ParanoiaStats`.
 
     Progress prefers growing WAV size (monotonic) and also tracks ``-e``
     frame lines. ``stdbuf`` line-buffers child stderr when available so
     updates are not stuck behind a full pipe buffer.
+
+    Stderr is read in non-blocking chunks (never ``readline``) so a partial
+    line cannot freeze the loop — WAV polling and activity creep keep running.
 
     Measured write progress is scaled into ``0 … _WRITE_PROGRESS_SPAN`` so
     activity creep can still advance the bar during paranoia's re-verify pass
@@ -52,7 +57,7 @@ def run_paranoia_streaming(
     if stdbuf is not None and run_cmd and Path(run_cmd[0]).name != 'stdbuf':
         run_cmd = [stdbuf, '-oL', '-eL', *run_cmd]
     log.info('Running %s: %s', what, ' '.join(run_cmd))
-    proc: subprocess.Popen[str] | None = None
+    proc: subprocess.Popen | None = None
     stderr_chunks: list[str] = []
     origin_frame: int | None = None
     last_frac = -1.0
@@ -66,6 +71,8 @@ def run_paranoia_streaming(
         else 0
     )
     cancelled = is_cancelled or (lambda: False)
+    # Incomplete trailing stderr without a newline yet.
+    pending = ''
 
     def emit(frac: float, *, measured: bool = True) -> None:
         nonlocal last_frac, last_emit, measured_frac, last_measure_at
@@ -102,12 +109,12 @@ def run_paranoia_streaming(
             return
         now = time.monotonic()
         # Start creeping sooner; secure re-verify can sit with a full WAV for minutes.
-        if last_measure_at <= 0.0 or (now - last_measure_at) < 0.45:
+        if last_measure_at <= 0.0 or (now - last_measure_at) < 0.35:
             return
-        if (now - last_emit) < 0.2:
+        if (now - last_emit) < 0.15:
             return
-        # ~4%/s toward 0.99 after the measured high-water stalls.
-        creep = min(0.99, last_frac + 0.008)
+        # ~5%/s toward 0.99 after the measured high-water stalls.
+        creep = min(0.99, last_frac + 0.01)
         if creep <= last_frac + 1e-9:
             return
         emit(creep, measured=False)
@@ -141,17 +148,34 @@ def run_paranoia_streaming(
             return
         emit_measured((size - 44) / float(pcm_expected))
 
+    def ingest_stderr(data: bytes) -> None:
+        nonlocal pending
+        if not data:
+            return
+        text = data.decode('utf-8', errors='replace')
+        stderr_chunks.append(text)
+        pending += text
+        while True:
+            nl = pending.find('\n')
+            if nl < 0:
+                break
+            line, pending = pending[: nl + 1], pending[nl + 1 :]
+            consider_line(line)
+
     try:
         proc = subprocess.Popen(
             run_cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
+            # Binary pipe + non-blocking reads: never block on a partial line.
+            text=False,
+            bufsize=0,
         )
         if register_proc is not None:
             register_proc(proc)
         assert proc.stderr is not None
+        fd = proc.stderr.fileno()
+        os.set_blocking(fd, False)
         deadline = time.monotonic() + timeout if timeout is not None else None
         while True:
             if cancelled():
@@ -169,38 +193,38 @@ def run_paranoia_streaming(
                 raise RuntimeError(f'{what} timed out after {timeout}s') from None
             consider_wav_size()
             emit_activity_creep()
-            ready = True
             try:
-                import select
-
-                ready, _, _ = select.select([proc.stderr], [], [], 0.2)
-                ready = bool(ready)
-            except (ImportError, ValueError, OSError):
-                ready = True
+                ready, _, _ = select.select([fd], [], [], 0.15)
+            except (ValueError, OSError):
+                ready = []
             if ready:
-                line = proc.stderr.readline()
-                if line:
-                    stderr_chunks.append(line)
-                    consider_line(line)
+                try:
+                    chunk = os.read(fd, 8192)
+                except BlockingIOError:
+                    chunk = b''
+                if chunk:
+                    ingest_stderr(chunk)
                 elif proc.poll() is not None:
-                    rest = proc.stderr.read()
-                    if rest:
-                        stderr_chunks.append(rest)
-                        for part in rest.splitlines(keepends=True):
-                            consider_line(part)
+                    # EOF
                     break
-                else:
-                    time.sleep(0.05)
             elif proc.poll() is not None:
-                rest = proc.stderr.read()
-                if rest:
-                    stderr_chunks.append(rest)
-                    for part in rest.splitlines(keepends=True):
-                        consider_line(part)
+                # Drain any remaining bytes.
+                while True:
+                    try:
+                        chunk = os.read(fd, 8192)
+                    except BlockingIOError:
+                        break
+                    if not chunk:
+                        break
+                    ingest_stderr(chunk)
                 break
             else:
                 # No stderr yet — still allow creep while the drive seeks.
                 emit_activity_creep()
+        # Flush a trailing partial line (rare).
+        if pending.strip():
+            consider_line(pending)
+            pending = ''
         code = proc.wait() if proc.returncode is None else proc.returncode
         consider_wav_size()
         if on_extract_progress is not None and not cancelled():

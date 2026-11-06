@@ -135,10 +135,10 @@ def test_multi_track_overall_fraction_keeps_moving() -> None:
             # Engine maps extract local into copy_base..copy_base+copy_span.
             sub = copy_base + copy_span * min(1.0, local)
             overalls.append((i + sub) / n_tracks)
-    css_bins = {round(o * 1000.0) / 1000.0 for o in overalls}
-    # A full rip should paint dozens of distinct 0.1% steps, not ~3 per track.
+    css_bins = {round(o * 2000.0) / 2000.0 for o in overalls}
+    # A full rip should paint dozens of distinct 0.05% steps, not ~3 per track.
     assert len(css_bins) >= 80, f'only {len(css_bins)} CSS steps for {n_tracks} tracks'
-    # During one track's copy, overall should advance by more than one 0.1% step.
+    # During one track's copy, overall should advance by more than one 0.05% step.
     track0 = [o for o in overalls if o <= (0 + copy_base + copy_span) / n_tracks]
-    track0_bins = {round(o * 1000.0) / 1000.0 for o in track0}
+    track0_bins = {round(o * 2000.0) / 2000.0 for o in track0}
     assert len(track0_bins) >= 8, f'track0 only {len(track0_bins)} CSS steps'
