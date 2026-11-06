@@ -48,6 +48,7 @@ ALSO_ENCODER_IDS = frozenset(e[0] for e in ALSO_ENCODERS)
 ALSO_FOLDER_LAYOUTS = (
     ('format_subdir', 'Subfolder by format'),
     ('same_folder', 'Same album folder'),
+    ('custom_folder', 'Custom folder'),
 )
 
 ALSO_FOLDER_LAYOUT_IDS = frozenset(e[0] for e in ALSO_FOLDER_LAYOUTS)
@@ -308,6 +309,8 @@ class AppSettings:
     also_encode: bool = False
     also_encode_format: str = 'mp3'
     also_encode_folder: str = 'format_subdir'
+    # Second output root when also_encode_folder is custom_folder.
+    also_encode_directory: str = ''
     apply_replaygain: bool = True
     embed_artwork: bool = True
     fetch_artwork: bool = True
@@ -347,6 +350,13 @@ class AppSettings:
         if raw:
             return Path(raw).expanduser()
         return default_music_directory()
+
+    def resolved_also_encode_directory(self) -> Path:
+        """Also-encode custom root; empty falls back to the primary output."""
+        raw = (self.also_encode_directory or '').strip()
+        if raw:
+            return Path(raw).expanduser()
+        return self.resolved_output_directory()
 
 
 def _checkout_schema_xml() -> Path | None:
@@ -463,6 +473,9 @@ class SettingsStore:
                 also_encode_folder=normalize_also_encode_folder(
                     _get_string(s, 'also-encode-folder', 'format_subdir')
                 ),
+                also_encode_directory=_get_string(
+                    s, 'also-encode-directory', ''
+                ),
                 apply_replaygain=s.get_boolean('apply-replaygain'),
                 embed_artwork=s.get_boolean('embed-artwork'),
                 fetch_artwork=s.get_boolean('fetch-artwork'),
@@ -542,6 +555,7 @@ class SettingsStore:
             'also_encode': ('also-encode', 'bool'),
             'also_encode_format': ('also-encode-format', 'string'),
             'also_encode_folder': ('also-encode-folder', 'string'),
+            'also_encode_directory': ('also-encode-directory', 'string'),
             'apply_replaygain': ('apply-replaygain', 'bool'),
             'embed_artwork': ('embed-artwork', 'bool'),
             'fetch_artwork': ('fetch-artwork', 'bool'),

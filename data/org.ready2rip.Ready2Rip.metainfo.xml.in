@@ -29,6 +29,14 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-06">
       <description>
         <p>
+          0.4.28: Progress bar no longer freezes during CRC/encode/verify;
+          Also encode can write to a custom output folder.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.27" date="2026-11-06">
+      <description>
+        <p>
           0.4.27: Optional Also encode (lossy companion), Copy Image
           progress/overread trim fixes, and per-track edge overread.
         </p>

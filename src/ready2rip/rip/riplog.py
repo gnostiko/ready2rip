@@ -78,6 +78,7 @@ class RipLog:
         self.also_encode: bool = False
         self.also_encode_format: str = 'mp3'
         self.also_encode_folder: str = 'format_subdir'
+        self.also_encode_directory: str = ''
         self.burst_fallback: bool = False
         self.verify_accuraterip: bool = True
         self.verify_ctdb: bool = True
@@ -127,6 +128,9 @@ class RipLog:
         )
         self.also_encode_folder = (
             getattr(job, 'also_encode_folder', None) or 'format_subdir'
+        )
+        self.also_encode_directory = (
+            getattr(job, 'also_encode_directory', None) or ''
         )
         self.burst_fallback = job.burst_fallback
         self.verify_accuraterip = job.verify_accuraterip
@@ -334,7 +338,13 @@ class RipLog:
         if self.also_encode:
             also = (self.also_encode_format or 'mp3').upper()
             layout = self.also_encode_folder or 'format_subdir'
-            lines.append(f'Also encode                     : {also} ({layout})')
+            if layout == 'custom_folder' and self.also_encode_directory:
+                layout_note = f'custom → {self.also_encode_directory}'
+            else:
+                layout_note = layout
+            lines.append(
+                f'Also encode                     : {also} ({layout_note})'
+            )
             lines.append(
                 'Also encoder command            : '
                 + encode_command_summary(

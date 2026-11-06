@@ -51,6 +51,10 @@ def test_audio_dir_format_subdir_only_when_multi() -> None:
     assert audio_dir_for_format(
         album, 'mp3', folder_layout='same_folder', multi_format=True
     ) == album
+    # Custom folder is a separate output root — no format subfolder here.
+    assert audio_dir_for_format(
+        album, 'mp3', folder_layout='custom_folder', multi_format=True
+    ) == album
 
 
 def test_format_folder_name() -> None:

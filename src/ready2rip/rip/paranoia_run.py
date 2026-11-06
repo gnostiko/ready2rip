@@ -98,15 +98,16 @@ def run_paranoia_streaming(
 
     def emit_activity_creep() -> None:
         """Nudge the bar when paranoia is busy but WAV/frames are not advancing."""
-        if on_extract_progress is None or last_frac < 0.05:
+        if on_extract_progress is None or last_frac < 0.02:
             return
         now = time.monotonic()
-        if last_measure_at <= 0.0 or (now - last_measure_at) < 0.9:
+        # Start creeping sooner; secure re-verify can sit with a full WAV for minutes.
+        if last_measure_at <= 0.0 or (now - last_measure_at) < 0.45:
             return
-        if (now - last_emit) < 0.35:
+        if (now - last_emit) < 0.2:
             return
-        # ~0.6%/s toward 0.99 after the measured high-water stalls.
-        creep = min(0.99, last_frac + 0.003)
+        # ~4%/s toward 0.99 after the measured high-water stalls.
+        creep = min(0.99, last_frac + 0.008)
         if creep <= last_frac + 1e-9:
             return
         emit(creep, measured=False)

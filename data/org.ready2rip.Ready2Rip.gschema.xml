@@ -119,9 +119,15 @@
       <choices>
         <choice value="format_subdir"/>
         <choice value="same_folder"/>
+        <choice value="custom_folder"/>
       </choices>
       <default>'format_subdir'</default>
       <summary>Where secondary encodes are written</summary>
+    </key>
+
+    <key name="also-encode-directory" type="s">
+      <default>''</default>
+      <summary>Output root for Also encode when Custom folder is selected</summary>
     </key>
 
     <key name="embed-artwork" type="b">

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -258,6 +259,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._poll_in_flight = False
         self._pending_progress: RipProgress | None = None
         self._progress_idle_id: int | None = None
+        self._progress_watchdog_id: int | None = None
+        self._last_progress_mono = 0.0
         self._banner_shown = 0.0
         self._banner_target = 0.0
         self._banner_css_frac = -1.0
@@ -942,7 +945,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         )
         self._also_folder_row.set_tooltip_text(
             'Subfolder by format → Album/FLAC and Album/MP3; '
-            'Same album folder → both extensions together'
+            'Same album folder → both extensions together; '
+            'Custom folder → pick a second output root'
         )
         try:
             self._also_folder_row.set_selected(
@@ -956,6 +960,30 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             'notify::selected', self._on_also_folder_changed
         )
         self._add_option_row(self._also_folder_row, self.encoding_group)
+
+        also_dir_default = (
+            (settings.also_encode_directory or '').strip()
+            or settings.output_directory
+            or default_out
+        )
+        self._also_directory_row = Adw.EntryRow(title='Also output folder')
+        self._also_directory_row.set_text(also_dir_default)
+        self._also_directory_row.set_tooltip_text(
+            'Root folder for the secondary encode when Also folder is Custom'
+        )
+        self._also_directory_row.connect(
+            'changed', self._on_also_directory_changed
+        )
+        also_folder_btn = Gtk.Button()
+        apply_icon(
+            also_folder_btn, 'folder-open-symbolic', display=self.get_display()
+        )
+        also_folder_btn.add_css_class('flat')
+        also_folder_btn.set_valign(Gtk.Align.CENTER)
+        also_folder_btn.set_tooltip_text('Choose folder')
+        also_folder_btn.connect('clicked', self._on_choose_also_directory)
+        self._also_directory_row.add_suffix(also_folder_btn)
+        self._add_option_row(self._also_directory_row, self.encoding_group)
         self._sync_encoding_ui()
 
         # —— Encoding page: files ——
@@ -1268,6 +1296,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             (self._also_format_row, self._on_also_format_changed),
             (self._also_quality_row, self._on_also_quality_changed),
             (self._also_folder_row, self._on_also_folder_changed),
+            (self._also_directory_row, self._on_also_directory_changed),
             (self._offset_row, self._on_offset_changed),
             (self._test_copy_row, self._on_test_copy_toggled),
             (self._htoa_row, self._on_htoa_toggled),
@@ -1344,6 +1373,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 )
             except ValueError:
                 self._also_folder_row.set_selected(0)
+            also_dir = (
+                (settings.also_encode_directory or '').strip()
+                or settings.output_directory
+                or default_out
+            )
+            self._also_directory_row.set_text(also_dir)
             self._sync_encoding_ui()
             self._offset_row.set_value(settings.drive_sample_offset)
             self._update_calibration_row()
@@ -1479,12 +1514,20 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         also_fmt = self._also_encode_format()
         # Hide also-format when it would duplicate the primary codec.
         also_usable = also_fmt != primary
+        folder_idx = self._also_folder_row.get_selected()
+        folder_id = (
+            self._also_folders[folder_idx]
+            if 0 <= folder_idx < len(self._also_folders)
+            else 'format_subdir'
+        )
+        show_also_dir = also_on and also_usable and folder_id == 'custom_folder'
         for row in (
             self._also_format_row,
             self._also_quality_row,
             self._also_folder_row,
         ):
             row.set_visible(also_on)
+        self._also_directory_row.set_visible(show_also_dir)
         if also_on:
             self._fill_quality_combo(
                 self._also_quality_row,
@@ -1494,6 +1537,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             )
             self._also_quality_row.set_sensitive(also_usable)
             self._also_folder_row.set_sensitive(also_usable)
+            self._also_directory_row.set_sensitive(also_usable)
             if not also_usable:
                 self._also_format_row.set_subtitle(
                     'Pick a different codec than Format'
@@ -1835,6 +1879,30 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         idx = row.get_selected()
         if 0 <= idx < len(self._also_folders):
             self.store.update(also_encode_folder=self._also_folders[idx])
+            self._sync_encoding_ui()
+
+    def _on_also_directory_changed(self, row: Adw.EntryRow) -> None:
+        text = row.get_text().strip()
+        if not text:
+            text = (
+                self._output_row.get_text().strip()
+                or default_output_directory()
+            )
+            row.set_text(text)
+        self.store.update(also_encode_directory=text)
+
+    def _on_choose_also_directory(self, *_args) -> None:
+        current = (
+            self._also_directory_row.get_text().strip()
+            or self._output_row.get_text().strip()
+            or default_output_directory()
+        )
+
+        def on_path(path: str) -> None:
+            self._also_directory_row.set_text(path)
+            self.store.update(also_encode_directory=path)
+
+        self._choose_folder('Also output folder', current, on_path)
 
     def _on_offset_changed(self, row: Adw.SpinRow) -> None:
         device = self.store.get().device or self._device or '/dev/sr0'
@@ -2201,6 +2269,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             also_encode_folder=normalize_also_encode_folder(
                 settings.also_encode_folder
             ),
+            also_encode_directory=(
+                str(settings.resolved_also_encode_directory())
+                if normalize_also_encode_folder(settings.also_encode_folder)
+                == 'custom_folder'
+                else ''
+            ),
             apply_replaygain=settings.apply_replaygain,
             embed_artwork=settings.embed_artwork,
             artwork=embed_art if settings.embed_artwork else None,
@@ -2419,9 +2493,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         idle = not active
         if active:
             self._show_progress_panel(title='Ripping disc')
+            self._start_progress_watchdog()
             if self._tracks_editing:
                 self._tracks_editing = False
                 self._apply_tracks_edit_mode()
+        else:
+            self._stop_progress_watchdog()
 
         self.eject_button.set_sensitive(idle)
         self._set_action_enabled('eject', idle)
@@ -2474,9 +2551,35 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._on_rip_progress(progress)
         return GLib.SOURCE_REMOVE
 
+    def _start_progress_watchdog(self) -> None:
+        """Creep the banner when the engine goes quiet (CRC / encode / RG)."""
+        self._last_progress_mono = time.monotonic()
+        if self._progress_watchdog_id is not None:
+            return
+        self._progress_watchdog_id = GLib.timeout_add(
+            200, self._on_progress_watchdog
+        )
+
+    def _stop_progress_watchdog(self) -> None:
+        if self._progress_watchdog_id is not None:
+            GLib.source_remove(self._progress_watchdog_id)
+            self._progress_watchdog_id = None
+
+    def _on_progress_watchdog(self) -> bool:
+        if not self._ripping:
+            self._progress_watchdog_id = None
+            return GLib.SOURCE_REMOVE
+        # Soft creep so long blocking phases never freeze the fill.
+        if (time.monotonic() - self._last_progress_mono) >= 0.35:
+            nxt = min(0.995, self._banner_target + 0.004)
+            if nxt > self._banner_target + 1e-9:
+                self._set_banner_target(nxt)
+        return GLib.SOURCE_CONTINUE
+
     def _on_rip_progress(self, progress: RipProgress) -> None:
         if not self._ripping:
             return
+        self._last_progress_mono = time.monotonic()
         self.rip_title_label.set_label('Ripping disc')
         self._set_progress_fraction(progress.fraction)
         if progress.message:

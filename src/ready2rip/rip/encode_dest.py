@@ -6,7 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 _ALSO_ENCODER_IDS = frozenset({'mp3', 'aac', 'opus'})
-_FOLDER_LAYOUT_IDS = frozenset({'format_subdir', 'same_folder'})
+_FOLDER_LAYOUT_IDS = frozenset({'format_subdir', 'same_folder', 'custom_folder'})
 
 _FORMAT_FOLDER_NAMES = {
     'flac': 'FLAC',
@@ -59,6 +59,7 @@ def audio_dir_for_format(
     layout = (folder_layout or 'format_subdir').strip().lower()
     if layout not in _FOLDER_LAYOUT_IDS:
         layout = 'format_subdir'
+    # custom_folder uses a separate output root (caller); files sit in the album dir.
     if multi_format and layout == 'format_subdir':
         return album_dir / format_folder_name(fmt)
     return album_dir

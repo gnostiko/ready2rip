@@ -66,6 +66,7 @@ from ready2rip.rip.encode_dest import (
 )
 from ready2rip.rip.paranoia_run import run_paranoia_streaming
 from ready2rip.rip.paranoia_stats import FRAMES_PER_SECTOR, ParanoiaStats
+from ready2rip.rip.progress_pulse import ProgressPulse
 from ready2rip.rip.riplog import (
     RipLog,
     TrackLogEntry,
@@ -141,6 +142,8 @@ class RipJob:
     also_encode: bool = False
     also_encode_format: str = 'mp3'
     also_encode_folder: str = 'format_subdir'
+    # Used when also_encode_folder == 'custom_folder' (second output root).
+    also_encode_directory: str = ''
     apply_replaygain: bool = True
     embed_artwork: bool = True
     # Embed-sized image written into each audio file.
@@ -395,6 +398,7 @@ class RipEngine:
                 rip_log.notes.append(target_note)
 
         last_overall = 0.0
+        progress_lock = threading.Lock()
 
         def report(
             track_number: int,
@@ -404,22 +408,31 @@ class RipEngine:
             sub: float = 0.0,
             message: str = '',
             total_units: float | None = None,
+            nudge: bool = False,
         ) -> None:
             nonlocal last_overall
             if on_progress is None:
                 return
             units = total_units if total_units is not None else float(n_audio)
             units = max(1.0, units)
-            overall = (index + max(0.0, min(1.0, sub))) / units
-            # Never move the banner backwards (e.g. encode-join for track N-1
-            # after track N is already mid-verify).
-            overall = max(last_overall, max(0.0, min(1.0, overall)))
-            last_overall = overall
+            with progress_lock:
+                if nudge:
+                    # Heartbeat during CRC / encode / RG — keep the banner alive.
+                    overall = min(0.995, last_overall + 0.004)
+                else:
+                    overall = (index + max(0.0, min(1.0, sub))) / units
+                    overall = max(0.0, min(1.0, overall))
+                    if overall + 1e-9 < last_overall:
+                        # Retry / remapped phase under the high-water — creep
+                        # forward instead of freezing for a whole extract pass.
+                        overall = min(0.995, last_overall + 0.0025)
+                last_overall = max(last_overall, overall)
+                fraction = last_overall
             on_progress(
                 RipProgress(
                     track_number=track_number,
                     state=state,
-                    fraction=overall,
+                    fraction=fraction,
                     message=message,
                 )
             )
@@ -639,7 +652,20 @@ class RipEngine:
                             '.wav',
                         }
                     ]
-                    rg_notes = apply_replaygain(audio_for_rg or outputs)
+
+                    def _rg_pulse() -> None:
+                        report(
+                            tracks[-1] if tracks else 0,
+                            RipState.REPLAYGAIN,
+                            index=total_units - 1,
+                            sub=1.0,
+                            message='Analyzing ReplayGain (track + album)…',
+                            total_units=total_units,
+                            nudge=True,
+                        )
+
+                    with ProgressPulse(_rg_pulse):
+                        rg_notes = apply_replaygain(audio_for_rg or outputs)
                     notes.extend(rg_notes)
                     if rip_log is not None:
                         rip_log.replaygain_notes.extend(rg_notes)
@@ -1322,13 +1348,29 @@ class RipEngine:
             # Copy Image stays a single lossless/container encode.
             allow_also=not job.copy_image,
         )
-        multi = len(formats) > 1
-        enc_base = Path(job.output_directory).expanduser().resolve()
+        layout = (job.also_encode_folder or 'format_subdir').strip().lower()
+        also_root = (job.also_encode_directory or '').strip()
+        use_custom_also = len(formats) > 1 and layout == 'custom_folder' and also_root
+        # Format subfolders only when both encodes share the same album root.
+        multi = len(formats) > 1 and layout == 'format_subdir' and not use_custom_also
+        primary_base = Path(job.output_directory).expanduser().resolve()
         dests: list[_EncodeDest] = []
         for i, enc_fmt in enumerate(formats):
             if enc_fmt not in self.EXTENSIONS:
                 enc_fmt = 'flac'
             enc_ext = self.EXTENSIONS[enc_fmt]
+            if i > 0 and use_custom_also:
+                enc_base = Path(also_root).expanduser().resolve()
+                folder_layout = 'same_folder'
+            else:
+                enc_base = primary_base
+                if multi:
+                    folder_layout = 'format_subdir'
+                elif layout == 'same_folder' or use_custom_also:
+                    folder_layout = 'same_folder'
+                else:
+                    # Unknown / empty custom path → keep both in the album folder.
+                    folder_layout = 'same_folder'
             meta_dir, templated = build_output_paths(
                 base_dir=enc_base,
                 album_folder_template=job.album_folder_template,
@@ -1341,7 +1383,7 @@ class RipEngine:
             audio_dir = audio_dir_for_format(
                 meta_dir,
                 enc_fmt,
-                folder_layout=job.also_encode_folder,
+                folder_layout=folder_layout,
                 multi_format=multi,
             )
             if filename:
@@ -1396,6 +1438,7 @@ class RipEngine:
         write_cover: bool = True,
         tag_as_image: bool = False,
         on_progress: Callable[[int, str, Path], None] | None = None,
+        on_activity: Callable[[str], None] | None = None,
     ) -> list[Path]:
         """Encode *wav_path* to the destination(s); return output paths in order.
 
@@ -1433,7 +1476,18 @@ class RipEngine:
                 wav_left -= 1
                 _place_wav_output(wav_path, dest.out_path, move=wav_left == 0)
             else:
-                self._encode(dest.format, wav_path, dest.out_path, job)
+                label = (
+                    f'Encoding track {track_number} to {dest.format.upper()}…'
+                    if track_number > 0
+                    else f'Encoding to {dest.format.upper()}…'
+                )
+
+                def _enc_tick(*, _label=label) -> None:
+                    if on_activity is not None:
+                        on_activity(_label)
+
+                with ProgressPulse(_enc_tick):
+                    self._encode(dest.format, wav_path, dest.out_path, job)
 
             if job.album is not None:
                 total_for_tags = (
@@ -1523,16 +1577,37 @@ class RipEngine:
                     return album_dir
                 # Blocking join — keep the banner honest while the encoder
                 # finishes (extract of the next track already completed).
+                def _wait_encode_tick(
+                    *,
+                    _tn=job_pending.track_no,
+                    _idx=job_pending.idx,
+                ) -> None:
+                    report(
+                        _tn,
+                        RipState.ENCODING,
+                        index=_idx,
+                        sub=0.95,
+                        message=f'Finishing encode for track {_tn}…',
+                        total_units=total_units,
+                        nudge=True,
+                    )
+
                 if not job_pending.future.done():
                     report(
                         job_pending.track_no,
                         RipState.ENCODING,
                         index=job_pending.idx,
                         sub=0.95,
-                        message=f'Finishing encode for track {job_pending.track_no}…',
+                        message=(
+                            f'Finishing encode for track '
+                            f'{job_pending.track_no}…'
+                        ),
                         total_units=total_units,
                     )
-                written = job_pending.future.result()
+                    with ProgressPulse(_wait_encode_tick):
+                        written = job_pending.future.result()
+                else:
+                    written = job_pending.future.result()
                 primary_out: Path | None = None
                 for dest, out_path in zip(
                     job_pending.dests, written, strict=True
@@ -1646,18 +1721,32 @@ class RipEngine:
                     test_and_copy=job.test_and_copy,
                 )
 
-                self._verify_track_databases(
-                    extracted.copy_wav,
-                    track_no,
-                    ar_verifier=ar_verifier,
-                    ctdb_verifier=ctdb_verifier,
-                    ar_results=ar_results,
-                    ctdb_results=ctdb_results,
-                    log_entry=log_entry,
-                    idx=idx,
-                    total_units=total_units,
-                    report=report,
-                )
+                def _verify_tick(
+                    *, _tn=track_no, _idx=idx
+                ) -> None:
+                    report(
+                        _tn,
+                        RipState.VERIFYING,
+                        index=_idx,
+                        sub=0.84,
+                        message=f'Verifying track {_tn}…',
+                        total_units=total_units,
+                        nudge=True,
+                    )
+
+                with ProgressPulse(_verify_tick):
+                    self._verify_track_databases(
+                        extracted.copy_wav,
+                        track_no,
+                        ar_verifier=ar_verifier,
+                        ctdb_verifier=ctdb_verifier,
+                        ar_results=ar_results,
+                        ctdb_results=ctdb_results,
+                        log_entry=log_entry,
+                        idx=idx,
+                        total_units=total_units,
+                        report=report,
+                    )
 
                 if self._cancelled:
                     finish_pending(abandon=True)
@@ -1685,6 +1774,17 @@ class RipEngine:
                     total_units=total_units,
                 )
 
+                def _encode_activity(msg: str, *, _tn=track_no, _idx=idx) -> None:
+                    report(
+                        _tn,
+                        RipState.ENCODING,
+                        index=_idx,
+                        sub=0.92,
+                        message=msg,
+                        total_units=total_units,
+                        nudge=True,
+                    )
+
                 future = pool.submit(
                     self._encode_wav_to_destinations,
                     extracted.copy_wav,
@@ -1695,6 +1795,7 @@ class RipEngine:
                     disc_track_count=disc_track_count,
                     write_cover=True,
                     on_progress=None,
+                    on_activity=_encode_activity,
                 )
                 pending = _PendingEncode(
                     future=future,
@@ -1793,7 +1894,30 @@ class RipEngine:
                         expected_sectors=sectors,
                     )
                     attempt_stats.merge(st)
-                    test_crc = wav_pcm_crc(test_wav)
+                    report(
+                        track_no,
+                        RipState.RIPPING,
+                        index=idx,
+                        sub=0.33,
+                        message=f'Checking test CRC for track {track_no}…',
+                        total_units=total_units,
+                    )
+
+                    def _test_crc_tick(
+                        *, _tn=track_no, _idx=idx
+                    ) -> None:
+                        report(
+                            _tn,
+                            RipState.RIPPING,
+                            index=_idx,
+                            sub=0.33,
+                            message=f'Checking test CRC for track {_tn}…',
+                            total_units=total_units,
+                            nudge=True,
+                        )
+
+                    with ProgressPulse(_test_crc_tick):
+                        test_crc = wav_pcm_crc(test_wav)
                     self._unlink_quiet(test_wav)
                     if defeat_cache:
                         report(
@@ -1877,7 +2001,30 @@ class RipEngine:
                 attempt_stats.merge(st)
                 pass_elapsed = time.monotonic() - attempt_t0
                 elapsed += pass_elapsed
-                copy_crc = wav_pcm_crc(copy_wav)
+                report(
+                    track_no,
+                    RipState.RIPPING,
+                    index=idx,
+                    sub=0.81,
+                    message=f'Checking CRC for track {track_no}…',
+                    total_units=total_units,
+                )
+
+                def _copy_crc_tick(
+                    *, _tn=track_no, _idx=idx
+                ) -> None:
+                    report(
+                        _tn,
+                        RipState.RIPPING,
+                        index=_idx,
+                        sub=0.81,
+                        message=f'Checking CRC for track {_tn}…',
+                        total_units=total_units,
+                        nudge=True,
+                    )
+
+                with ProgressPulse(_copy_crc_tick):
+                    copy_crc = wav_pcm_crc(copy_wav)
                 # Peak filled later from the shared AR/CTDB PCM pass.
 
                 if not job.test_and_copy:
@@ -2568,21 +2715,32 @@ class RipEngine:
 
         last_overall = 0.0
 
+        progress_lock = threading.Lock()
+
         def report(
             state: RipState,
             frac: float,
             message: str,
+            *,
+            nudge: bool = False,
         ) -> None:
             nonlocal last_overall
             if on_progress is None:
                 return
-            overall = max(last_overall, max(0.0, min(1.0, frac)))
-            last_overall = overall
+            with progress_lock:
+                if nudge:
+                    overall = min(0.995, last_overall + 0.004)
+                else:
+                    overall = max(0.0, min(1.0, frac))
+                    if overall + 1e-9 < last_overall:
+                        overall = min(0.995, last_overall + 0.0025)
+                last_overall = max(last_overall, overall)
+                fraction = last_overall
             on_progress(
                 RipProgress(
                     track_number=0,
                     state=state,
-                    fraction=overall,
+                    fraction=fraction,
                     message=message,
                 )
             )
@@ -2808,7 +2966,17 @@ class RipEngine:
                             max(last_overall, copy_base - 0.02),
                             'Checking image CRC…',
                         )
-                        test_crc = wav_pcm_crc(test_wav)
+
+                        def _img_test_crc_tick() -> None:
+                            report(
+                                RipState.RIPPING,
+                                last_overall,
+                                'Checking image CRC…',
+                                nudge=True,
+                            )
+
+                        with ProgressPulse(_img_test_crc_tick):
+                            test_crc = wav_pcm_crc(test_wav)
                         if job.defeat_audio_cache:
                             report(
                                 RipState.RIPPING,
@@ -2854,7 +3022,17 @@ class RipEngine:
                             last_overall,
                             'Checking image CRC…',
                         )
-                        copy_crc = wav_pcm_crc(copy_wav)
+
+                        def _img_copy_crc_tick() -> None:
+                            report(
+                                RipState.RIPPING,
+                                last_overall,
+                                'Checking image CRC…',
+                                nudge=True,
+                            )
+
+                        with ProgressPulse(_img_copy_crc_tick):
+                            copy_crc = wav_pcm_crc(copy_wav)
                         if test_crc and copy_crc and test_crc == copy_crc:
                             img_matched = True
                             break
@@ -3030,6 +3208,9 @@ class RipEngine:
                         ),
                     )
 
+                def _img_encode_activity(msg: str) -> None:
+                    report(RipState.ENCODING, last_overall, msg, nudge=True)
+
                 try:
                     output_files = self._encode_wav_to_destinations(
                         use_wav,
@@ -3041,6 +3222,7 @@ class RipEngine:
                         write_cover=True,
                         tag_as_image=True,
                         on_progress=_img_progress,
+                        on_activity=_img_encode_activity,
                     )
                 except Exception as enc_exc:
                     return RipResult(
@@ -3514,8 +3696,18 @@ class RipEngine:
             return
 
         report(RipState.VERIFYING, 0.70, 'Loading disc image for verification…')
+
+        def _img_load_tick() -> None:
+            report(
+                RipState.VERIFYING,
+                0.70,
+                'Loading disc image for verification…',
+                nudge=True,
+            )
+
         try:
-            image_pcm = load_cdda_pcm(wav_path)
+            with ProgressPulse(_img_load_tick):
+                image_pcm = load_cdda_pcm(wav_path)
         except Exception as exc:
             msg = f'Image PCM load failed: {exc}'
             log.warning('%s', msg)
