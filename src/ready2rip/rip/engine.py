@@ -31,6 +31,10 @@ from ready2rip.disc.htoa import (
     htoa_display_title,
     is_digitally_silent,
 )
+from ready2rip.disc.overread import (
+    OverreadCapability,
+    offset_margin_sectors,
+)
 from ready2rip.disc.probe import DiscInfo, attach_mmc_toc
 from ready2rip.metadata.providers import AlbumMetadata
 from ready2rip.paths import (
@@ -63,10 +67,6 @@ from ready2rip.rip.riplog import (
     extraction_speed_x,
     title_for_track,
     wav_pcm_crc,
-)
-from ready2rip.disc.overread import (
-    OverreadCapability,
-    offset_margin_sectors,
 )
 from ready2rip.rip.secure import (
     SECURE_MIN_WAV_RATIO,
@@ -3802,14 +3802,8 @@ def _overread_span(
     start = int(start_sector)
     end = int(end_sector)
     off = int(sample_offset)
-    # Positive offset pulls samples from after the window → need lead-out /
-    # next-track audio at the end, and lead-in at the start of the disc.
-    if off > 0:
-        if at_disc_start and overread.lead_in:
-            start -= margin
-        if at_disc_end and overread.lead_out:
-            end += margin
-    elif off < 0:
+    # Non-zero offset needs samples past TOC edges (lead-in / lead-out).
+    if off != 0:
         if at_disc_start and overread.lead_in:
             start -= margin
         if at_disc_end and overread.lead_out:

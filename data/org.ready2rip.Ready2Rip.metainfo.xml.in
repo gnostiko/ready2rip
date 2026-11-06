@@ -29,6 +29,13 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-05">
       <description>
         <p>
+          0.4.24: Same as 0.4.23; fix Ruff import/branch lint that failed CI.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.23" date="2026-11-05">
+      <description>
+        <p>
           0.4.23: Drive overread when available, tighter WAV and CTDB
           quality gates, native AAC VBR, FLAC default level 5.
         </p>
