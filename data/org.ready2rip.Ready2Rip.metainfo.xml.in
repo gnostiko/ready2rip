@@ -29,6 +29,13 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-05">
       <description>
         <p>
+          0.4.26: Keep AAC encode argv helpers free of PyGObject (fix CI).
+        </p>
+      </description>
+    </release>
+    <release version="0.4.25" date="2026-11-05">
+      <description>
+        <p>
           0.4.25: Keep secure-WAV unit tests free of PyGObject (fix CI).
         </p>
       </description>

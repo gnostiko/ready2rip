@@ -23,8 +23,20 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 
-# Quality helpers live in settings.py (GSettings). Import them lazily so
-# flac/opus argv helpers stay usable in CI without PyGObject.
+# Preset IDs mirrored from settings (keep encode helpers gi-free for CI).
+_AAC_QUALITY_IDS = frozenset(
+    {
+        'vbr1',
+        'vbr2',
+        'vbr3',
+        'vbr4',
+        'vbr5',
+        'cbr128',
+        'cbr192',
+        'cbr256',
+        'cbr320',
+    }
+)
 
 # FDK VBR 1–5 → ffmpeg native ``aac`` VBR quality scale (``-q:a``).
 # Higher values ≈ higher bitrate / quality for the native encoder.
@@ -35,6 +47,13 @@ _AAC_VBR_TO_NATIVE_Q = {
     4: 1.7,
     5: 2.0,
 }
+
+
+def _normalize_aac_quality(value: str | None) -> str:
+    raw = (value or '').strip().lower()
+    if raw in _AAC_QUALITY_IDS:
+        return raw
+    return 'cbr256'
 
 
 def flac_encode_argv(
@@ -107,9 +126,7 @@ def aac_encode_argv(
     Presets match the Encoding panel (VBR 1–5 / CBR). No resample, profile
     override, or psychoacoustic tweaks beyond encoder defaults.
     """
-    from ready2rip.settings import normalize_aac_quality
-
-    q = normalize_aac_quality(quality)
+    q = _normalize_aac_quality(quality)
     if use_fdk is None:
         use_fdk = prefer_fdk_aac()
     codec = 'libfdk_aac' if use_fdk else 'aac'
