@@ -68,7 +68,7 @@ MP3_QUALITY_IDS = frozenset(q[0] for q in MP3_QUALITIES)
 OPUS_BITRATES = (96, 128, 160, 192, 256)
 
 # Fraunhofer FDK AAC presets (VBR 1–5) + CBR — smallest quality → largest.
-# Native ffmpeg ``aac`` maps VBR presets to approximate CBR when FDK is absent.
+# Native ffmpeg ``aac`` uses ``-q:a`` for VBR presets when FDK is absent.
 AAC_QUALITIES = (
     ('vbr1', 'VBR 1'),
     ('vbr2', 'VBR 2'),

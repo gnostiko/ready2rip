@@ -2045,17 +2045,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._ripping = False
             return
 
-        from ready2rip.disc.overread import OverreadCapability, probe_overread
-
-        leadout = int(getattr(self._disc, 'leadout_lba', 0) or 0)
-        if leadout <= 0 and self._disc.tracks:
-            last = self._disc.tracks[-1]
-            leadout = int(last.start_sector) + int(last.length_sectors)
-        try:
-            overread = probe_overread(device, leadout_lba=leadout)
-        except Exception:
-            overread = OverreadCapability()
-
         job = RipJob(
             device=device,
             track_numbers=track_numbers,
@@ -2081,7 +2070,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             submit_ctdb=settings.submit_ctdb,
             sample_offset=settings.drive_sample_offset,
             offset_configured=bool(settings.drive_offset_configured),
-            overread=overread,
             disc_info=self._disc,
             disc_track_count=self._disc.track_count,
             burst_fallback=settings.burst_fallback,

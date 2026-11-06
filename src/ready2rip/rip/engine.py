@@ -31,7 +31,12 @@ from ready2rip.disc.htoa import (
     htoa_display_title,
     is_digitally_silent,
 )
-from ready2rip.disc.overread import OverreadCapability, overread_span
+from ready2rip.disc.overread import (
+    OverreadCapability,
+    overread_span,
+    per_track_overread_read_span,
+    probe_overread,
+)
 from ready2rip.disc.probe import DiscInfo, attach_mmc_toc
 from ready2rip.metadata.providers import AlbumMetadata
 from ready2rip.paths import (
@@ -73,6 +78,7 @@ from ready2rip.rip.secure import (
     secure_paranoia_flags,
     wav_size_minimum,
 )
+from ready2rip.rip.wav_trim import trim_wav_to_expected
 from ready2rip.tags.artists import DEFAULT_ARTIST_STYLE
 from ready2rip.tags.writer import TagWriter
 from ready2rip.util import find_cdparanoia, validate_device_path
@@ -323,6 +329,9 @@ class RipEngine:
 
         job.encode_format = fmt
         job.output_directory = base
+
+        # Probe lead-in/out on the worker thread (not the GTK main loop).
+        self._probe_job_overread(job, on_progress)
 
         layout_notes = self._detect_disc_layout(job, on_progress)
 
@@ -1717,6 +1726,7 @@ class RipEngine:
                         job.device,
                         track_no,
                         test_wav,
+                        job=job,
                         expected_bytes=expected,
                         min_ratio=job.min_wav_size_ratio,
                         burst_fallback=False,
@@ -1783,6 +1793,7 @@ class RipEngine:
                     job.device,
                     track_no,
                     copy_wav,
+                    job=job,
                     expected_bytes=expected,
                     min_ratio=job.min_wav_size_ratio,
                     burst_fallback=False if job.test_and_copy else job.burst_fallback,
@@ -1978,6 +1989,7 @@ class RipEngine:
             job.device,
             track_no,
             copy_wav,
+            job=job,
             expected_bytes=expected,
             min_ratio=job.min_wav_size_ratio,
             burst_fallback=False,
@@ -2126,6 +2138,7 @@ class RipEngine:
         track_number: int,
         wav_path: Path,
         *,
+        job: RipJob | None = None,
         expected_bytes: int | None = None,
         min_ratio: float = SECURE_MIN_WAV_RATIO,
         burst_fallback: bool = False,
@@ -2137,11 +2150,41 @@ class RipEngine:
     ) -> tuple[str, ParanoiaStats]:
         """Extract one track. Returns ``(mode, paranoia_stats)``.
 
+        First/last disc tracks use an absolute sector span widened into
+        lead-in/out when the drive can overread (then trimmed to TOC length).
+        Middle tracks keep cdparanoia track-number mode (``-O`` can borrow
+        from neighbors).
+
         *force_mode*:
           - ``None`` — secure first, optional ``-Z`` on extract failure
           - ``'burst'`` — burst only (used after test/copy CRC mismatch)
           - ``'secure'`` — secure only (no burst)
         """
+        edge = _job_per_track_overread_span(job, track_number)
+        if edge is not None:
+            read_start, read_end, toc_expected = edge
+            progress_bytes = 44 + max(0, read_end - read_start) * 2352
+            assert_expected = (
+                expected_bytes if expected_bytes is not None else toc_expected
+            )
+            mode, stats = self._rip_span(
+                device,
+                read_start,
+                read_end,
+                wav_path,
+                expected_bytes=assert_expected,
+                progress_expected_bytes=progress_bytes,
+                min_ratio=min_ratio,
+                burst_fallback=burst_fallback and force_mode != 'secure',
+                force_mode=force_mode,
+                sample_offset=sample_offset,
+                on_burst=on_burst,
+                on_extract_progress=on_extract_progress,
+            )
+            if assert_expected:
+                trim_wav_to_expected(wav_path, int(assert_expected))
+            return mode, stats
+
         secure_timeout = _extract_timeout(expected_bytes, mode='secure')
         burst_timeout = _extract_timeout(expected_bytes, mode='burst')
         expected_frames = max(0, int(expected_sectors)) * FRAMES_PER_SECTOR
@@ -2204,6 +2247,32 @@ class RipEngine:
             what=f'track {track_number}',
         )
 
+    def _probe_job_overread(
+        self,
+        job: RipJob,
+        on_progress: ProgressCallback | None,
+    ) -> None:
+        """Fill ``job.overread`` via MMC READ CD on the rip worker thread."""
+        disc = job.disc_info
+        leadout = int(getattr(disc, 'leadout_lba', 0) or 0) if disc else 0
+        if leadout <= 0 and disc is not None and disc.tracks:
+            last = disc.tracks[-1]
+            leadout = int(last.start_sector) + int(last.length_sectors)
+        if on_progress is not None:
+            on_progress(
+                RipProgress(
+                    track_number=0,
+                    state=RipState.PREPARING,
+                    fraction=0.01,
+                    message='Probing drive overread…',
+                )
+            )
+        try:
+            job.overread = probe_overread(job.device, leadout_lba=leadout)
+        except Exception as exc:
+            log.debug('Overread probe failed: %s', exc)
+            job.overread = OverreadCapability()
+
     def _rip_span(
         self,
         device: str,
@@ -2212,6 +2281,7 @@ class RipEngine:
         wav_path: Path,
         *,
         expected_bytes: int | None = None,
+        progress_expected_bytes: int | None = None,
         min_ratio: float = SECURE_MIN_WAV_RATIO,
         burst_fallback: bool = False,
         force_mode: str | None = None,
@@ -2221,12 +2291,22 @@ class RipEngine:
         timeout_secure: int | None = None,
         timeout_burst: int | None = None,
     ) -> tuple[str, ParanoiaStats]:
-        """Extract a sector span (Copy Image / continuous audio)."""
+        """Extract a sector span (Copy Image / continuous audio).
+
+        *expected_bytes* gates WAV completeness (TOC size).
+        *progress_expected_bytes* should match the actual read span when
+        overread widens the extract (defaults to *expected_bytes*).
+        """
         if timeout_secure is None:
             timeout_secure = _extract_timeout(expected_bytes, mode='secure')
         if timeout_burst is None:
             timeout_burst = _extract_timeout(expected_bytes, mode='burst')
         expected_frames = max(0, int(end_sector) - int(start_sector)) * FRAMES_PER_SECTOR
+        progress_bytes = (
+            expected_bytes
+            if progress_expected_bytes is None
+            else progress_expected_bytes
+        )
 
         def run_secure() -> ParanoiaStats:
             return self._run_cdparanoia_span(
@@ -2240,7 +2320,7 @@ class RipEngine:
                 sample_offset=sample_offset,
                 on_extract_progress=on_extract_progress,
                 expected_frames=expected_frames,
-                expected_bytes=expected_bytes,
+                expected_bytes=progress_bytes,
             )
 
         def run_burst() -> ParanoiaStats:
@@ -2255,7 +2335,7 @@ class RipEngine:
                 sample_offset=sample_offset,
                 on_extract_progress=on_extract_progress,
                 expected_frames=expected_frames,
-                expected_bytes=expected_bytes,
+                expected_bytes=progress_bytes,
             )
 
         if force_mode == 'burst':
@@ -2537,32 +2617,46 @@ class RipEngine:
                         f'Overread span: sectors [{read_start}, {read_end}) '
                         f'(TOC image [{file_start}, {end_sector}))'
                     )
+                read_sectors = max(0, int(read_end) - int(read_start))
+                progress_expected_bytes = 44 + read_sectors * 2352
                 # Secure first. When test & copy is on, do not burst the test
                 # pass — a burst test vs a secure copy is not a real check.
                 span_timeout_secure = max(600, total_sectors // 5)
                 span_timeout_burst = max(300, total_sectors // 15)
+
+                def _img_span(
+                    dest: Path,
+                    *,
+                    force_mode: str | None = None,
+                    on_extract_progress: Callable[[float], None] | None = None,
+                ) -> tuple[str, ParanoiaStats]:
+                    return self._rip_span(
+                        job.device,
+                        read_start,
+                        read_end,
+                        dest,
+                        expected_bytes=expected_bytes,
+                        progress_expected_bytes=progress_expected_bytes,
+                        min_ratio=job.min_wav_size_ratio,
+                        burst_fallback=False,
+                        force_mode=force_mode,
+                        sample_offset=job.sample_offset,
+                        timeout_secure=span_timeout_secure,
+                        timeout_burst=span_timeout_burst,
+                        on_extract_progress=on_extract_progress,
+                    )
+
                 def _img_extract_progress(local: float) -> None:
                     report(
                         RipState.RIPPING,
-                        0.05 + 0.30 * max(0.0, min(1.0, local)),
+                        0.05 + 0.25 * max(0.0, min(1.0, local)),
                         'Extracting disc image…',
                     )
 
                 image_burst_recovered = False
                 try:
-                    mode, img_stats = self._rip_span(
-                        job.device,
-                        read_start,
-                        read_end,
-                        test_wav,
-                        expected_bytes=expected_bytes,
-                        min_ratio=job.min_wav_size_ratio,
-                        # Always secure-first; burst only via explicit recovery.
-                        burst_fallback=False,
-                        sample_offset=job.sample_offset,
-                        timeout_secure=span_timeout_secure,
-                        timeout_burst=span_timeout_burst,
-                        on_extract_progress=_img_extract_progress,
+                    mode, img_stats = _img_span(
+                        test_wav, on_extract_progress=_img_extract_progress
                     )
                 except Exception as first_exc:
                     if not job.burst_fallback or self._cancelled:
@@ -2572,18 +2666,9 @@ class RipEngine:
                         0.12,
                         'Secure image extract failed — burst recovery…',
                     )
-                    mode, img_stats = self._rip_span(
-                        job.device,
-                        read_start,
-                        read_end,
+                    mode, img_stats = _img_span(
                         test_wav,
-                        expected_bytes=expected_bytes,
-                        min_ratio=job.min_wav_size_ratio,
-                        burst_fallback=False,
                         force_mode='burst',
-                        sample_offset=job.sample_offset,
-                        timeout_secure=span_timeout_secure,
-                        timeout_burst=span_timeout_burst,
                         on_extract_progress=_img_extract_progress,
                     )
                     image_burst_recovered = True
@@ -2591,7 +2676,8 @@ class RipEngine:
                         f'Secure image extract failed ({first_exc}); '
                         'recovered in burst mode'
                     )
-                _trim_wav_to_expected(test_wav, expected_bytes)
+                report(RipState.RIPPING, last_overall, 'Trimming disc image…')
+                trim_wav_to_expected(test_wav, expected_bytes)
                 if mode == 'burst' or image_burst_recovered:
                     mode = 'burst'
                     notes.append(
@@ -2615,10 +2701,16 @@ class RipEngine:
                     for img_attempt in range(img_attempts):
                         if self._cancelled:
                             break
+                        # Keep retry fractions above the prior high-water so
+                        # monotonic progress still moves during re-extract.
+                        extract_base = 0.05 if img_attempt == 0 else 0.66
+                        extract_span = 0.25 if img_attempt == 0 else 0.08
+                        copy_base = 0.32 if img_attempt == 0 else 0.75
+                        copy_span = 0.28 if img_attempt == 0 else 0.08
                         if img_attempt > 0:
                             report(
                                 RipState.RIPPING,
-                                0.30,
+                                extract_base,
                                 f'Retrying disc image test & copy '
                                 f'(attempt {img_attempt + 1})…',
                             )
@@ -2629,33 +2721,42 @@ class RipEngine:
                                 avoid_start=file_start,
                                 avoid_end=end_sector,
                             )
-                            def _img_retry_progress(local: float) -> None:
+
+                            def _img_retry_progress(
+                                local: float,
+                                *,
+                                _base=extract_base,
+                                _span=extract_span,
+                            ) -> None:
                                 report(
                                     RipState.RIPPING,
-                                    0.20 + 0.15 * max(0.0, min(1.0, local)),
+                                    _base + _span * max(0.0, min(1.0, local)),
                                     'Retrying disc image…',
                                 )
 
-                            mode, retry_stats = self._rip_span(
-                                job.device,
-                                read_start,
-                                read_end,
+                            mode, retry_stats = _img_span(
                                 test_wav,
-                                expected_bytes=expected_bytes,
-                                min_ratio=job.min_wav_size_ratio,
-                                burst_fallback=False,
-                                sample_offset=job.sample_offset,
-                                timeout_secure=span_timeout_secure,
-                                timeout_burst=span_timeout_burst,
                                 on_extract_progress=_img_retry_progress,
                             )
                             img_stats.merge(retry_stats)
-                            _trim_wav_to_expected(test_wav, expected_bytes)
+                            report(
+                                RipState.RIPPING,
+                                last_overall,
+                                'Trimming disc image…',
+                            )
+                            trim_wav_to_expected(test_wav, expected_bytes)
 
+                        report(
+                            RipState.RIPPING,
+                            max(last_overall, copy_base - 0.02),
+                            'Checking image CRC…',
+                        )
                         test_crc = wav_pcm_crc(test_wav)
                         if job.defeat_audio_cache:
                             report(
-                                RipState.RIPPING, 0.35, 'Defeating drive cache…'
+                                RipState.RIPPING,
+                                max(last_overall, copy_base - 0.01),
+                                'Defeating drive cache…',
                             )
                             flush_drive_cache(
                                 job.device,
@@ -2664,31 +2765,38 @@ class RipEngine:
                                 avoid_end=end_sector,
                             )
                         report(
-                            RipState.RIPPING, 0.40, 'Copy pass for disc image…'
+                            RipState.RIPPING,
+                            copy_base,
+                            'Copy pass for disc image…',
                         )
 
-                        def _img_copy_progress(local: float) -> None:
+                        def _img_copy_progress(
+                            local: float,
+                            *,
+                            _base=copy_base,
+                            _span=copy_span,
+                        ) -> None:
                             report(
                                 RipState.RIPPING,
-                                0.40 + 0.25 * max(0.0, min(1.0, local)),
+                                _base + _span * max(0.0, min(1.0, local)),
                                 'Copy pass for disc image…',
                             )
 
-                        copy_mode, copy_stats = self._rip_span(
-                            job.device,
-                            read_start,
-                            read_end,
-                            copy_wav,
-                            expected_bytes=expected_bytes,
-                            min_ratio=job.min_wav_size_ratio,
-                            burst_fallback=False,
-                            sample_offset=job.sample_offset,
-                            timeout_secure=span_timeout_secure,
-                            timeout_burst=span_timeout_burst,
-                            on_extract_progress=_img_copy_progress,
+                        copy_mode, copy_stats = _img_span(
+                            copy_wav, on_extract_progress=_img_copy_progress
                         )
                         img_stats.merge(copy_stats)
-                        _trim_wav_to_expected(copy_wav, expected_bytes)
+                        report(
+                            RipState.RIPPING,
+                            last_overall,
+                            'Trimming disc image…',
+                        )
+                        trim_wav_to_expected(copy_wav, expected_bytes)
+                        report(
+                            RipState.RIPPING,
+                            last_overall,
+                            'Checking image CRC…',
+                        )
                         copy_crc = wav_pcm_crc(copy_wav)
                         if test_crc and copy_crc and test_crc == copy_crc:
                             img_matched = True
@@ -2707,7 +2815,7 @@ class RipEngine:
                         if job.burst_fallback and not self._cancelled:
                             report(
                                 RipState.RIPPING,
-                                0.45,
+                                max(last_overall, 0.84),
                                 'Image test & copy failed — burst recovery…',
                             )
                             flush_drive_cache(
@@ -2716,21 +2824,26 @@ class RipEngine:
                                 avoid_start=file_start,
                                 avoid_end=end_sector,
                             )
-                            copy_mode, burst_stats = self._rip_span(
-                                job.device,
-                                read_start,
-                                read_end,
+
+                            def _img_burst_progress(local: float) -> None:
+                                report(
+                                    RipState.RIPPING,
+                                    0.84 + 0.08 * max(0.0, min(1.0, local)),
+                                    'Burst recovery for disc image…',
+                                )
+
+                            copy_mode, burst_stats = _img_span(
                                 copy_wav,
-                                expected_bytes=expected_bytes,
-                                min_ratio=job.min_wav_size_ratio,
-                                burst_fallback=False,
                                 force_mode='burst',
-                                sample_offset=job.sample_offset,
-                                timeout_secure=span_timeout_secure,
-                                timeout_burst=span_timeout_burst,
+                                on_extract_progress=_img_burst_progress,
                             )
                             img_stats.merge(burst_stats)
-                            _trim_wav_to_expected(copy_wav, expected_bytes)
+                            report(
+                                RipState.RIPPING,
+                                last_overall,
+                                'Trimming disc image…',
+                            )
+                            trim_wav_to_expected(copy_wav, expected_bytes)
                             mode = 'burst'
                             notes.append(
                                 f'Image test/copy CRC mismatch '
@@ -3697,6 +3810,33 @@ def _track_avoid_span(
     return None, None
 
 
+def _job_per_track_overread_span(
+    job: RipJob | None, track_no: int
+) -> tuple[int, int, int] | None:
+    """Job-aware wrapper around :func:`per_track_overread_read_span`."""
+    if job is None:
+        return None
+    disc = job.disc_info
+    if disc is None or not disc.tracks:
+        return None
+    toc = None
+    for t in disc.tracks:
+        if t.number == track_no:
+            toc = t
+            break
+    if toc is None:
+        return None
+    return per_track_overread_read_span(
+        track_no=track_no,
+        track_start=int(toc.start_sector),
+        track_length=int(toc.length_sectors),
+        first_track_no=int(disc.tracks[0].number),
+        last_track_no=int(disc.tracks[-1].number),
+        sample_offset=job.sample_offset,
+        overread=job.overread,
+    )
+
+
 def _unique_album_dirs(outputs: list[Path], album_dir: Path | None) -> list[Path]:
     """Album folders that should receive data-track .bin copies."""
     dirs: list[Path] = []
@@ -3784,36 +3924,6 @@ def _image_track_pcm(
     if length <= 0 or start >= len(image_pcm):
         return b''
     return image_pcm[start : min(start + length, len(image_pcm))]
-
-
-def _trim_wav_to_expected(path: Path, expected_bytes: int) -> None:
-    """Crop an over-long CDDA WAV back to the TOC-expected byte size."""
-    expected = int(expected_bytes)
-    if expected <= 44 or not path.is_file():
-        return
-    try:
-        size = path.stat().st_size
-    except OSError:
-        return
-    if size <= expected:
-        return
-    import wave
-
-    pcm_bytes = expected - 44
-    if pcm_bytes <= 0:
-        return
-    try:
-        with wave.open(str(path), 'rb') as reader:
-            params = reader.getparams()
-            frames = reader.readframes(reader.getnframes())
-        frames = frames[:pcm_bytes]
-        if len(frames) < pcm_bytes:
-            frames = frames + (b'\x00' * (pcm_bytes - len(frames)))
-        with wave.open(str(path), 'wb') as writer:
-            writer.setparams(params)
-            writer.writeframes(frames)
-    except Exception as exc:
-        log.warning('WAV trim failed for %s: %s', path, exc)
 
 
 def _summarize_ar(results: list[AccurateRipResult]) -> str:

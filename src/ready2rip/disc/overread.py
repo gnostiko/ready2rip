@@ -78,6 +78,44 @@ def overread_span(
     return start, end
 
 
+def per_track_overread_read_span(
+    *,
+    track_no: int,
+    track_start: int,
+    track_length: int,
+    first_track_no: int,
+    last_track_no: int,
+    sample_offset: int,
+    overread: OverreadCapability,
+) -> tuple[int, int, int] | None:
+    """Return ``(read_start, read_end, toc_expected_bytes)`` for edge overread.
+
+    Only the first/last audio tracks need lead-in/out samples for ``-O``.
+    Middle tracks keep track-number extraction (neighbors supply offset audio).
+    Returns ``None`` when span extract is unnecessary.
+    """
+    if int(sample_offset) == 0 or not overread.any:
+        return None
+    at_start = int(track_no) == int(first_track_no)
+    at_end = int(track_no) == int(last_track_no)
+    if not at_start and not at_end:
+        return None
+    toc_start = int(track_start)
+    toc_end = toc_start + int(track_length)
+    read_start, read_end = overread_span(
+        toc_start,
+        toc_end,
+        sample_offset=sample_offset,
+        overread=overread,
+        at_disc_start=at_start,
+        at_disc_end=at_end,
+    )
+    if (read_start, read_end) == (toc_start, toc_end):
+        return None
+    toc_expected = 44 + int(track_length) * 2352
+    return read_start, read_end, toc_expected
+
+
 def probe_overread(
     device: str,
     *,

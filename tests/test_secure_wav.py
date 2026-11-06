@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import struct
+import wave
+from pathlib import Path
 from types import SimpleNamespace
 
 from ready2rip.disc.overread import (
@@ -17,6 +20,7 @@ from ready2rip.rip.secure import (
     SECURE_WAV_SHORT_BYTES,
     wav_size_minimum,
 )
+from ready2rip.rip.wav_trim import trim_wav_to_expected
 
 
 def test_wav_size_minimum_exact_with_one_sector_slack() -> None:
@@ -57,6 +61,62 @@ def test_overread_span_expands_when_capable() -> None:
         at_disc_end=True,
     )
     assert (start2, end2) == (0, 1000)
+
+
+def test_per_track_overread_only_widens_disc_edges() -> None:
+    from ready2rip.disc.overread import per_track_overread_read_span
+
+    over = OverreadCapability(lead_in=True, lead_out=True)
+    first = per_track_overread_read_span(
+        track_no=1,
+        track_start=0,
+        track_length=100,
+        first_track_no=1,
+        last_track_no=3,
+        sample_offset=667,
+        overread=over,
+    )
+    middle = per_track_overread_read_span(
+        track_no=2,
+        track_start=100,
+        track_length=200,
+        first_track_no=1,
+        last_track_no=3,
+        sample_offset=667,
+        overread=over,
+    )
+    last = per_track_overread_read_span(
+        track_no=3,
+        track_start=300,
+        track_length=300,
+        first_track_no=1,
+        last_track_no=3,
+        sample_offset=667,
+        overread=over,
+    )
+    assert first is not None and first[0] < 0
+    assert middle is None
+    assert last is not None and last[1] > 600
+
+
+def test_trim_wav_to_expected_in_place(tmp_path: Path) -> None:
+    path = tmp_path / 'img.wav'
+    toc_pcm = 2352 * 10
+    over_pcm = toc_pcm + 2352 * 2
+    with wave.open(str(path), 'wb') as writer:
+        writer.setnchannels(2)
+        writer.setsampwidth(2)
+        writer.setframerate(44100)
+        writer.writeframes(b'\x01\x02' * (over_pcm // 2))
+    expected = 44 + toc_pcm
+    assert path.stat().st_size > expected
+    trim_wav_to_expected(path, expected)
+    assert path.stat().st_size == expected
+    with path.open('rb') as handle:
+        header = handle.read(44)
+    assert header[0:4] == b'RIFF'
+    assert struct.unpack_from('<I', header, 4)[0] == expected - 8
+    assert struct.unpack_from('<I', header, 40)[0] == toc_pcm
 
 
 def test_ctdb_submit_quality_requires_clean_paranoia() -> None:
