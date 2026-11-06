@@ -47,10 +47,12 @@ def run_paranoia_streaming(
 
     Stderr is read in non-blocking chunks (never ``readline``) so a partial
     line cannot freeze the loop — WAV polling and activity creep keep running.
+    A small floor is emitted at process start so seek/startup stalls still
+    surface in the UI; creep continues from zero if frames have not arrived.
 
     Measured write progress is scaled into ``0 … _WRITE_PROGRESS_SPAN`` so
-    activity creep can still advance the bar during paranoia's re-verify pass
-    after the WAV has stopped growing.
+    activity creep can still advance during paranoia's re-verify pass after
+    the WAV has stopped growing.
     """
     run_cmd = list(cmd)
     stdbuf = shutil.which('stdbuf')
@@ -65,6 +67,7 @@ def run_paranoia_streaming(
     # Measured high-water from WAV / forward frames (already scaled).
     measured_frac = 0.0
     last_measure_at = 0.0
+    started_at = time.monotonic()
     pcm_expected = (
         max(0, int(expected_bytes) - 44)
         if expected_bytes is not None and expected_bytes > 44
@@ -104,16 +107,20 @@ def run_paranoia_streaming(
         emit(_WRITE_PROGRESS_SPAN * raw, measured=True)
 
     def emit_activity_creep() -> None:
-        """Nudge the bar when paranoia is busy but WAV/frames are not advancing."""
-        if on_extract_progress is None or last_frac < 0.02:
+        """Nudge progress when paranoia is busy but WAV/frames are quiet."""
+        if on_extract_progress is None:
             return
         now = time.monotonic()
-        # Start creeping sooner; secure re-verify can sit with a full WAV for minutes.
+        # Seek / startup before any frames: seed a floor so status stays live.
+        if last_frac < 0.0:
+            if (now - started_at) < 0.35:
+                return
+            emit(0.01, measured=False)
+            return
         if last_measure_at <= 0.0 or (now - last_measure_at) < 0.35:
             return
         if (now - last_emit) < 0.15:
             return
-        # ~5%/s toward 0.99 after the measured high-water stalls.
         creep = min(0.99, last_frac + 0.01)
         if creep <= last_frac + 1e-9:
             return
@@ -176,6 +183,8 @@ def run_paranoia_streaming(
         assert proc.stderr is not None
         fd = proc.stderr.fileno()
         os.set_blocking(fd, False)
+        # Immediate floor so the UI leaves "Starting…" before the first frame.
+        emit(0.01, measured=True)
         deadline = time.monotonic() + timeout if timeout is not None else None
         while True:
             if cancelled():

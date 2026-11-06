@@ -122,23 +122,59 @@ print("##: 15 [finished] @ 23520", flush=True, file=sys.stderr)
     assert max(after_write) >= _WRITE_PROGRESS_SPAN + 0.01
 
 
-def test_per_track_step_fraction() -> None:
-    """Banner fill advances only when a track rip completes (sub=1.0)."""
-    n_tracks = 12
-    fractions: list[float] = []
+def test_run_paranoia_seeds_progress_before_frames(tmp_path: Path) -> None:
+    """Startup floor + creep must fire even when -e frames are delayed."""
+    script = tmp_path / 'fake_paranoia_seek.py'
+    wav = tmp_path / 'track.wav'
+    script.write_text(
+        '''\
+import sys
+import time
+from pathlib import Path
+
+out = Path(sys.argv[1])
+time.sleep(1.0)
+header = b"RIFFxxxxWAVEfmt " + bytes(28)
+out.write_bytes(header + b"\\x00" * (2352 * 8))
+print("##: 0 [read] @ 0", flush=True, file=sys.stderr)
+print("##: 0 [read] @ 8000", flush=True, file=sys.stderr)
+print("##: 15 [finished] @ 8000", flush=True, file=sys.stderr)
+''',
+        encoding='utf-8',
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+
+    seen: list[float] = []
+    stats = run_paranoia_streaming(
+        [sys.executable, str(script), str(wav)],
+        what='fake paranoia seek',
+        timeout=10,
+        on_extract_progress=seen.append,
+        expected_frames=8_000,
+        wav_path=wav,
+        expected_bytes=44 + 2352 * 8,
+    )
+    assert stats.finished or stats.reads >= 1
+    assert seen, 'expected startup progress before frames'
+    assert seen[0] <= 0.02 + 1e-9
+    assert seen == sorted(seen)
+    assert seen[-1] == 1.0
+
+
+def test_continuous_unit_progress_is_monotonic() -> None:
+    """Whole-rip fill must advance during a track, not only at DONE."""
+    from ready2rip.rip.progress_map import normalize_unit_weights, overall_fraction
+
+    weights = normalize_unit_weights([100, 100, 100, 100])
     last = 0.0
-    for i in range(n_tracks):
-        # Mid-rip status updates must not move the fill.
-        mid = max(last, i / n_tracks)
-        last = mid
-        fractions.append(mid)
-        # Track finished → jump to (i+1)/n.
-        done = max(last, (i + 1) / n_tracks)
-        last = done
-        fractions.append(done)
-    assert fractions[0] == 0.0
-    assert abs(fractions[-1] - 1.0) < 1e-9
-    # Exactly one distinct step per completed track.
-    steps = sorted({round(f, 6) for f in fractions})
-    assert len(steps) == n_tracks + 1
-    assert steps == [round(i / n_tracks, 6) for i in range(n_tracks + 1)]
+    samples: list[float] = []
+    for index in range(4):
+        for sub in (0.0, 0.25, 0.5, 0.8, 1.0):
+            frac = overall_fraction(index, sub, weights)
+            assert frac + 1e-9 >= last
+            last = frac
+            samples.append(frac)
+    assert samples[0] == 0.0
+    assert abs(samples[-1] - 1.0) < 1e-9
+    # Mid-track samples exist between unit boundaries.
+    assert any(0.05 < f < 0.24 for f in samples)

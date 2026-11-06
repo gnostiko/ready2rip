@@ -216,6 +216,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         # Last Custom templates (kept when switching to presets; restored on Custom).
         self._custom_album_folder_template = ''
         self._custom_filename_template = ''
+        # Last lossy-encode custom root (cleared from the entry when leaving Custom).
+        self._custom_also_directory = ''
         # Lead (#) and Time stay locked; Title|Artist use a fixed 50/50 grid
         # so column headers do not drift when the window is resized.
         self._track_lead_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
@@ -258,6 +260,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._poll_in_flight = False
         self._pending_progress: RipProgress | None = None
         self._progress_idle_id: int | None = None
+        self._progress_queue_lock = threading.Lock()
         self._banner_shown = 0.0
         self._banner_target = 0.0
         self._banner_css_frac = -1.0
@@ -902,7 +905,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._add_option_row(self._quality_row, self.encoding_group)
 
         self._also_encode_row = Adw.SwitchRow(
-            title='Also encode',
+            title='Also encode lossy',
             active=bool(settings.also_encode),
         )
         self._also_encode_row.set_tooltip_text(
@@ -913,7 +916,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         )
         self._add_option_row(self._also_encode_row, self.encoding_group)
 
-        self._also_format_row = Adw.ComboRow(title='Also format')
+        self._also_format_row = Adw.ComboRow(title='Lossy format')
         self._also_format_row.set_model(
             Gtk.StringList.new([label for _id, label in ALSO_ENCODERS])
         )
@@ -930,13 +933,13 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         )
         self._add_option_row(self._also_format_row, self.encoding_group)
 
-        self._also_quality_row = Adw.ComboRow(title='Also quality')
+        self._also_quality_row = Adw.ComboRow(title='Lossy quality')
         self._also_quality_row.connect(
             'notify::selected', self._on_also_quality_changed
         )
         self._add_option_row(self._also_quality_row, self.encoding_group)
 
-        self._also_folder_row = Adw.ComboRow(title='Also folder')
+        self._also_folder_row = Adw.ComboRow(title='Lossy folder')
         self._also_folder_row.set_model(
             Gtk.StringList.new([label for _id, label in ALSO_FOLDER_LAYOUTS])
         )
@@ -958,15 +961,19 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         )
         self._add_option_row(self._also_folder_row, self.encoding_group)
 
-        also_dir_default = (
-            (settings.also_encode_directory or '').strip()
-            or settings.output_directory
-            or default_out
-        )
-        self._also_directory_row = Adw.EntryRow(title='Also output folder')
-        self._also_directory_row.set_text(also_dir_default)
+        also_dir_default = (settings.also_encode_directory or '').strip()
+        self._custom_also_directory = also_dir_default
+        self._also_directory_row = Adw.EntryRow(title='Lossy output folder')
+        if (
+            normalize_also_encode_folder(settings.also_encode_folder)
+            == 'custom_folder'
+            and also_dir_default
+        ):
+            self._also_directory_row.set_text(also_dir_default)
+        else:
+            self._also_directory_row.set_text('')
         self._also_directory_row.set_tooltip_text(
-            'Root folder for the secondary encode when Also folder is Custom'
+            'Root folder for the secondary encode when Lossy folder is Custom'
         )
         self._also_directory_row.connect(
             'changed', self._on_also_directory_changed
@@ -1038,7 +1045,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._add_option_row(self._folder_template_row, self.files_group)
         self._add_option_row(self._filename_scheme_row, self.files_group)
         self._add_option_row(self._filename_row, self.files_group)
-        self._sync_naming_template_sensitivity()
+        self._sync_naming_scheme_ui()
 
         self._artist_style_row = Adw.ComboRow(title='Multiple artists')
         self._artist_style_row.set_model(
@@ -1345,7 +1352,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 )
             except ValueError:
                 self._artist_style_row.set_selected(0)
-            self._sync_naming_template_sensitivity()
+            self._sync_naming_scheme_ui()
             try:
                 self._encoder_row.set_selected(ids.index(settings.encode_format))
             except ValueError:
@@ -1370,12 +1377,16 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 )
             except ValueError:
                 self._also_folder_row.set_selected(0)
-            also_dir = (
-                (settings.also_encode_directory or '').strip()
-                or settings.output_directory
-                or default_out
-            )
-            self._also_directory_row.set_text(also_dir)
+            also_dir = (settings.also_encode_directory or '').strip()
+            self._custom_also_directory = also_dir
+            if (
+                normalize_also_encode_folder(settings.also_encode_folder)
+                == 'custom_folder'
+                and also_dir
+            ):
+                self._also_directory_row.set_text(also_dir)
+            else:
+                self._also_directory_row.set_text('')
             self._sync_encoding_ui()
             self._offset_row.set_value(settings.drive_sample_offset)
             self._update_calibration_row()
@@ -1693,8 +1704,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         else:
             row.set_tooltip_text(None)
 
-    def _sync_naming_template_sensitivity(self) -> None:
-        """Template entries are editable only while Scheme is Custom."""
+    def _sync_naming_scheme_ui(self) -> None:
+        """Show custom template fields only while Scheme is Custom…"""
         folder_row = getattr(self, '_folder_scheme_row', None)
         folder_entry = getattr(self, '_folder_template_row', None)
         file_row = getattr(self, '_filename_scheme_row', None)
@@ -1707,7 +1718,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             0 <= folder_idx < len(FOLDER_SCHEMES)
             and FOLDER_SCHEMES[folder_idx].id == 'custom'
         )
-        folder_entry.set_sensitive(folder_custom)
+        folder_entry.set_visible(folder_custom)
         if not folder_custom and folder_entry.get_text():
             self._with_handler_blocked(
                 folder_entry,
@@ -1720,7 +1731,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             0 <= file_idx < len(FILENAME_SCHEMES)
             and FILENAME_SCHEMES[file_idx].id == 'custom'
         )
-        file_entry.set_sensitive(file_custom)
+        file_entry.set_visible(file_custom)
         if not file_custom and file_entry.get_text():
             self._with_handler_blocked(
                 file_entry,
@@ -1776,7 +1787,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._with_handler_blocked(
                 combo, combo_handler, lambda: combo.set_selected(idx)
             )
-        self._sync_naming_template_sensitivity()
+        self._sync_naming_scheme_ui()
 
     def _apply_naming_template_edit(
         self,
@@ -1795,7 +1806,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             return
         setattr(self, custom_attr, text)
         self.store.update(**{store_key: text or default_template})
-        self._sync_naming_template_sensitivity()
+        self._sync_naming_scheme_ui()
 
     def _on_folder_scheme_changed(self, row: Adw.ComboRow, *_args) -> None:
         self._apply_naming_scheme_selection(
@@ -1874,32 +1885,57 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
     def _on_also_folder_changed(self, row: Adw.ComboRow, *_args) -> None:
         idx = row.get_selected()
-        if 0 <= idx < len(self._also_folders):
-            self.store.update(also_encode_folder=self._also_folders[idx])
-            self._sync_encoding_ui()
+        if not (0 <= idx < len(self._also_folders)):
+            return
+        folder_id = self._also_folders[idx]
+        self.store.update(also_encode_folder=folder_id)
+        if folder_id == 'custom_folder':
+            remembered = (self._custom_also_directory or '').strip()
+            self._with_handler_blocked(
+                self._also_directory_row,
+                self._on_also_directory_changed,
+                lambda: self._also_directory_row.set_text(remembered),
+            )
+            if remembered:
+                self.store.update(also_encode_directory=remembered)
+        else:
+            # Leave Custom — clear the entry so a later Custom pick starts clean
+            # unless the user restores a remembered path above.
+            self._with_handler_blocked(
+                self._also_directory_row,
+                self._on_also_directory_changed,
+                lambda: self._also_directory_row.set_text(''),
+            )
+        self._sync_encoding_ui()
 
     def _on_also_directory_changed(self, row: Adw.EntryRow) -> None:
         text = row.get_text().strip()
-        if not text:
-            text = (
-                self._output_row.get_text().strip()
-                or default_output_directory()
-            )
-            row.set_text(text)
+        self._custom_also_directory = text
         self.store.update(also_encode_directory=text)
 
     def _on_choose_also_directory(self, *_args) -> None:
         current = (
             self._also_directory_row.get_text().strip()
+            or self._custom_also_directory
             or self._output_row.get_text().strip()
             or default_output_directory()
         )
 
         def on_path(path: str) -> None:
-            self._also_directory_row.set_text(path)
+            # Replace any previous path entirely (do not append / leave stale text).
+            def apply() -> None:
+                self._also_directory_row.set_text('')
+                self._also_directory_row.set_text(path)
+
+            self._with_handler_blocked(
+                self._also_directory_row,
+                self._on_also_directory_changed,
+                apply,
+            )
+            self._custom_also_directory = path
             self.store.update(also_encode_directory=path)
 
-        self._choose_folder('Also output folder', current, on_path)
+        self._choose_folder('Lossy output folder', current, on_path)
 
     def _on_offset_changed(self, row: Adw.SpinRow) -> None:
         device = self.store.get().device or self._device or '/dev/sr0'
@@ -2525,20 +2561,22 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             )
 
     def _queue_rip_progress(self, progress: RipProgress) -> None:
-        """Coalesce extract progress onto the next GTK idle."""
-        self._pending_progress = progress
-        if self._progress_idle_id is not None:
-            return
-        # DEFAULT (not DEFAULT_IDLE) so the banner keeps up under UI load.
-        self._progress_idle_id = GLib.idle_add(
-            self._flush_rip_progress,
-            priority=GLib.PRIORITY_DEFAULT,
-        )
+        """Coalesce extract/encode progress onto the next GTK idle."""
+        with self._progress_queue_lock:
+            self._pending_progress = progress
+            if self._progress_idle_id is not None:
+                return
+            # DEFAULT (not DEFAULT_IDLE) so the banner keeps up under UI load.
+            self._progress_idle_id = GLib.idle_add(
+                self._flush_rip_progress,
+                priority=GLib.PRIORITY_DEFAULT,
+            )
 
     def _flush_rip_progress(self) -> bool:
-        self._progress_idle_id = None
-        progress = self._pending_progress
-        self._pending_progress = None
+        with self._progress_queue_lock:
+            self._progress_idle_id = None
+            progress = self._pending_progress
+            self._pending_progress = None
         if progress is not None:
             self._on_rip_progress(progress)
         return GLib.SOURCE_REMOVE

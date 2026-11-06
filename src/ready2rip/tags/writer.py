@@ -1,11 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Write tags, ReplayGain, and embedded pictures via mutagen.
-
-Core fields written (plus title for usable track identity):
-  Album, Artist, Album Artist, Track N/Total, Disc N/Total, Genre, Label,
-  Date, Barcode, ISRC (when known), Compilation (when needed), and ReplayGain.
-  MusicBrainz IDs / catalog / country / MEDIA are not written.
-"""
+"""Write tags, ReplayGain, and embedded pictures via mutagen."""
 
 from __future__ import annotations
 
@@ -13,6 +7,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+from ready2rip.config import APPLICATION_NAME, APPLICATION_VERSION
 from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
 from ready2rip.paths import track_meta_for
 from ready2rip.tags.artists import (
@@ -27,6 +22,11 @@ from ready2rip.tags.artists import (
 from ready2rip.util import normalize_release_date
 
 log = logging.getLogger(__name__)
+
+
+def ripper_tag_value() -> str:
+    """Encoded-by string: ``ready2rip <version>``."""
+    return f'{APPLICATION_NAME} {APPLICATION_VERSION}'
 
 
 @dataclass
@@ -49,12 +49,11 @@ class TagWriter:
         total_tracks: int | None = None,
         artist_style: str | None = DEFAULT_ARTIST_STYLE,
         image: bool = False,
+        encoded_by: str | None = None,
     ) -> None:
         """Tag an encoded file.
 
-        When *image* is True (Copy Image / single continuous file), write
-        album-level identity only: album title as TITLE, album artist, date,
-        barcode, disc — no track number and no ISRC (those live in the CUE).
+        When *image* is True, write album-level identity only (no track/ISRC).
         """
         suffix = path.suffix.lower()
         style = normalize_artist_style(artist_style)
@@ -94,6 +93,7 @@ class TagWriter:
             track_number=track_number,
             total_tracks=total,
             album_meta=album,
+            encoded_by=(encoded_by or '').strip() or None,
         )
 
         if suffix == '.flac':
@@ -316,6 +316,7 @@ class TagWriter:
         track_number: int,
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
+        encoded_by: str | None = None,
     ) -> None:
         audio['TITLE'] = [title]
         audio['ARTIST'] = artists
@@ -353,6 +354,10 @@ class TagWriter:
             audio.pop('ISRC', None)
         if _is_compilation(album_meta):
             audio['COMPILATION'] = ['1']
+        if encoded_by:
+            audio['ENCODER'] = [encoded_by]
+        else:
+            audio.pop('ENCODER', None)
 
     def _tag_mp4(
         self,
@@ -365,6 +370,7 @@ class TagWriter:
         track_number: int,
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
+        encoded_by: str | None = None,
     ) -> None:
         from mutagen.mp4 import MP4, MP4FreeForm
 
@@ -404,6 +410,10 @@ class TagWriter:
             del audio[isrc_key]
         if _is_compilation(album_meta):
             audio['cpil'] = [True]
+        if encoded_by:
+            audio['\xa9too'] = [encoded_by]
+        elif '\xa9too' in audio:
+            del audio['\xa9too']
         audio.save()
 
     def _tag_mp3(
@@ -417,12 +427,14 @@ class TagWriter:
         track_number: int,
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
+        encoded_by: str | None = None,
     ) -> None:
         from mutagen.id3 import (
             ID3,
             TALB,
             TCON,
             TDRC,
+            TENC,
             TIT2,
             TPE1,
             TPE2,
@@ -451,6 +463,7 @@ class TagWriter:
             'TCMP',
             'TDRC',
             'TSRC',
+            'TENC',
         ):
             tags.delall(frame)
         tags.delall('TXXX:BARCODE')
@@ -490,6 +503,8 @@ class TagWriter:
                 tags.delall('TXXX:COMPILATION')
                 tags.add(TXXX(encoding=3, desc='COMPILATION', text=['1']))
         tags.delall('TXXX:LABEL')
+        if encoded_by:
+            tags.add(TENC(encoding=3, text=encoded_by))
         audio.save(v2_version=4)
 
     def _tag_wav(
@@ -503,6 +518,7 @@ class TagWriter:
         track_number: int,
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
+        encoded_by: str | None = None,
     ) -> None:
         try:
             from mutagen.wave import WAVE
@@ -519,6 +535,7 @@ class TagWriter:
                 TALB,
                 TCON,
                 TDRC,
+                TENC,
                 TIT2,
                 TPE1,
                 TPE2,
@@ -560,6 +577,9 @@ class TagWriter:
                 isrc = _track_isrc(album_meta, track_number)
                 if isrc:
                     tags.add(TSRC(encoding=3, text=isrc))
+            if encoded_by:
+                tags.delall('TENC')
+                tags.add(TENC(encoding=3, text=encoded_by))
             audio.save()
         except Exception:
             log.debug('WAV tagging failed for %s', path, exc_info=True)

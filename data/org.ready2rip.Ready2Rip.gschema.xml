@@ -50,19 +50,19 @@
 
     <key name="mp3-quality" type="s">
       <choices>
-        <choice value="v0"/>
-        <choice value="v1"/>
-        <choice value="v2"/>
-        <choice value="v3"/>
-        <choice value="v4"/>
         <choice value="v5"/>
-        <choice value="cbr320"/>
-        <choice value="cbr256"/>
-        <choice value="cbr192"/>
+        <choice value="v4"/>
+        <choice value="v3"/>
+        <choice value="v2"/>
+        <choice value="v1"/>
+        <choice value="v0"/>
         <choice value="cbr128"/>
+        <choice value="cbr192"/>
+        <choice value="cbr256"/>
+        <choice value="cbr320"/>
       </choices>
       <default>'v0'</default>
-      <summary>MP3 quality (LAME VBR -Vn or CBR)</summary>
+      <summary>MP3 quality (LAME VBR -Vn or CBR; lowest → highest)</summary>
     </key>
 
     <!-- Legacy; migrated to mp3-quality on read. -->
@@ -74,18 +74,18 @@
 
     <key name="aac-quality" type="s">
       <choices>
-        <choice value="vbr5"/>
-        <choice value="vbr4"/>
-        <choice value="vbr3"/>
-        <choice value="vbr2"/>
         <choice value="vbr1"/>
-        <choice value="cbr320"/>
-        <choice value="cbr256"/>
-        <choice value="cbr192"/>
+        <choice value="vbr2"/>
+        <choice value="vbr3"/>
+        <choice value="vbr4"/>
+        <choice value="vbr5"/>
         <choice value="cbr128"/>
+        <choice value="cbr192"/>
+        <choice value="cbr256"/>
+        <choice value="cbr320"/>
       </choices>
       <default>'cbr256'</default>
-      <summary>AAC quality preset (FDK VBR 1–5 or CBR)</summary>
+      <summary>AAC quality preset (FDK VBR 1–5 or CBR; lowest → highest)</summary>
     </key>
 
     <key name="aac-bitrate" type="i">
@@ -102,7 +102,7 @@
 
     <key name="also-encode" type="b">
       <default>false</default>
-      <summary>Also encode a second (lossy) format from the same rip</summary>
+      <summary>Also encode lossy: second format from the same rip</summary>
     </key>
 
     <key name="also-encode-format" type="s">
@@ -112,7 +112,7 @@
         <choice value="opus"/>
       </choices>
       <default>'mp3'</default>
-      <summary>Secondary encode format when Also encode is on</summary>
+      <summary>Lossy format when Also encode lossy is on</summary>
     </key>
 
     <key name="also-encode-folder" type="s">
@@ -122,12 +122,12 @@
         <choice value="custom_folder"/>
       </choices>
       <default>'format_subdir'</default>
-      <summary>Where secondary encodes are written</summary>
+      <summary>Where lossy encodes are written</summary>
     </key>
 
     <key name="also-encode-directory" type="s">
       <default>''</default>
-      <summary>Output root for Also encode when Custom folder is selected</summary>
+      <summary>Output root for lossy encode when Custom folder is selected</summary>
     </key>
 
     <key name="embed-artwork" type="b">

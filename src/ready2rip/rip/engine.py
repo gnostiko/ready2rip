@@ -63,9 +63,15 @@ from ready2rip.rip.encode import (
 from ready2rip.rip.encode_dest import (
     audio_dir_for_format,
     encode_format_list,
+    is_lossless_extension,
 )
 from ready2rip.rip.paranoia_run import run_paranoia_streaming
 from ready2rip.rip.paranoia_stats import FRAMES_PER_SECTOR, ParanoiaStats
+from ready2rip.rip.progress_map import (
+    normalize_unit_weights,
+    overall_fraction,
+    unit_end_fraction,
+)
 from ready2rip.rip.progress_pulse import ProgressPulse
 from ready2rip.rip.riplog import (
     RipLog,
@@ -85,7 +91,7 @@ from ready2rip.rip.secure import (
 )
 from ready2rip.rip.wav_trim import trim_wav_to_expected
 from ready2rip.tags.artists import DEFAULT_ARTIST_STYLE
-from ready2rip.tags.writer import TagWriter
+from ready2rip.tags.writer import TagWriter, ripper_tag_value
 from ready2rip.util import find_cdparanoia, validate_device_path
 
 log = logging.getLogger(__name__)
@@ -172,8 +178,10 @@ class RipJob:
     min_wav_size_ratio: float = SECURE_MIN_WAV_RATIO
     # Write a detailed status log next to the ripped files.
     write_rip_log: bool = True
-    # Write multi-file (or image) CUE sheet after a secure rip.
+    # Write multi-file (or image) CUE sheet after a secure rip (lossless only).
     write_cue_file: bool = True
+    # Write Encoded by / ENCODER tag (ready2rip + version).
+    add_ripper_tag: bool = False
     # Double-rip each track and require matching CRCs (test & copy).
     test_and_copy: bool = True
     # Extra secure test+copy cycles after a CRC mismatch.
@@ -362,7 +370,6 @@ class RipEngine:
             )
 
         # Work units: optional HTOA (track 0) + selected audio tracks.
-        n_audio = max(1, len(tracks))
         outputs: list[Path] = []
         ar_results: list[AccurateRipResult] = []
         ctdb_results: list[CtdbResult] = []
@@ -388,7 +395,10 @@ class RipEngine:
                 success=False,
                 error=f'Cannot create output folder(s): {exc}',
             )
-        album_dir = dests0[0].meta_dir
+        # Cover art at the album meta root; log beside the primary encode.
+        meta_dir0 = dests0[0].meta_dir
+        primary_audio_dir = dests0[0].album_dir
+        album_dir = primary_audio_dir
         for dest in dests0:
             target_note = (
                 f'Encode target: {dest.format.upper()} → {dest.album_dir}'
@@ -397,8 +407,31 @@ class RipEngine:
             if rip_log is not None:
                 rip_log.notes.append(target_note)
 
+        # Sector-weighted work units so long tracks move the banner more.
+        htoa_info = detect_htoa(job.disc_info) if job.rip_htoa else None
+        data_tracks = (
+            list(job.disc_info.data_tracks)
+            if job.rip_data_tracks and job.disc_info is not None
+            else []
+        )
+        weight_sectors: list[int] = []
+        if htoa_info is not None:
+            weight_sectors.append(int(htoa_info.length_sectors))
+        for track_no in tracks:
+            toc_track = self._toc_track(job.disc_info, track_no)
+            weight_sectors.append(
+                int(toc_track.length_sectors) if toc_track is not None else 1
+            )
+        for data_track in data_tracks:
+            weight_sectors.append(int(data_track.length_sectors))
+        unit_weights = normalize_unit_weights(weight_sectors or [1])
+        total_units = float(len(unit_weights)) or 1.0
+
         last_overall = 0.0
         progress_lock = threading.Lock()
+        last_emit_at = 0.0
+        last_emit_message = ''
+        last_emit_fraction = -1.0
 
         def report(
             track_number: int,
@@ -410,28 +443,39 @@ class RipEngine:
             total_units: float | None = None,
             nudge: bool = False,
         ) -> None:
-            """Update status; advance the bar only when a work unit finishes.
+            """Map within-unit *sub* into whole-rip fill; keep status live.
 
-            While a track is ripping, *fraction* stays at completed/total so the
-            banner cannot stall mid-extract. When *sub* reaches 1.0 (track rip
-            finished), the fill jumps to (index+1)/total.
+            *total_units* is accepted for call-site compatibility; weights from
+            sector counts drive the fraction. *nudge* heartbeats ease the fill
+            toward the current unit end during blocking CRC / verify / encode.
             """
-            nonlocal last_overall
+            nonlocal last_overall, last_emit_at, last_emit_message, last_emit_fraction
             if on_progress is None:
                 return
-            units = total_units if total_units is not None else float(n_audio)
-            units = max(1.0, units)
+            _ = total_units  # call sites still pass this; weights are authoritative
+            sub_c = 1.0 if state == RipState.DONE else max(0.0, min(1.0, sub))
+            measured = overall_fraction(index, sub_c, unit_weights)
+            ceiling = unit_end_fraction(index, unit_weights)
             with progress_lock:
                 if nudge:
-                    # Status heartbeat only — never invent mid-track fill.
-                    overall = last_overall
-                elif sub >= 1.0 - 1e-9 or state == RipState.DONE:
-                    overall = min(1.0, (index + 1.0) / units)
+                    target = min(ceiling, max(measured, last_overall + 0.0025))
+                    overall = max(last_overall, target)
                 else:
-                    # Completed units so far (current track not finished yet).
-                    overall = max(0.0, min(1.0, index / units))
-                last_overall = max(last_overall, overall)
+                    overall = measured
+                last_overall = max(last_overall, min(1.0, overall))
                 fraction = last_overall
+            # Drop duplicate heartbeats that would only spam the GTK idle queue.
+            now = time.monotonic()
+            if (
+                nudge
+                and message == last_emit_message
+                and abs(fraction - last_emit_fraction) < 0.0015
+                and (now - last_emit_at) < 0.12
+            ):
+                return
+            last_emit_at = now
+            last_emit_message = message
+            last_emit_fraction = fraction
             on_progress(
                 RipProgress(
                     track_number=track_number,
@@ -450,7 +494,7 @@ class RipEngine:
         )
 
         embed_art, _folder_art, cover_path, art_notes = _prepare_artwork(
-            job, album_dir
+            job, meta_dir0
         )
         notes.extend(art_notes)
         if cover_path is not None:
@@ -515,14 +559,6 @@ class RipEngine:
         if defeat_cache:
             notes.append('Cache defeat enabled between test and copy')
 
-        # Count HTOA as an extra work unit for progress when present.
-        htoa_info = detect_htoa(job.disc_info) if job.rip_htoa else None
-        data_count = (
-            len(job.disc_info.data_tracks)
-            if job.rip_data_tracks and job.disc_info is not None
-            else 0
-        )
-        total_units = float(len(tracks) + (1 if htoa_info else 0) + data_count) or 1.0
         unit_index = 0.0
         htoa_path: Path | None = None
         htoa_paths: list[Path] = []
@@ -614,6 +650,7 @@ class RipEngine:
                         cover_path=cover_path,
                         htoa_ripped=htoa_ripped,
                         test_copy_mismatches=test_copy_mismatches,
+                        log_dir=primary_audio_dir,
                     )
 
                 data_index = float(len(tracks) + (1 if htoa_info else 0))
@@ -674,7 +711,7 @@ class RipEngine:
                     if rip_log is not None:
                         rip_log.replaygain_notes.extend(rg_notes)
 
-                # Multi-file CUE grouped by album folder + format.
+                # Multi-file CUE for lossless encodes only (FLAC / WAV).
                 if (
                     job.write_cue_file
                     and track_output_pairs
@@ -693,7 +730,10 @@ class RipEngine:
                             [htoa_path] if htoa_path is not None else []
                         ):
                             htoa_by_dir[hp.parent] = hp
+                    wrote_cue = False
                     for (cue_album_dir, cue_ext), pairs in by_group.items():
+                        if not is_lossless_extension(cue_ext):
+                            continue
                         try:
                             cue_path = self._write_track_cue(
                                 job,
@@ -708,18 +748,23 @@ class RipEngine:
                                 ],
                             )
                             if cue_path is not None:
+                                wrote_cue = True
                                 outputs.append(cue_path)
                                 notes.append(f'CUE sheet: {cue_path.name}')
                                 if rip_log is not None:
                                     rip_log.notes.append(
-                                        f'CUE sheet (multi-file, gaps in previous): '
-                                        f'{cue_path.name}'
+                                        f'CUE sheet (multi-file): {cue_path.name}'
                                     )
                         except Exception as cue_exc:
                             log.warning(
                                 'Failed to write multi-file CUE: %s', cue_exc
                             )
                             notes.append(f'CUE sheet warning: {cue_exc}')
+                    if not wrote_cue:
+                        skip_note = 'CUE sheet skipped (lossless encode only)'
+                        notes.append(skip_note)
+                        if rip_log is not None:
+                            rip_log.notes.append(skip_note)
 
         except Exception as exc:
             log.exception('Rip failed')
@@ -736,6 +781,7 @@ class RipEngine:
                 cover_path=cover_path,
                 htoa_ripped=htoa_ripped,
                 test_copy_mismatches=test_copy_mismatches,
+                log_dir=primary_audio_dir,
             )
 
         if self._cancelled:
@@ -753,6 +799,7 @@ class RipEngine:
                 cover_path=cover_path,
                 htoa_ripped=htoa_ripped,
                 test_copy_mismatches=test_copy_mismatches,
+                log_dir=primary_audio_dir,
             )
 
         if job.submit_ctdb and ctdb_verifier is not None and ctdb_results:
@@ -851,6 +898,7 @@ class RipEngine:
             cover_path=cover_path,
             htoa_ripped=htoa_ripped,
             test_copy_mismatches=test_copy_mismatches,
+            log_dir=primary_audio_dir,
         )
         if result.log_path is not None:
             done_msg = f'{done_msg} · log saved'
@@ -1504,6 +1552,9 @@ class RipEngine:
                     total_tracks=total_for_tags or None,
                     artist_style=job.artist_style,
                     image=tag_as_image,
+                    encoded_by=(
+                        ripper_tag_value() if job.add_ripper_tag else None
+                    ),
                 )
                 if retitle and not tag_as_image:
                     _retag_title(
@@ -1752,8 +1803,6 @@ class RipEngine:
                         report=report,
                     )
 
-                # Advance the banner once this track's rip (extract+verify) is
-                # done — not continuously during the extract.
                 report(
                     track_no,
                     RipState.DONE,
@@ -1884,12 +1933,13 @@ class RipEngine:
                     )
 
                     def _test_progress(local: float, *, _label=test_label) -> None:
+                        local_c = max(0.0, min(1.0, local))
                         report(
                             track_no,
                             RipState.RIPPING,
                             index=idx,
                             # Test pass owns most of the first half of the track unit.
-                            sub=0.32 * max(0.0, min(1.0, local)),
+                            sub=0.32 * local_c,
                             message=f'{_label}…',
                             total_units=total_units,
                         )
@@ -1976,11 +2026,12 @@ class RipEngine:
                     _base=copy_base,
                     _span=copy_span,
                 ) -> None:
+                    local_c = max(0.0, min(1.0, local))
                     report(
                         track_no,
                         RipState.RIPPING,
                         index=idx,
-                        sub=_base + _span * max(0.0, min(1.0, local)),
+                        sub=_base + _span * local_c,
                         message=f'{_label}…',
                         total_units=total_units,
                     )
@@ -2194,11 +2245,12 @@ class RipEngine:
         )
 
         def _burst_progress(local: float) -> None:
+            local_c = max(0.0, min(1.0, local))
             report(
                 track_no,
                 RipState.RIPPING,
                 index=idx,
-                sub=0.40 + 0.15 * max(0.0, min(1.0, local)),
+                sub=0.40 + 0.15 * local_c,
                 message=f'Burst ripping track {track_no}…',
                 total_units=total_units,
             )
@@ -2739,17 +2791,18 @@ class RipEngine:
             *,
             nudge: bool = False,
         ) -> None:
-            """Status updates; fill only moves on explicit phase fractions."""
+            """Whole-image progress: measured *frac*, with nudge creep to 0.99."""
             nonlocal last_overall
             if on_progress is None:
                 return
+            measured = max(0.0, min(1.0, frac))
             with progress_lock:
                 if nudge:
-                    overall = last_overall
+                    overall = max(last_overall, min(0.99, last_overall + 0.0025))
+                    overall = max(overall, measured)
                 else:
-                    # Ignore dense extract locals — only keep rising phase marks.
-                    overall = max(last_overall, max(0.0, min(1.0, frac)))
-                last_overall = overall
+                    overall = measured
+                last_overall = max(last_overall, min(1.0, overall))
                 fraction = last_overall
             on_progress(
                 RipProgress(
@@ -2877,13 +2930,11 @@ class RipEngine:
                     )
 
                 def _img_extract_progress(local: float) -> None:
-                    # Status only — fill advances at phase boundaries.
-                    _ = local
+                    local_c = max(0.0, min(1.0, local))
                     report(
                         RipState.RIPPING,
-                        last_overall,
+                        0.15 + 0.25 * local_c,
                         'Extracting disc image…',
-                        nudge=True,
                     )
 
                 image_burst_recovered = False
@@ -2953,13 +3004,14 @@ class RipEngine:
                                 avoid_end=end_sector,
                             )
 
-                            def _img_retry_progress(local: float) -> None:
-                                _ = local
+                            def _img_retry_progress(
+                                local: float, *, _base=extract_base
+                            ) -> None:
+                                local_c = max(0.0, min(1.0, local))
                                 report(
                                     RipState.RIPPING,
-                                    last_overall,
+                                    _base + 0.20 * local_c,
                                     'Retrying disc image…',
-                                    nudge=True,
                                 )
 
                             mode, retry_stats = _img_span(
@@ -3008,13 +3060,14 @@ class RipEngine:
                             'Copy pass for disc image…',
                         )
 
-                        def _img_copy_progress(local: float) -> None:
-                            _ = local
+                        def _img_copy_progress(
+                            local: float, *, _base=copy_base
+                        ) -> None:
+                            local_c = max(0.0, min(1.0, local))
                             report(
                                 RipState.RIPPING,
-                                last_overall,
+                                _base + 0.20 * local_c,
                                 'Copy pass for disc image…',
-                                nudge=True,
                             )
 
                         report(
@@ -3076,12 +3129,11 @@ class RipEngine:
                             )
 
                             def _img_burst_progress(local: float) -> None:
-                                _ = local
+                                local_c = max(0.0, min(1.0, local))
                                 report(
                                     RipState.RIPPING,
-                                    last_overall,
+                                    max(last_overall, 0.84 + 0.10 * local_c),
                                     'Burst recovery for disc image…',
-                                    nudge=True,
                                 )
 
                             copy_mode, burst_stats = _img_span(

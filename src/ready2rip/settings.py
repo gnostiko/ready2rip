@@ -35,7 +35,7 @@ ENCODERS = (
     ('mp3', 'MP3'),
 )
 
-# Secondary “Also encode” codecs (lossy companions to a primary encode).
+# Secondary “Also encode lossy” codecs (lossy companions to a primary encode).
 ALSO_ENCODERS = (
     ('mp3', 'MP3'),
     ('aac', 'M4A'),
@@ -81,26 +81,27 @@ FLAC_LEVELS = (
     (8, '8 (smallest)'),
 )
 
-# LAME presets: VBR (-V n) and CBR (-b n). Default is V0.
+# LAME presets: VBR (-V n) and CBR (-b n) — lowest quality → highest.
+# (LAME V5 is the lowest VBR quality here; V0 is the highest.)
 MP3_QUALITIES = (
-    ('v0', 'V0 (VBR)'),
-    ('v1', 'V1 (VBR)'),
-    ('v2', 'V2 (VBR)'),
-    ('v3', 'V3 (VBR)'),
-    ('v4', 'V4 (VBR)'),
     ('v5', 'V5 (VBR)'),
-    ('cbr320', '320 kbps CBR'),
-    ('cbr256', '256 kbps CBR'),
-    ('cbr192', '192 kbps CBR'),
+    ('v4', 'V4 (VBR)'),
+    ('v3', 'V3 (VBR)'),
+    ('v2', 'V2 (VBR)'),
+    ('v1', 'V1 (VBR)'),
+    ('v0', 'V0 (VBR)'),
     ('cbr128', '128 kbps CBR'),
+    ('cbr192', '192 kbps CBR'),
+    ('cbr256', '256 kbps CBR'),
+    ('cbr320', '320 kbps CBR'),
 )
 
 MP3_QUALITY_IDS = frozenset(q[0] for q in MP3_QUALITIES)
 
-# Opus VBR target bitrates (kbps) — compact preset list.
+# Opus VBR target bitrates (kbps) — lowest → highest.
 OPUS_BITRATES = (96, 128, 160, 192, 256)
 
-# Fraunhofer FDK AAC presets (VBR 1–5) + CBR — smallest quality → largest.
+# Fraunhofer FDK AAC presets (VBR 1–5) + CBR — lowest quality → highest.
 # Native ffmpeg ``aac`` uses ``-q:a`` for VBR presets when FDK is absent.
 AAC_QUALITIES = (
     ('vbr1', 'VBR 1'),

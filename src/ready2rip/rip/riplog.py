@@ -343,10 +343,10 @@ class RipLog:
             else:
                 layout_note = layout
             lines.append(
-                f'Also encode                     : {also} ({layout_note})'
+                f'Also encode lossy               : {also} ({layout_note})'
             )
             lines.append(
-                'Also encoder command            : '
+                'Lossy encoder command           : '
                 + encode_command_summary(
                     self.also_encode_format,
                     flac_compression=self.flac_compression,

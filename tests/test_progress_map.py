@@ -33,3 +33,14 @@ def test_unit_end_caps_nudge_inside_current_track() -> None:
     # End of track 0 is 1/3 — nudge must not be allowed past that ceiling.
     assert abs(unit_end_fraction(0, weights) - (1.0 / 3.0)) < 1e-9
     assert abs(unit_end_fraction(1, weights) - (2.0 / 3.0)) < 1e-9
+
+
+def test_mid_extract_moves_past_completed_units() -> None:
+    weights = normalize_unit_weights([200, 200])
+    start_second = overall_fraction(1, 0.0, weights)
+    mid_second = overall_fraction(1, 0.5, weights)
+    end_second = overall_fraction(1, 1.0, weights)
+    assert abs(start_second - 0.5) < 1e-9
+    assert 0.70 <= mid_second <= 0.80
+    assert abs(end_second - 1.0) < 1e-9
+    assert unit_end_fraction(0, weights) <= mid_second

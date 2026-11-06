@@ -82,9 +82,9 @@ Defaults:
 |--------|-------|
 | **Encoder** | WAV, FLAC, Opus, M4A, or MP3 |
 | **FLAC compression** | 0 (fast) … 8 (smallest); default **5** with `--verify` |
-| **MP3 quality** | LAME V0–V5 (VBR) or 128–320 kbps CBR |
-| **AAC quality** | FDK VBR 1–5 or 128–320 kbps CBR (`libfdk_aac` when available) |
-| **Opus bitrate** | VBR kbps (typical 96–256) |
+| **MP3 quality** | LAME V5–V0 (VBR, lowest→highest) or 128–320 kbps CBR |
+| **AAC quality** | FDK VBR 1–5 or 128–320 kbps CBR (`libfdk_aac` when available); lowest→highest |
+| **Opus bitrate** | VBR kbps (typical 96–256); lowest→highest |
 
 Copy image forces a lossless container (FLAC or WAV; other formats fall back to FLAC).
 
