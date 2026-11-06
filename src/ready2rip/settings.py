@@ -42,10 +42,10 @@ FLAC_LEVELS = (
     (2, '2'),
     (3, '3'),
     (4, '4'),
-    (5, '5'),
+    (5, '5 (Default)'),
     (6, '6'),
     (7, '7'),
-    (8, '8 (smallest, default)'),
+    (8, '8 (smallest)'),
 )
 
 # LAME presets: VBR (-V n) and CBR (-b n). Default is V0.
@@ -265,7 +265,7 @@ class AppSettings:
     color_scheme: str = 'default'
     output_directory: str = ''  # empty → default_output_directory() (Music)
     encode_format: str = 'flac'
-    flac_compression: int = 8
+    flac_compression: int = 5
     # LAME preset id: v0–v5 or cbr128/192/256/320.
     mp3_quality: str = 'v0'
     aac_quality: str = 'cbr256'

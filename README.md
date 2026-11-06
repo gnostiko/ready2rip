@@ -81,7 +81,7 @@ Defaults:
 | Option | Notes |
 |--------|-------|
 | **Encoder** | WAV, FLAC, Opus, M4A, or MP3 |
-| **FLAC compression** | 0 (fast) … 8 (smallest); default **8** with `--verify` |
+| **FLAC compression** | 0 (fast) … 8 (smallest); default **5** with `--verify` |
 | **MP3 quality** | LAME V0–V5 (VBR) or 128–320 kbps CBR |
 | **AAC quality** | FDK VBR 1–5 or 128–320 kbps CBR (`libfdk_aac` when available) |
 | **Opus bitrate** | VBR kbps (typical 96–256) |
@@ -135,8 +135,8 @@ Release assets are published for **x86_64** and **aarch64** on
 ### AppImage (recommended)
 
 ```bash
-chmod +x ready2rip-0.4.22-x86_64.AppImage   # or …-aarch64.AppImage
-./ready2rip-0.4.22-x86_64.AppImage
+chmod +x ready2rip-0.4.23-x86_64.AppImage   # or …-aarch64.AppImage
+./ready2rip-0.4.23-x86_64.AppImage
 ```
 
 The AppImage needs a matching CPU architecture, a host **glibc** new enough for
@@ -166,7 +166,7 @@ Release AppImages are GPG-signed. Import the project key from
 ### Debian / Ubuntu
 
 ```bash
-sudo apt install ./ready2rip_0.4.22-1_amd64.deb   # or _arm64.deb
+sudo apt install ./ready2rip_0.4.23-1_amd64.deb   # or _arm64.deb
 ```
 
 Depends on distro packages for GTK 4 / libadwaita, mutagen, Pillow, cdparanoia,
@@ -175,7 +175,7 @@ flac, lame, ffmpeg, and opus-tools.
 ### Fedora / RPM
 
 ```bash
-sudo dnf install ./ready2rip-0.4.22-1.x86_64.rpm   # or .aarch64.rpm
+sudo dnf install ./ready2rip-0.4.23-1.x86_64.rpm   # or .aarch64.rpm
 ```
 
 Same runtime idea as the `.deb`: system UI stack and encoders, ready2rip itself
@@ -184,7 +184,7 @@ from the package.
 ### Flatpak
 
 ```bash
-flatpak install --user ./ready2rip-0.4.22-x86_64.flatpak
+flatpak install --user ./ready2rip-0.4.23-x86_64.flatpak
 flatpak run org.ready2rip.Ready2Rip
 ```
 

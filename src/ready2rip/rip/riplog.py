@@ -68,8 +68,9 @@ class RipLog:
         self.device: str = ''
         self.sample_offset: int = 0
         self.offset_configured: bool = False
+        self.overread_label: str = 'No'
         self.encode_format: str = 'flac'
-        self.flac_compression: int = 8
+        self.flac_compression: int = 5
         self.mp3_quality: str = 'v0'
         self.aac_quality: str = 'cbr256'
         self.aac_bitrate: int = 256
@@ -105,6 +106,10 @@ class RipLog:
         self.device = job.device
         self.sample_offset = job.sample_offset
         self.offset_configured = bool(getattr(job, 'offset_configured', False))
+        overread = getattr(job, 'overread', None)
+        self.overread_label = (
+            overread.log_label if overread is not None else 'No'
+        )
         self.encode_format = job.encode_format
         self.flac_compression = job.flac_compression
         self.mp3_quality = job.mp3_quality or 'v0'
@@ -250,11 +255,17 @@ class RipLog:
             f'{self.sample_offset} ({offset_note})'
         )
         lines.append(
-            'Overread into Lead-In and Lead-Out          : No'
+            'Overread into Lead-In and Lead-Out          : '
+            f'{self.overread_label}'
         )
+        if self.overread_label == 'Yes':
+            fill = 'No (drive overreads; offset edges use real samples)'
+        elif self.overread_label == 'No':
+            fill = 'Yes (cdparanoia -O / AccurateRip edges)'
+        else:
+            fill = 'Partial (silence where overread is unavailable)'
         lines.append(
-            'Fill up missing offset samples with silence : '
-            'Yes (cdparanoia -O / AccurateRip edges)'
+            f'Fill up missing offset samples with silence : {fill}'
         )
         lines.append('Delete leading and trailing silent blocks   : No')
         lines.append('Null samples used in CRC calculations       : Yes')

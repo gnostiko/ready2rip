@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ready2rip.rip.encode import (
+    aac_encode_argv,
     encode_command_summary,
     flac_encode_argv,
     prefer_fdk_aac,
@@ -39,3 +40,14 @@ def test_prefer_fdk_aac_is_cached() -> None:
     info = prefer_fdk_aac.cache_info()
     assert info.hits >= 1
     prefer_fdk_aac.cache_clear()
+
+
+def test_native_aac_vbr_uses_quality_scale_not_cbr() -> None:
+    cmd = aac_encode_argv(
+        Path('in.wav'), Path('out.m4a'), 'vbr5', use_fdk=False
+    )
+    assert 'aac' in cmd
+    assert '-q:a' in cmd
+    assert '-b:a' not in cmd
+    q = float(cmd[cmd.index('-q:a') + 1])
+    assert q >= 1.0

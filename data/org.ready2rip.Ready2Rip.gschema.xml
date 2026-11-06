@@ -44,8 +44,8 @@
 
     <key name="flac-compression" type="i">
       <range min="0" max="8"/>
-      <default>8</default>
-      <summary>FLAC compression level (0–8; 8 is smallest / archival default)</summary>
+      <default>5</default>
+      <summary>FLAC compression level (0–8; 5 is the default, 8 is smallest)</summary>
     </key>
 
     <key name="mp3-quality" type="s">

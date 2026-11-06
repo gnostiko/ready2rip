@@ -8,8 +8,8 @@ or forced resample flags. Compression uses stock quality presets only.
   * MP3  — LAME ``-V n`` / ``-b n``; ``--noreplaygain`` so LAME does not
     write competing RG tags (we tag after encode).
   * AAC  — ffmpeg ``libfdk_aac`` when available (FDK VBR 1–5 / CBR), else
-    native ``aac`` with the same preset names mapped to stock ``-b:a`` /
-    approximate CBR for VBR. AAC-LC only; no HE-AAC, no custom filters.
+    native ``aac`` with ``-q:a`` VBR (or ``-b:a`` for CBR presets).
+    AAC-LC only; no HE-AAC, no custom filters.
   * Opus — ``opusenc`` VBR + ``--music`` when available; ffmpeg ``libopus``
     fallback mirrors the same bitrate / VBR / audio application settings.
     (Opus packets are always 48 kHz internally; that is the codec, not a
@@ -26,13 +26,14 @@ from pathlib import Path
 # Quality helpers live in settings.py (GSettings). Import them lazily so
 # flac/opus argv helpers stay usable in CI without PyGObject.
 
-# FDK VBR mode → approximate CBR (kbps) when only native ffmpeg ``aac`` exists.
-_AAC_VBR_TO_NATIVE_CBR = {
-    5: 192,
-    4: 128,
-    3: 96,
-    2: 64,
-    1: 48,
+# FDK VBR 1–5 → ffmpeg native ``aac`` VBR quality scale (``-q:a``).
+# Higher values ≈ higher bitrate / quality for the native encoder.
+_AAC_VBR_TO_NATIVE_Q = {
+    1: 0.5,
+    2: 0.9,
+    3: 1.3,
+    4: 1.7,
+    5: 2.0,
 }
 
 
@@ -133,9 +134,9 @@ def aac_encode_argv(
         if use_fdk:
             cmd.extend(['-vbr', str(mode)])
         else:
-            # Native aac has no FDK-compatible VBR modes — use approx CBR.
-            br = _AAC_VBR_TO_NATIVE_CBR.get(mode, 192)
-            cmd.extend(['-b:a', f'{br}k'])
+            # Native aac VBR via quality scale (not a CBR bitrate stand-in).
+            qscale = _AAC_VBR_TO_NATIVE_Q.get(mode, 1.3)
+            cmd.extend(['-q:a', str(qscale)])
     elif q.startswith('cbr') and q[3:].isdigit():
         cmd.extend(['-b:a', f'{int(q[3:])}k'])
     else:
@@ -188,7 +189,7 @@ def opus_ffmpeg_argv(wav_path: Path, out_path: Path, bitrate_kbps: int) -> list[
 def encode_command_summary(
     fmt: str,
     *,
-    flac_compression: int = 8,
+    flac_compression: int = 5,
     mp3_quality: str = 'v0',
     aac_quality: str = 'cbr256',
     opus_bitrate: int = 160,

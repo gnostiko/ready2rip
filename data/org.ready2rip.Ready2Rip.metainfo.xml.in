@@ -29,6 +29,14 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-05">
       <description>
         <p>
+          0.4.23: Drive overread when available, tighter WAV and CTDB
+          quality gates, native AAC VBR, FLAC default level 5.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.22" date="2026-11-05">
+      <description>
+        <p>
           0.4.22: Remove barcode and ISRC edit fields from the UI and
           restore the previous Title / Artist track-row sizing. Tags and
           CUE sheets still receive barcode and ISRC when metadata or the

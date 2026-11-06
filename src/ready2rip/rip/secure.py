@@ -15,11 +15,23 @@ SECURE_NEVER_SKIP = 500
 # Forces more thorough jitter/overlap checking than drive defaults.
 SECURE_MIN_OVERLAP = 8
 
-# Reject WAVs that are meaningfully short of the TOC-expected CDDA size.
-SECURE_MIN_WAV_RATIO = 0.995
+# Reject WAVs short of the TOC-expected CDDA size. Prefer exact length;
+# allow at most one CDDA sector of slack for edge rounding.
+SECURE_MIN_WAV_RATIO = 1.0
+SECURE_WAV_SHORT_BYTES = 2352
 
 # Extra full test+copy cycles after a CRC mismatch (total attempts = 1 + N).
 SECURE_TEST_COPY_RETRIES = 3
+
+
+def wav_size_minimum(expected_bytes: int, min_ratio: float) -> int:
+    """Smallest acceptable WAV size for a TOC-expected *expected_bytes*."""
+    expected = max(0, int(expected_bytes))
+    if expected <= 0:
+        return 0
+    if float(min_ratio) >= 1.0:
+        return max(0, expected - SECURE_WAV_SHORT_BYTES)
+    return int(expected * max(0.0, float(min_ratio)))
 
 
 def secure_paranoia_flags() -> list[str]:

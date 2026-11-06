@@ -64,11 +64,16 @@ from ready2rip.rip.riplog import (
     title_for_track,
     wav_pcm_crc,
 )
+from ready2rip.disc.overread import (
+    OverreadCapability,
+    offset_margin_sectors,
+)
 from ready2rip.rip.secure import (
     SECURE_MIN_WAV_RATIO,
     SECURE_TEST_COPY_RETRIES,
     burst_paranoia_flags,
     secure_paranoia_flags,
+    wav_size_minimum,
 )
 from ready2rip.tags.artists import DEFAULT_ARTIST_STYLE
 from ready2rip.tags.writer import TagWriter
@@ -119,7 +124,7 @@ class RipJob:
     track_numbers: list[int]
     output_directory: Path
     encode_format: str = 'flac'  # flac | mp3 | aac | opus | wav
-    flac_compression: int = 8
+    flac_compression: int = 5
     mp3_quality: str = 'v0'  # LAME v0–v5 or cbr128/192/256/320
     aac_quality: str = 'cbr256'  # FDK VBR 1–5 or cbr128/192/256/320
     aac_bitrate: int = 256  # legacy; prefer aac_quality
@@ -141,6 +146,8 @@ class RipJob:
     sample_offset: int = 0
     # True after Detect or manual save in drive setup (offset may still be 0).
     offset_configured: bool = False
+    # Drive can READ CD into lead-in / lead-out (for offset edge samples).
+    overread: OverreadCapability = field(default_factory=OverreadCapability)
     disc_info: DiscInfo | None = None
     # Total tracks on the disc (for AR first/last sample skip), not just selected.
     disc_track_count: int = 0
@@ -710,17 +717,17 @@ class RipEngine:
             except Exception:
                 drivename = ''
             album = job.album
-            ctdb_quality = 0
-            if (
-                job.test_and_copy
-                and not burst_tracks
-                and not test_copy_mismatches
-            ):
-                ctdb_quality = 100
-            else:
+            ctdb_quality = _ctdb_submit_quality(
+                job,
+                burst_tracks=burst_tracks,
+                test_copy_mismatches=test_copy_mismatches,
+                rip_log=rip_log,
+            )
+            if ctdb_quality < 100:
                 notes.append(
                     'CTDB submit quality=0 '
-                    '(requires secure test&copy with no burst recovery)'
+                    '(requires secure test&copy, no burst, '
+                    'paranoia quality 100% on all tracks)'
                 )
             submit = ctdb_verifier.submit(
                 ctdb_results,
@@ -2517,6 +2524,21 @@ class RipEngine:
                     0.05,
                     f'Extracting disc image ({total_sectors / 75.0 / 60.0:.1f} min)…',
                 )
+                # Expand TOC edges into lead-in/out when the drive overreads
+                # so -O offset correction has real samples (then trim back).
+                read_start, read_end = _overread_span(
+                    file_start,
+                    end_sector,
+                    sample_offset=job.sample_offset,
+                    overread=job.overread,
+                    at_disc_start=True,
+                    at_disc_end=True,
+                )
+                if (read_start, read_end) != (file_start, end_sector):
+                    notes.append(
+                        f'Overread span: sectors [{read_start}, {read_end}) '
+                        f'(TOC image [{file_start}, {end_sector}))'
+                    )
                 # Secure first. When test & copy is on, do not burst the test
                 # pass — a burst test vs a secure copy is not a real check.
                 span_timeout_secure = max(600, total_sectors // 5)
@@ -2528,32 +2550,64 @@ class RipEngine:
                         'Extracting disc image…',
                     )
 
-                mode, img_stats = self._rip_span(
-                    job.device,
-                    file_start,
-                    end_sector,
-                    test_wav,
-                    expected_bytes=expected_bytes,
-                    min_ratio=job.min_wav_size_ratio,
-                    burst_fallback=job.burst_fallback and not job.test_and_copy,
-                    sample_offset=job.sample_offset,
-                    timeout_secure=span_timeout_secure,
-                    timeout_burst=span_timeout_burst,
-                    on_burst=lambda: report(
+                image_burst_recovered = False
+                try:
+                    mode, img_stats = self._rip_span(
+                        job.device,
+                        read_start,
+                        read_end,
+                        test_wav,
+                        expected_bytes=expected_bytes,
+                        min_ratio=job.min_wav_size_ratio,
+                        # Always secure-first; burst only via explicit recovery.
+                        burst_fallback=False,
+                        sample_offset=job.sample_offset,
+                        timeout_secure=span_timeout_secure,
+                        timeout_burst=span_timeout_burst,
+                        on_extract_progress=_img_extract_progress,
+                    )
+                except Exception as first_exc:
+                    if not job.burst_fallback or self._cancelled:
+                        raise
+                    report(
                         RipState.RIPPING,
                         0.12,
-                        'Secure image extract struggled — burst mode…',
-                    ),
-                    on_extract_progress=_img_extract_progress,
-                )
-                if mode == 'burst':
+                        'Secure image extract failed — burst recovery…',
+                    )
+                    mode, img_stats = self._rip_span(
+                        job.device,
+                        read_start,
+                        read_end,
+                        test_wav,
+                        expected_bytes=expected_bytes,
+                        min_ratio=job.min_wav_size_ratio,
+                        burst_fallback=False,
+                        force_mode='burst',
+                        sample_offset=job.sample_offset,
+                        timeout_secure=span_timeout_secure,
+                        timeout_burst=span_timeout_burst,
+                        on_extract_progress=_img_extract_progress,
+                    )
+                    image_burst_recovered = True
+                    notes.append(
+                        f'Secure image extract failed ({first_exc}); '
+                        'recovered in burst mode'
+                    )
+                _trim_wav_to_expected(test_wav, expected_bytes)
+                if mode == 'burst' or image_burst_recovered:
+                    mode = 'burst'
                     notes.append(
                         'Disc image extracted in burst mode '
                         '(secure mode failed; disc may be scratched)'
                     )
 
                 use_wav = test_wav
-                if job.test_and_copy and not self._cancelled:
+                # Burst-recovered first pass skips test&copy CRC theater.
+                if (
+                    job.test_and_copy
+                    and not image_burst_recovered
+                    and not self._cancelled
+                ):
                     max_img_retries = max(0, int(job.test_copy_max_retries))
                     img_attempts = 1 + max_img_retries
                     img_matched = False
@@ -2586,8 +2640,8 @@ class RipEngine:
 
                             mode, retry_stats = self._rip_span(
                                 job.device,
-                                file_start,
-                                end_sector,
+                                read_start,
+                                read_end,
                                 test_wav,
                                 expected_bytes=expected_bytes,
                                 min_ratio=job.min_wav_size_ratio,
@@ -2598,6 +2652,7 @@ class RipEngine:
                                 on_extract_progress=_img_retry_progress,
                             )
                             img_stats.merge(retry_stats)
+                            _trim_wav_to_expected(test_wav, expected_bytes)
 
                         test_crc = wav_pcm_crc(test_wav)
                         if job.defeat_audio_cache:
@@ -2623,8 +2678,8 @@ class RipEngine:
 
                         copy_mode, copy_stats = self._rip_span(
                             job.device,
-                            file_start,
-                            end_sector,
+                            read_start,
+                            read_end,
                             copy_wav,
                             expected_bytes=expected_bytes,
                             min_ratio=job.min_wav_size_ratio,
@@ -2635,6 +2690,7 @@ class RipEngine:
                             on_extract_progress=_img_copy_progress,
                         )
                         img_stats.merge(copy_stats)
+                        _trim_wav_to_expected(copy_wav, expected_bytes)
                         copy_crc = wav_pcm_crc(copy_wav)
                         if test_crc and copy_crc and test_crc == copy_crc:
                             img_matched = True
@@ -2664,8 +2720,8 @@ class RipEngine:
                             )
                             copy_mode, burst_stats = self._rip_span(
                                 job.device,
-                                file_start,
-                                end_sector,
+                                read_start,
+                                read_end,
                                 copy_wav,
                                 expected_bytes=expected_bytes,
                                 min_ratio=job.min_wav_size_ratio,
@@ -2676,6 +2732,7 @@ class RipEngine:
                                 timeout_burst=span_timeout_burst,
                             )
                             img_stats.merge(burst_stats)
+                            _trim_wav_to_expected(copy_wav, expected_bytes)
                             mode = 'burst'
                             notes.append(
                                 f'Image test/copy CRC mismatch '
@@ -2756,6 +2813,7 @@ class RipEngine:
                         disc,
                         file_start=file_start,
                         extract_mode=mode,
+                        image_stats=img_stats,
                         ar_verifier=ar_verifier,
                         ctdb_verifier=ctdb_verifier,
                         ar_results=ar_results,
@@ -2903,15 +2961,21 @@ class RipEngine:
                     except Exception:
                         drivename = ''
                     album = job.album
-                    ctdb_quality = (
-                        100
-                        if image_test_copy_ok and not burst_tracks
-                        else 0
+                    ctdb_quality = _ctdb_submit_quality(
+                        job,
+                        burst_tracks=burst_tracks,
+                        test_copy_mismatches=(
+                            [] if image_test_copy_ok else [0]
+                        ),
+                        rip_log=rip_log,
+                        image_stats=img_stats,
+                        image_sectors=total_sectors,
                     )
                     if ctdb_quality < 100:
                         notes.append(
                             'CTDB submit quality=0 '
-                            '(requires secure test&copy with no burst recovery)'
+                            '(requires secure test&copy, no burst, '
+                            'paranoia quality 100%)'
                         )
                     submit = ctdb_verifier.submit(
                         ctdb_results,
@@ -3115,14 +3179,14 @@ class RipEngine:
                 f'{label} extraction produced empty data for track {track_number}'
             )
         if expected_bytes and expected_bytes > 0:
-            minimum = int(expected_bytes * min_ratio)
+            minimum = wav_size_minimum(expected_bytes, min_ratio)
             if size < minimum:
                 got_pct = (100.0 * size / expected_bytes) if expected_bytes else 0.0
                 raise RuntimeError(
                     f'{label} extraction incomplete for track {track_number}: '
                     f'{size} bytes < {minimum} required '
                     f'(got {got_pct:.1f}% of {expected_bytes} CDDA bytes; '
-                    f'need ≥{min_ratio:.1%})'
+                    f'need ≥{min_ratio:.1%} within one-sector slack)'
                 )
 
     def _encode(self, fmt: str, wav_path: Path, out_path: Path, job: RipJob) -> None:
@@ -3264,6 +3328,7 @@ class RipEngine:
         *,
         file_start: int,
         extract_mode: str,
+        image_stats: ParanoiaStats | None = None,
         ar_verifier: AccurateRipVerifier | None,
         ctdb_verifier: CtdbVerifier | None,
         ar_results: list[AccurateRipResult],
@@ -3288,6 +3353,12 @@ class RipEngine:
             return
 
         mode_label = f'{extract_mode} (copy image)'
+        image_quality: float | None = None
+        image_had_errors = False
+        if image_stats is not None:
+            total_secs = sum(int(t.length_sectors) for t in disc.tracks)
+            image_quality = image_stats.quality_percent(total_secs)
+            image_had_errors = bool(image_stats.had_errors) or extract_mode == 'burst'
         n = max(1, len(disc.tracks))
         for i, track in enumerate(disc.tracks):
             if self._cancelled:
@@ -3315,6 +3386,8 @@ class RipEngine:
                     length_sectors=track.length_sectors,
                 )
                 log_entry.extract_mode = mode_label
+                log_entry.quality_percent = image_quality
+                log_entry.had_errors = image_had_errors
             if not pcm:
                 msg = (
                     f'Track {track.number}: empty PCM slice in image '
@@ -3711,6 +3784,103 @@ def _image_track_pcm(
     if length <= 0 or start >= len(image_pcm):
         return b''
     return image_pcm[start : min(start + length, len(image_pcm))]
+
+
+def _overread_span(
+    start_sector: int,
+    end_sector: int,
+    *,
+    sample_offset: int,
+    overread: OverreadCapability,
+    at_disc_start: bool,
+    at_disc_end: bool,
+) -> tuple[int, int]:
+    """Widen a TOC span into lead-in/out when offset correction needs it."""
+    margin = offset_margin_sectors(sample_offset)
+    if margin <= 0:
+        return int(start_sector), int(end_sector)
+    start = int(start_sector)
+    end = int(end_sector)
+    off = int(sample_offset)
+    # Positive offset pulls samples from after the window → need lead-out /
+    # next-track audio at the end, and lead-in at the start of the disc.
+    if off > 0:
+        if at_disc_start and overread.lead_in:
+            start -= margin
+        if at_disc_end and overread.lead_out:
+            end += margin
+    elif off < 0:
+        if at_disc_start and overread.lead_in:
+            start -= margin
+        if at_disc_end and overread.lead_out:
+            end += margin
+    if end <= start:
+        return int(start_sector), int(end_sector)
+    return start, end
+
+
+def _trim_wav_to_expected(path: Path, expected_bytes: int) -> None:
+    """Crop an over-long CDDA WAV back to the TOC-expected byte size."""
+    expected = int(expected_bytes)
+    if expected <= 44 or not path.is_file():
+        return
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return
+    if size <= expected:
+        return
+    import wave
+
+    pcm_bytes = expected - 44
+    if pcm_bytes <= 0:
+        return
+    try:
+        with wave.open(str(path), 'rb') as reader:
+            params = reader.getparams()
+            frames = reader.readframes(reader.getnframes())
+        frames = frames[:pcm_bytes]
+        if len(frames) < pcm_bytes:
+            frames = frames + (b'\x00' * (pcm_bytes - len(frames)))
+        with wave.open(str(path), 'wb') as writer:
+            writer.setparams(params)
+            writer.writeframes(frames)
+    except Exception as exc:
+        log.warning('WAV trim failed for %s: %s', path, exc)
+
+
+def _ctdb_submit_quality(
+    job: RipJob,
+    *,
+    burst_tracks: list[int],
+    test_copy_mismatches: list[int],
+    rip_log: RipLog | None,
+    image_stats: ParanoiaStats | None = None,
+    image_sectors: int = 0,
+) -> int:
+    """Return 100 only for clean secure test&copy with perfect paranoia quality."""
+    if not job.test_and_copy or burst_tracks or test_copy_mismatches:
+        return 0
+    if image_stats is not None:
+        if image_stats.had_errors:
+            return 0
+        q = image_stats.quality_percent(image_sectors)
+        if q is None or q < 100.0:
+            return 0
+    if rip_log is not None:
+        audio = [t for t in rip_log.tracks if int(t.number) > 0]
+        if not audio:
+            return 0
+        for entry in audio:
+            if entry.had_errors:
+                return 0
+            mode = (entry.extract_mode or '').lower()
+            if 'burst' in mode:
+                return 0
+            q = entry.quality_percent
+            if q is None or float(q) < 100.0:
+                return 0
+    return 100
 
 
 def _summarize_ar(results: list[AccurateRipResult]) -> str:
