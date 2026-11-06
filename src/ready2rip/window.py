@@ -964,14 +964,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         also_dir_default = (settings.also_encode_directory or '').strip()
         self._custom_also_directory = also_dir_default
         self._also_directory_row = Adw.EntryRow(title='Lossy output folder')
-        if (
-            normalize_also_encode_folder(settings.also_encode_folder)
-            == 'custom_folder'
-            and also_dir_default
-        ):
+        # Keep the remembered path in the entry even when Lossy folder is not
+        # Custom (row is hidden). Never blank it here — that used to fire
+        # ``changed`` and wipe also-encode-directory in the store.
+        if also_dir_default:
             self._also_directory_row.set_text(also_dir_default)
-        else:
-            self._also_directory_row.set_text('')
         self._also_directory_row.set_tooltip_text(
             'Root folder for the secondary encode when Lossy folder is Custom'
         )
@@ -1379,14 +1376,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 self._also_folder_row.set_selected(0)
             also_dir = (settings.also_encode_directory or '').strip()
             self._custom_also_directory = also_dir
-            if (
-                normalize_also_encode_folder(settings.also_encode_folder)
-                == 'custom_folder'
-                and also_dir
-            ):
-                self._also_directory_row.set_text(also_dir)
-            else:
-                self._also_directory_row.set_text('')
+            # Restore the saved path into the (possibly hidden) entry. Do not
+            # blank when layout ≠ custom_folder — that would risk wiping the
+            # setting if the changed handler were not blocked.
+            self._also_directory_row.set_text(also_dir)
             self._sync_encoding_ui()
             self._offset_row.set_value(settings.drive_sample_offset)
             self._update_calibration_row()
@@ -1898,17 +1891,23 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             )
             if remembered:
                 self.store.update(also_encode_directory=remembered)
-        else:
-            # Leave Custom — clear the entry so a later Custom pick starts clean
-            # unless the user restores a remembered path above.
-            self._with_handler_blocked(
-                self._also_directory_row,
-                self._on_also_directory_changed,
-                lambda: self._also_directory_row.set_text(''),
-            )
+        # Leaving Custom: keep the remembered path in the hidden entry / store
+        # so switching back restores it. Visibility is handled below.
         self._sync_encoding_ui()
 
+    def _also_folder_layout_id(self) -> str:
+        idx = self._also_folder_row.get_selected()
+        if 0 <= idx < len(self._also_folders):
+            return self._also_folders[idx]
+        return normalize_also_encode_folder(
+            self.store.get().also_encode_folder
+        )
+
     def _on_also_directory_changed(self, row: Adw.EntryRow) -> None:
+        # Only persist while Custom folder is selected. Blanking the entry for
+        # other layouts (or during init/sync) must not wipe the saved path.
+        if self._also_folder_layout_id() != 'custom_folder':
+            return
         text = row.get_text().strip()
         self._custom_also_directory = text
         self.store.update(also_encode_directory=text)
