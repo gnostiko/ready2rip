@@ -17,6 +17,7 @@ from ready2rip.paths import (
     migrate_album_folder_template,
     migrate_filename_template,
 )
+from ready2rip.rip.encode_dest import normalize_encode_format
 from ready2rip.tags.artists import (
     DEFAULT_ARTIST_STYLE,
     normalize_artist_style,
@@ -44,14 +45,6 @@ ALSO_ENCODERS = (
 )
 
 ALSO_ENCODER_IDS = frozenset(e[0] for e in ALSO_ENCODERS)
-
-
-def normalize_encode_format(value: str | None) -> str:
-    """Primary format must be lossless; legacy lossy settings migrate to FLAC."""
-    raw = (value or '').strip().lower()
-    if raw in ENCODER_IDS:
-        return raw
-    return 'flac'
 
 # Where secondary encodes are written relative to the album folder.
 ALSO_FOLDER_LAYOUTS = (

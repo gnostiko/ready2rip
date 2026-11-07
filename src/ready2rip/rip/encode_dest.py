@@ -31,6 +31,26 @@ def is_lossy_format(fmt: str) -> bool:
     return (fmt or '').strip().lower() in LOSSY_FORMATS
 
 
+def normalize_encode_format(value: str | None) -> str:
+    """Primary format must be lossless; legacy lossy settings migrate to FLAC."""
+    raw = (value or '').strip().lower()
+    if raw in LOSSLESS_FORMATS:
+        return raw
+    return 'flac'
+
+
+def should_embed_artwork_for_format(
+    fmt: str, *, embed_lossy: bool, embed_lossless: bool
+) -> bool:
+    """Whether *fmt* should receive an embedded cover."""
+    key = (fmt or '').strip().lower()
+    if is_lossy_format(key):
+        return bool(embed_lossy)
+    if is_lossless_format(key):
+        return bool(embed_lossless)
+    return False
+
+
 def is_lossless_extension(ext: str) -> bool:
     raw = (ext or '').strip().lower()
     if raw and not raw.startswith('.'):

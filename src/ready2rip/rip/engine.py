@@ -68,7 +68,7 @@ from ready2rip.rip.encode_dest import (
     encode_format_list,
     is_lossless_extension,
     is_lossless_format,
-    is_lossy_format,
+    should_embed_artwork_for_format,
 )
 from ready2rip.rip.paranoia_run import run_paranoia_streaming
 from ready2rip.rip.paranoia_stats import FRAMES_PER_SECTOR, ParanoiaStats
@@ -218,12 +218,11 @@ class RipJob:
 
     def should_embed_format(self, fmt: str) -> bool:
         """Whether *fmt* should receive an embedded cover for this job."""
-        key = (fmt or '').strip().lower()
-        if is_lossy_format(key):
-            return bool(self.embed_artwork)
-        if is_lossless_format(key):
-            return bool(self.embed_artwork_lossless)
-        return False
+        return should_embed_artwork_for_format(
+            fmt,
+            embed_lossy=bool(self.embed_artwork),
+            embed_lossless=bool(self.embed_artwork_lossless),
+        )
 
 
 ProgressCallback = Callable[[RipProgress], None]

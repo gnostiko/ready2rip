@@ -10,6 +10,8 @@ from ready2rip.rip.encode_dest import (
     encode_format_list,
     format_folder_name,
     is_lossy_format,
+    normalize_encode_format,
+    should_embed_artwork_for_format,
 )
 
 
@@ -40,8 +42,6 @@ def test_encode_format_list_forces_lossless_primary() -> None:
 
 
 def test_normalize_encode_format() -> None:
-    from ready2rip.settings import normalize_encode_format
-
     assert normalize_encode_format('flac') == 'flac'
     assert normalize_encode_format('WAV') == 'wav'
     assert normalize_encode_format('mp3') == 'flac'
@@ -83,24 +83,22 @@ def test_is_lossy_format() -> None:
     assert not is_lossy_format('aiff')
 
 
-def test_ripjob_should_embed_format() -> None:
-    from pathlib import Path
-
-    from ready2rip.rip.engine import RipJob
-
-    job = RipJob(
-        device='/dev/sr0',
-        track_numbers=[1],
-        output_directory=Path('/tmp'),
-        embed_artwork=True,
-        embed_artwork_lossless=False,
+def test_should_embed_artwork_for_format() -> None:
+    assert should_embed_artwork_for_format(
+        'mp3', embed_lossy=True, embed_lossless=False
     )
-    assert job.should_embed_format('mp3')
-    assert job.should_embed_format('aac')
-    assert not job.should_embed_format('flac')
-    job.embed_artwork_lossless = True
-    assert job.should_embed_format('flac')
-    assert job.should_embed_format('wav')
-    job.embed_artwork = False
-    assert not job.should_embed_format('opus')
-    assert job.wants_embed_artwork()
+    assert should_embed_artwork_for_format(
+        'aac', embed_lossy=True, embed_lossless=False
+    )
+    assert not should_embed_artwork_for_format(
+        'flac', embed_lossy=True, embed_lossless=False
+    )
+    assert should_embed_artwork_for_format(
+        'flac', embed_lossy=True, embed_lossless=True
+    )
+    assert should_embed_artwork_for_format(
+        'wav', embed_lossy=False, embed_lossless=True
+    )
+    assert not should_embed_artwork_for_format(
+        'opus', embed_lossy=False, embed_lossless=True
+    )
