@@ -119,9 +119,9 @@ When AccurateRip or CTDB is on, an uncalibrated drive cannot start a rip until D
 - **MusicBrainz / FreeDB** — sources for lookup (MusicBrainz ISRCs when present; FreeDB disc N/M inferred from title / EXTD markers such as `(disc 2)`)
 - **Disc gap-fill** — CD-TEXT titles/artists, MCN barcode, and subchannel ISRC when online metadata is blank
 - **Download artwork** — iTunes, Cover Art Archive
-- **Embed artwork** — write cover into audio files; configurable max embed edge size
+- **Embed artwork in lossy** — write cover into MP3 / M4A / Opus only (300–800 px); folder cover stays full-res
 - **ReplayGain** — track + album tags after the rip set is complete
-- **iTunes Sound Check** — iTunNORM on MP3 / M4A / AIFF / WAV (from album ReplayGain)
+- **iTunes Sound Check** — iTunNORM on MP3 / M4A / AIFF / WAV (from track ReplayGain)
 
 ## Install
 
@@ -138,8 +138,8 @@ Release assets are published for **x86_64** and **aarch64** on
 ### AppImage (recommended)
 
 ```bash
-chmod +x ready2rip-0.4.34-x86_64.AppImage   # or …-aarch64.AppImage
-./ready2rip-0.4.34-x86_64.AppImage
+chmod +x ready2rip-0.4.35-x86_64.AppImage   # or …-aarch64.AppImage
+./ready2rip-0.4.35-x86_64.AppImage
 ```
 
 The AppImage needs a matching CPU architecture, a host **glibc** new enough for
@@ -169,7 +169,7 @@ Release AppImages are GPG-signed. Import the project key from
 ### Debian / Ubuntu
 
 ```bash
-sudo apt install ./ready2rip_0.4.34-1_amd64.deb   # or _arm64.deb
+sudo apt install ./ready2rip_0.4.35-1_amd64.deb   # or _arm64.deb
 ```
 
 Depends on distro packages for GTK 4 / libadwaita, mutagen, Pillow, cdparanoia,
@@ -178,7 +178,7 @@ flac, lame, ffmpeg, and opus-tools.
 ### Fedora / RPM
 
 ```bash
-sudo dnf install ./ready2rip-0.4.34-1.x86_64.rpm   # or .aarch64.rpm
+sudo dnf install ./ready2rip-0.4.35-1.x86_64.rpm   # or .aarch64.rpm
 ```
 
 Same runtime idea as the `.deb`: system UI stack and encoders, ready2rip itself
@@ -187,7 +187,7 @@ from the package.
 ### Flatpak
 
 ```bash
-flatpak install --user ./ready2rip-0.4.34-x86_64.flatpak
+flatpak install --user ./ready2rip-0.4.35-x86_64.flatpak
 flatpak run org.ready2rip.Ready2Rip
 ```
 

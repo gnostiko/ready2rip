@@ -65,6 +65,7 @@ from ready2rip.rip.encode_dest import (
     audio_dir_for_format,
     encode_format_list,
     is_lossless_extension,
+    is_lossy_format,
 )
 from ready2rip.rip.paranoia_run import run_paranoia_streaming
 from ready2rip.rip.paranoia_stats import FRAMES_PER_SECTOR, ParanoiaStats
@@ -201,8 +202,8 @@ class RipJob:
     # Copy Image: one continuous image (instead of per-track files).
     # Pair with write_cue_file for a matching image CUE sheet.
     copy_image: bool = False
-    # Longest edge for embed when preparing from folder art (0 = no downscale).
-    artwork_max_size: int = 1000  # match settings.DEFAULT_ARTWORK_MAX_SIZE
+    # Longest edge for lossy embeds when preparing from folder art.
+    artwork_max_size: int = 600  # match settings.DEFAULT_ARTWORK_MAX_SIZE
 
 
 ProgressCallback = Callable[[RipProgress], None]
@@ -1582,7 +1583,12 @@ class RipEngine:
                     _retag_title(
                         dest.out_path, retitle, track_number=track_number
                     )
-            if job.embed_artwork and embed_art is not None:
+            # Artwork embeds only into lossy encodes (MP3 / M4A / Opus).
+            if (
+                job.embed_artwork
+                and embed_art is not None
+                and is_lossy_format(dest.format)
+            ):
                 self._tags.embed_artwork(
                     dest.out_path, embed_art.data, embed_art.mime
                 )

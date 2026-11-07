@@ -29,6 +29,15 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-06">
       <description>
         <p>
+          0.4.35: Sound Check from track ReplayGain; multi-artist tags kept
+          separate across codecs; embed artwork for lossy only (≤800 px,
+          default 600).
+        </p>
+      </description>
+    </release>
+    <release version="0.4.34" date="2026-11-06">
+      <description>
+        <p>
           0.4.34: AIFF encode option; iTunes Sound Check (iTunNORM) for
           MP3 / M4A / AIFF / WAV with a Tags preference toggle.
         </p>

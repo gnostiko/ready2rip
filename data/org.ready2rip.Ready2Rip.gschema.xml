@@ -133,7 +133,7 @@
 
     <key name="embed-artwork" type="b">
       <default>true</default>
-      <summary>Embed album artwork in files</summary>
+      <summary>Embed album artwork in lossy encodes (MP3, M4A, Opus)</summary>
     </key>
 
     <key name="fetch-artwork" type="b">
@@ -152,15 +152,14 @@
     </key>
 
     <key name="artwork-max-size" type="i">
-      <range min="0" max="4000"/>
-      <default>1000</default>
-      <summary>Maximum embedded artwork edge length (pixels)</summary>
+      <range min="300" max="800"/>
+      <default>600</default>
+      <summary>Maximum embedded artwork edge length for lossy encodes (pixels)</summary>
       <description>
-        Full-resolution art is always downloaded for preview and folder cover.
-        Before embedding into audio files, images are scaled so the longest edge
-        is this many pixels. 0 keeps the original. Default is 1000 (sharp on
-        modern screens; ~100–350 KB JPEG per track). Use 600–800 for older
-        car stereos / DAPs; keep a full-size cover.jpg in the album folder.
+        Full-resolution art is always kept for preview and folder cover.jpg.
+        Lossy embeds (MP3 / M4A / Opus) are scaled so the longest edge is this
+        many pixels (300–800). Default is 600. FLAC / WAV / AIFF are never
+        embedded — use the album-folder cover instead.
       </description>
     </key>
 

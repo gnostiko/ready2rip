@@ -11,6 +11,7 @@ _FOLDER_LAYOUT_IDS = frozenset({'format_subdir', 'same_folder', 'custom_folder'}
 # Formats / extensions that may receive a .cue sheet (lossless / PCM only).
 LOSSLESS_FORMATS = frozenset({'flac', 'wav', 'aiff'})
 LOSSLESS_EXTENSIONS = frozenset({'.flac', '.wav', '.aiff', '.aif'})
+LOSSY_FORMATS = frozenset({'mp3', 'aac', 'opus'})
 
 _FORMAT_FOLDER_NAMES = {
     'flac': 'FLAC',
@@ -24,6 +25,10 @@ _FORMAT_FOLDER_NAMES = {
 
 def is_lossless_format(fmt: str) -> bool:
     return (fmt or '').strip().lower() in LOSSLESS_FORMATS
+
+
+def is_lossy_format(fmt: str) -> bool:
+    return (fmt or '').strip().lower() in LOSSY_FORMATS
 
 
 def is_lossless_extension(ext: str) -> bool:

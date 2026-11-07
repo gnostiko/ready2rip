@@ -36,3 +36,9 @@ def test_rg_to_itunnorm_louder_track_raises_units() -> None:
     l0 = int(loud.strip().split()[0], 16)
     # Negative gain (loud track) → larger Sound Check attenuation units.
     assert l0 > q0
+
+
+def test_track_gains_produce_distinct_itunnorm() -> None:
+    a = replaygain_to_itunnorm(-3.0, 0.8)
+    b = replaygain_to_itunnorm(+2.0, 0.4)
+    assert a != b

@@ -10,6 +10,7 @@ from ready2rip.tags.writer import (
     _album_date,
     _artist_names_for_tags,
     _is_compilation,
+    _people_tag_values,
     _track_isrc,
 )
 
@@ -27,6 +28,16 @@ def test_artist_names_multi_value_and_feat() -> None:
         'Other',
     ]
     assert _artist_names_for_tags(value, style='feat') == ['Main']
+
+
+def test_people_tag_values_never_keeps_semicolon_blob() -> None:
+    assert _people_tag_values(['Main; Guest', 'Other']) == [
+        'Main',
+        'Guest',
+        'Other',
+    ]
+    assert _people_tag_values('A; B') == ['A', 'B']
+    assert _people_tag_values(['Solo']) == ['Solo']
 
 
 def test_is_compilation_various_artists() -> None:

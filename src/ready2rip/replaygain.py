@@ -145,18 +145,12 @@ def apply_replaygain(
         if write_rg_tags:
             writer.write_replaygain(path, values)
         if write_sound_check and supports_sound_check(path.suffix):
-            # Prefer album gain for album-oriented Sound Check listening.
-            gain = (
-                values.album_gain_db
-                if values.album_gain_db is not None
-                else values.track_gain_db
-            )
-            peak = (
-                values.album_peak
-                if values.album_peak is not None
-                else values.track_peak
-            )
-            if writer.write_sound_check(path, gain_db=gain, peak=peak):
+            # Per-track Sound Check (matches typical iTunes / iPod behavior).
+            if writer.write_sound_check(
+                path,
+                gain_db=values.track_gain_db,
+                peak=values.track_peak,
+            ):
                 sc_written += 1
 
     if write_rg_tags:
@@ -167,7 +161,7 @@ def apply_replaygain(
         )
     if write_sound_check:
         notes.append(
-            f'iTunes Sound Check (iTunNORM from album ReplayGain) on '
+            f'iTunes Sound Check (iTunNORM from track ReplayGain) on '
             f'{sc_written} iPod-compatible file(s)'
         )
     return notes

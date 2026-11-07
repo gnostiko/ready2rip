@@ -193,23 +193,21 @@ def opus_bitrate_label(bitrate: int) -> str:
     return f'{int(bitrate)} kbps VBR'
 
 
-# 0 = keep full downloaded resolution when embedding.
-# Default 1000: crisp on phones/desktops without multi-MB-per-track bloat
-# (Picard CAA default download is 500; 600–800 favors old car decks).
-DEFAULT_ARTWORK_MAX_SIZE = 1000
+# Embed sizes for lossy encodes only (≤800 px keeps tags small on phones/cars).
+DEFAULT_ARTWORK_MAX_SIZE = 600
 ARTWORK_SIZES = (
     (300, '300 px'),
     (500, '500 px'),
     (600, '600 px'),
     (800, '800 px'),
-    (1000, '1000 px'),
-    (1200, '1200 px'),
-    (0, 'Original (no downscale)'),
 )
 
-# Map removed / legacy sizes to a current preset.
+# Map removed / oversized legacy presets down to the 800 px ceiling.
 _ARTWORK_SIZE_ALIASES = {
     720: 800,
+    1000: 800,
+    1200: 800,
+    0: 800,
 }
 
 def _get_bool(settings: Gio.Settings, key: str, default: bool) -> bool:
@@ -531,13 +529,18 @@ class SettingsStore:
             if snap.filename_template != stored_name:
                 s.set_string('filename-template', snap.filename_template)
 
-        # Migrate removed artwork size presets (e.g. 720 → 800).
+        # Migrate removed / oversized artwork presets (e.g. 1000 → 800).
         allowed = {px for px, _label in ARTWORK_SIZES}
+        prior_art = int(snap.artwork_max_size)
         if snap.artwork_max_size in _ARTWORK_SIZE_ALIASES:
             snap.artwork_max_size = _ARTWORK_SIZE_ALIASES[snap.artwork_max_size]
         elif snap.artwork_max_size not in allowed:
-            # Drop free-form custom sizes; keep default embed size.
             snap.artwork_max_size = DEFAULT_ARTWORK_MAX_SIZE
+        if s is not None and snap.artwork_max_size != prior_art:
+            try:
+                s.set_int('artwork-max-size', int(snap.artwork_max_size))
+            except Exception:
+                pass
         return snap
 
     def update(self, **kwargs) -> AppSettings:

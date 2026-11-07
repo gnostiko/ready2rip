@@ -772,7 +772,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 emb = self._artwork_embed
             if emb is not None:
                 self.cover_embed_label.set_text(f'Embed {emb.width}×{emb.height}')
-                self.cover_embed_label.set_tooltip_text('Size written into ripped files')
+                self.cover_embed_label.set_tooltip_text(
+                    'Size embedded in lossy files (MP3 / M4A / Opus)'
+                )
                 show_embed = True
         if not show_embed:
             self.cover_embed_label.set_text('')
@@ -1236,10 +1238,13 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._add_metadata_row(self._fetch_art_row, self.artwork_group)
 
         self._embed_art_row = Adw.SwitchRow(
-            title='Embed artwork',
+            title='Embed artwork in lossy',
             active=settings.embed_artwork,
         )
-        self._embed_art_row.set_tooltip_text('Write the cover into ripped files')
+        self._embed_art_row.set_tooltip_text(
+            'Write the cover into MP3 / M4A / Opus only. FLAC, WAV, and AIFF '
+            'use the album-folder cover instead.'
+        )
         self._embed_art_row.connect('notify::active', self._on_embed_art_toggled)
         self._add_metadata_row(self._embed_art_row, self.artwork_group)
 
@@ -1258,11 +1263,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                     self._art_size_values.index(DEFAULT_ARTWORK_MAX_SIZE)
                 )
             except ValueError:
-                self._art_size_row.set_selected(2)
+                self._art_size_row.set_selected(len(self._art_size_values) - 1)
         self._art_size_row.set_tooltip_text(
-            'Longest edge when embedding. 1000 px is the default (sharp on '
-            'phones/desktops). Prefer 600–800 for older car stereos; folder '
-            'cover.jpg stays full resolution.'
+            'Longest edge for lossy embeds (300–800 px). Default 600. '
+            'Folder cover.jpg stays full resolution.'
         )
         self._art_size_row.connect('notify::selected', self._on_art_size_changed)
         self._art_size_row.set_sensitive(settings.embed_artwork)

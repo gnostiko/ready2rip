@@ -59,7 +59,9 @@ class TagWriter:
         style = normalize_artist_style(artist_style)
         album_title = album.title or 'Unknown Album'
         raw_album_artist = normalize_artists(album.artist or 'Unknown Artist')
-        album_artists = _artist_names_for_tags(raw_album_artist, style=style)
+        album_artists = _people_tag_values(
+            _artist_names_for_tags(raw_album_artist, style=style)
+        )
 
         if image:
             title = album_title
@@ -81,7 +83,9 @@ class TagWriter:
                 title = format_title_with_artists(raw_title, raw_artist, style)
             else:
                 title = raw_title
-            artists = _artist_names_for_tags(raw_artist, style=style)
+            artists = _people_tag_values(
+                _artist_names_for_tags(raw_artist, style=style)
+            )
             total = total_tracks if total_tracks is not None else (
                 len(album.tracks) if album.tracks else None
             )
@@ -480,9 +484,10 @@ class TagWriter:
         encoded_by: str | None = None,
     ) -> None:
         audio['TITLE'] = [title]
-        audio['ARTIST'] = artists
+        # Vorbis comments: one ARTIST=/ALBUMARTIST= field per name.
+        audio['ARTIST'] = _people_tag_values(artists)
         audio['ALBUM'] = [album]
-        audio['ALBUMARTIST'] = album_artists
+        audio['ALBUMARTIST'] = _people_tag_values(album_artists)
         if track_number > 0:
             audio['TRACKNUMBER'] = [str(track_number)]
             if total_tracks and total_tracks > 0:
@@ -536,10 +541,13 @@ class TagWriter:
         from mutagen.mp4 import MP4, MP4FreeForm
 
         audio = MP4(path)
+        people = _people_tag_values(artists)
+        album_people = _people_tag_values(album_artists)
         audio['\xa9nam'] = [title]
-        audio['\xa9ART'] = artists
+        # Native MP4 multi-value artist atoms (one string per artist).
+        audio['\xa9ART'] = people
         audio['\xa9alb'] = [album]
-        audio['aART'] = album_artists
+        audio['aART'] = album_people
         if track_number > 0:
             total = total_tracks if total_tracks and total_tracks > 0 else 0
             audio['trkn'] = [(track_number, total)]
@@ -628,10 +636,13 @@ class TagWriter:
         ):
             tags.delall(frame)
         tags.delall('TXXX:BARCODE')
+        people = _people_tag_values(artists)
+        album_people = _people_tag_values(album_artists)
         tags.add(TIT2(encoding=3, text=title))
-        tags.add(TPE1(encoding=3, text=artists))
+        # ID3v2.4 null-separated multi-value (one name per value).
+        tags.add(TPE1(encoding=3, text=people))
         tags.add(TALB(encoding=3, text=album))
-        tags.add(TPE2(encoding=3, text=album_artists))
+        tags.add(TPE2(encoding=3, text=album_people))
         if track_number > 0:
             if total_tracks and total_tracks > 0:
                 tags.add(TRCK(encoding=3, text=f'{track_number}/{total_tracks}'))
@@ -720,10 +731,12 @@ class TagWriter:
             ):
                 tags.delall(frame)
             tags.delall('TXXX:BARCODE')
+            people = _people_tag_values(artists)
+            album_people = _people_tag_values(album_artists)
             tags.add(TIT2(encoding=3, text=title))
-            tags.add(TPE1(encoding=3, text=artists))
+            tags.add(TPE1(encoding=3, text=people))
             tags.add(TALB(encoding=3, text=album))
-            tags.add(TPE2(encoding=3, text=album_artists))
+            tags.add(TPE2(encoding=3, text=album_people))
             if track_number > 0:
                 if total_tracks and total_tracks > 0:
                     tags.add(
@@ -751,7 +764,8 @@ class TagWriter:
                     tags.add(TSRC(encoding=3, text=isrc))
             if encoded_by:
                 tags.add(TENC(encoding=3, text=encoded_by))
-            audio.save()
+            # ID3v2.4 keeps multi-artist TPE1/TPE2 as separate values.
+            audio.save(v2_version=4)
         except Exception:
             log.debug(
                 '%s tagging failed for %s',
@@ -759,6 +773,24 @@ class TagWriter:
                 path,
                 exc_info=True,
             )
+
+
+def _people_tag_values(names: list[str] | str | None) -> list[str]:
+    """Flatten to one artist name per list entry (never ``A; B`` in one string)."""
+    if names is None:
+        return ['Unknown Artist']
+    if isinstance(names, str):
+        return split_artists(names) or ['Unknown Artist']
+    out: list[str] = []
+    for name in names:
+        parts = split_artists(name)
+        if parts:
+            out.extend(parts)
+        else:
+            text = str(name).strip()
+            if text:
+                out.append(text)
+    return out or ['Unknown Artist']
 
 
 def _artist_names_for_tags(value: str, *, style: str) -> list[str]:

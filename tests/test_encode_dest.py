@@ -9,6 +9,7 @@ from ready2rip.rip.encode_dest import (
     audio_dir_for_format,
     encode_format_list,
     format_folder_name,
+    is_lossy_format,
 )
 
 
@@ -61,3 +62,12 @@ def test_format_folder_name() -> None:
     assert format_folder_name('aac') == 'M4A'
     assert format_folder_name('opus') == 'Opus'
     assert format_folder_name('aiff') == 'AIFF'
+
+
+def test_is_lossy_format() -> None:
+    assert is_lossy_format('mp3')
+    assert is_lossy_format('AAC')
+    assert is_lossy_format('opus')
+    assert not is_lossy_format('flac')
+    assert not is_lossy_format('wav')
+    assert not is_lossy_format('aiff')
