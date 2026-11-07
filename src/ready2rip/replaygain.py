@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""ReplayGain analysis via ffmpeg ebur128 (FLAC/MP3/AAC/Opus/WAV)."""
+"""ReplayGain analysis via ffmpeg ebur128 (FLAC/MP3/AAC/Opus/WAV/AIFF)."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from ready2rip.rip.soundcheck import supports_sound_check
 from ready2rip.tags.writer import ReplayGainValues, TagWriter
 
 log = logging.getLogger(__name__)
@@ -22,6 +23,19 @@ _PEAK_RE2 = re.compile(r'Peak:\s*([+-]?\d+(?:\.\d+)?)\s*dBFS', re.IGNORECASE)
 
 # filter_complex concat argv grows with track count; beyond this fall back.
 _MAX_ALBUM_CONCAT_INPUTS = 40
+
+_AUDIO_SUFFIXES = frozenset({
+    '.flac',
+    '.mp3',
+    '.m4a',
+    '.mp4',
+    '.aac',
+    '.opus',
+    '.ogg',
+    '.wav',
+    '.aiff',
+    '.aif',
+})
 
 
 def analyze_file(path: Path) -> ReplayGainValues | None:
@@ -71,32 +85,46 @@ def analyze_album(paths: list[Path]) -> ReplayGainValues | None:
     return _values_from_ffmpeg(cmd, label=f'album ({len(paths)} files)')
 
 
-def apply_replaygain(files: list[Path]) -> list[str]:
-    """Analyze each file once; write track + album ReplayGain tags.
+def apply_replaygain(
+    files: list[Path],
+    *,
+    write_rg_tags: bool = True,
+    write_sound_check: bool = False,
+) -> list[str]:
+    """Analyze each file once; write ReplayGain and/or iTunes Sound Check.
 
     Track gain uses per-file ``ebur128=peak=true``. Album gain is a single
     R128 measurement over the concatenated album when possible; otherwise the
     mean of track gains (with a log note).
+
+    Sound Check (iTunNORM) uses album gain/peak when available, else track,
+    and only on iPod-compatible formats (MP3 / M4A / AIFF / WAV).
     """
     if not files:
+        return []
+    if not write_rg_tags and not write_sound_check:
         return []
 
     notes: list[str] = []
     if not shutil.which('ffmpeg'):
-        notes.append('ReplayGain skipped: ffmpeg not found')
+        notes.append('Loudness tags skipped: ffmpeg not found')
         return notes
+
+    audio_files = [p for p in files if p.suffix.lower() in _AUDIO_SUFFIXES]
+    if not audio_files:
+        audio_files = list(files)
 
     writer = TagWriter()
     analyzed: list[tuple[Path, ReplayGainValues]] = []
-    for path in files:
+    for path in audio_files:
         values = analyze_file(path)
         if values is None:
-            notes.append(f'ReplayGain skipped for {path.name}')
+            notes.append(f'Loudness analysis skipped for {path.name}')
             continue
         analyzed.append((path, values))
 
     if not analyzed:
-        notes.append('ReplayGain: no tracks analyzed')
+        notes.append('Loudness tags: no tracks analyzed')
         return notes
 
     album_paths = [p for p, _v in analyzed]
@@ -110,16 +138,38 @@ def apply_replaygain(files: list[Path]) -> list[str]:
         album_peak = max(v.track_peak for _p, v in analyzed)
         album_method = 'mean of track gains (fallback)'
 
+    sc_written = 0
     for path, values in analyzed:
         values.album_gain_db = album_gain
         values.album_peak = album_peak
-        writer.write_replaygain(path, values)
+        if write_rg_tags:
+            writer.write_replaygain(path, values)
+        if write_sound_check and supports_sound_check(path.suffix):
+            # Prefer album gain for album-oriented Sound Check listening.
+            gain = (
+                values.album_gain_db
+                if values.album_gain_db is not None
+                else values.track_gain_db
+            )
+            peak = (
+                values.album_peak
+                if values.album_peak is not None
+                else values.track_peak
+            )
+            if writer.write_sound_check(path, gain_db=gain, peak=peak):
+                sc_written += 1
 
-    notes.append(
-        f'ReplayGain track + album (ffmpeg ebur128 true peak, {album_method}) on '
-        f'{len(analyzed)} file(s) '
-        f'(album gain {album_gain:+.2f} dB, album peak {album_peak:.6f})'
-    )
+    if write_rg_tags:
+        notes.append(
+            f'ReplayGain track + album (ffmpeg ebur128 true peak, {album_method}) on '
+            f'{len(analyzed)} file(s) '
+            f'(album gain {album_gain:+.2f} dB, album peak {album_peak:.6f})'
+        )
+    if write_sound_check:
+        notes.append(
+            f'iTunes Sound Check (iTunNORM from album ReplayGain) on '
+            f'{sc_written} iPod-compatible file(s)'
+        )
     return notes
 
 

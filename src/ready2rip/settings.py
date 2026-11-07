@@ -29,6 +29,7 @@ _SCHEMA_XML = 'org.ready2rip.Ready2Rip.gschema.xml'
 
 ENCODERS = (
     ('wav', 'WAV (uncompressed)'),
+    ('aiff', 'AIFF (uncompressed)'),
     ('flac', 'FLAC (lossless)'),
     ('opus', 'Opus'),
     ('aac', 'M4A'),
@@ -313,6 +314,8 @@ class AppSettings:
     # Second output root when also_encode_folder is custom_folder.
     also_encode_directory: str = ''
     apply_replaygain: bool = True
+    # iTunNORM Sound Check on iPod-compatible formats (MP3/M4A/AIFF/WAV).
+    write_sound_check: bool = True
     # Write Encoded by / ENCODER / ©too with ready2rip + version.
     add_ripper_tag: bool = True
     embed_artwork: bool = True
@@ -480,6 +483,7 @@ class SettingsStore:
                     s, 'also-encode-directory', ''
                 ),
                 apply_replaygain=s.get_boolean('apply-replaygain'),
+                write_sound_check=_get_bool(s, 'write-sound-check', True),
                 add_ripper_tag=_get_bool(s, 'add-ripper-tag', True),
                 embed_artwork=s.get_boolean('embed-artwork'),
                 fetch_artwork=s.get_boolean('fetch-artwork'),
@@ -561,6 +565,7 @@ class SettingsStore:
             'also_encode_folder': ('also-encode-folder', 'string'),
             'also_encode_directory': ('also-encode-directory', 'string'),
             'apply_replaygain': ('apply-replaygain', 'bool'),
+            'write_sound_check': ('write-sound-check', 'bool'),
             'add_ripper_tag': ('add-ripper-tag', 'bool'),
             'embed_artwork': ('embed-artwork', 'bool'),
             'fetch_artwork': ('fetch-artwork', 'bool'),

@@ -84,6 +84,7 @@ class RipLog:
         self.verify_ctdb: bool = True
         self.submit_ctdb: bool = False
         self.apply_replaygain: bool = True
+        self.write_sound_check: bool = True
         self.add_ripper_tag: bool = True
         self.embed_artwork: bool = True
         self.test_and_copy: bool = True
@@ -138,6 +139,7 @@ class RipLog:
         self.verify_ctdb = getattr(job, 'verify_ctdb', True)
         self.submit_ctdb = getattr(job, 'submit_ctdb', False)
         self.apply_replaygain = job.apply_replaygain
+        self.write_sound_check = bool(getattr(job, 'write_sound_check', True))
         self.add_ripper_tag = bool(getattr(job, 'add_ripper_tag', True))
         self.embed_artwork = job.embed_artwork
         self.test_and_copy = getattr(job, 'test_and_copy', True)
@@ -368,6 +370,10 @@ class RipLog:
         )
         lines.append(f'Embed artwork                   : {"Yes" if self.embed_artwork else "No"}')
         lines.append(f'ReplayGain                      : {"Yes" if self.apply_replaygain else "No"}')
+        lines.append(
+            f'iTunes Sound Check               : '
+            f'{"Yes" if self.write_sound_check else "No"}'
+        )
         lines.append(f'AccurateRip                     : {"Yes" if self.verify_accuraterip else "No"}')
         if self.ar_status:
             lines.append(f'AccurateRip database            : {self.ar_status}')

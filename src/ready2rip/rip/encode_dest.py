@@ -8,13 +8,14 @@ from pathlib import Path
 _ALSO_ENCODER_IDS = frozenset({'mp3', 'aac', 'opus'})
 _FOLDER_LAYOUT_IDS = frozenset({'format_subdir', 'same_folder', 'custom_folder'})
 
-# Formats / extensions that may receive a .cue sheet (lossless only).
-LOSSLESS_FORMATS = frozenset({'flac', 'wav'})
-LOSSLESS_EXTENSIONS = frozenset({'.flac', '.wav'})
+# Formats / extensions that may receive a .cue sheet (lossless / PCM only).
+LOSSLESS_FORMATS = frozenset({'flac', 'wav', 'aiff'})
+LOSSLESS_EXTENSIONS = frozenset({'.flac', '.wav', '.aiff', '.aif'})
 
 _FORMAT_FOLDER_NAMES = {
     'flac': 'FLAC',
     'wav': 'WAV',
+    'aiff': 'AIFF',
     'mp3': 'MP3',
     'aac': 'M4A',
     'opus': 'Opus',

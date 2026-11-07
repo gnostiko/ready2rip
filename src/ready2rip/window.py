@@ -1277,6 +1277,19 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._rg_row.connect('notify::active', self._on_rg_toggled)
         self._add_metadata_row(self._rg_row, self.tags_group)
 
+        self._sound_check_row = Adw.SwitchRow(
+            title='iTunes Sound Check',
+            active=settings.write_sound_check,
+        )
+        self._sound_check_row.set_tooltip_text(
+            'Write iTunNORM for Sound Check on MP3, M4A, AIFF, and WAV '
+            '(skipped for FLAC and Opus)'
+        )
+        self._sound_check_row.connect(
+            'notify::active', self._on_sound_check_toggled
+        )
+        self._add_metadata_row(self._sound_check_row, self.tags_group)
+
         self._ripper_tag_row = Adw.SwitchRow(
             title='Encoded by',
             active=settings.add_ripper_tag,
@@ -1327,6 +1340,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             (self._freedb_row, self._on_freedb_toggled),
             (self._auto_lookup_row, self._on_auto_lookup_toggled),
             (self._rg_row, self._on_rg_toggled),
+            (self._sound_check_row, self._on_sound_check_toggled),
             (self._ripper_tag_row, self._on_ripper_tag_toggled),
             (self._embed_art_row, self._on_embed_art_toggled),
             (self._fetch_art_row, self._on_fetch_art_toggled),
@@ -1415,6 +1429,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._freedb_row.set_active(settings.use_freedb)
             self._sync_lookup_source_sensitivity(settings.auto_lookup_metadata)
             self._rg_row.set_active(settings.apply_replaygain)
+            self._sound_check_row.set_active(settings.write_sound_check)
             self._ripper_tag_row.set_active(settings.add_ripper_tag)
             self._embed_art_row.set_active(settings.embed_artwork)
             self._art_size_row.set_sensitive(settings.embed_artwork)
@@ -1495,7 +1510,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         kind_attr: str,
         handler,
     ) -> None:
-        if fmt in ('', 'wav'):
+        if fmt in ('', 'wav', 'aiff'):
             row.set_visible(False)
             setattr(self, kind_attr, None)
             return
@@ -1997,6 +2012,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _on_rg_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(apply_replaygain=row.get_active())
 
+    def _on_sound_check_toggled(self, row: Adw.SwitchRow, *_args) -> None:
+        self.store.update(write_sound_check=row.get_active())
+
     def _on_ripper_tag_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(add_ripper_tag=row.get_active())
 
@@ -2325,6 +2343,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 else ''
             ),
             apply_replaygain=settings.apply_replaygain,
+            write_sound_check=settings.write_sound_check,
             add_ripper_tag=settings.add_ripper_tag,
             embed_artwork=settings.embed_artwork,
             artwork=embed_art if settings.embed_artwork else None,

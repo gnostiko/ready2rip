@@ -55,6 +55,7 @@ from ready2rip.rip.cue import (
 )
 from ready2rip.rip.encode import (
     aac_encode_argv,
+    aiff_encode_argv,
     flac_encode_argv,
     mp3_encode_argv,
     opus_encode_argv,
@@ -138,7 +139,7 @@ class RipJob:
     device: str
     track_numbers: list[int]
     output_directory: Path
-    encode_format: str = 'flac'  # flac | mp3 | aac | opus | wav
+    encode_format: str = 'flac'  # flac | mp3 | aac | opus | wav | aiff
     flac_compression: int = 5
     mp3_quality: str = 'v0'  # LAME v0–v5 or cbr128/192/256/320
     aac_quality: str = 'cbr256'  # FDK VBR 1–5 or cbr128/192/256/320
@@ -151,6 +152,8 @@ class RipJob:
     # Used when also_encode_folder == 'custom_folder' (second output root).
     also_encode_directory: str = ''
     apply_replaygain: bool = True
+    # iTunNORM on MP3 / M4A / AIFF / WAV (skipped for FLAC / Opus).
+    write_sound_check: bool = True
     embed_artwork: bool = True
     # Embed-sized image written into each audio file.
     artwork: ArtworkImage | None = None
@@ -290,6 +293,7 @@ class RipEngine:
         'aac': '.m4a',
         'opus': '.opus',
         'wav': '.wav',
+        'aiff': '.aiff',
     }
 
     def __init__(self) -> None:
@@ -342,7 +346,7 @@ class RipEngine:
         base = Path(job.output_directory).expanduser().resolve()
 
         # CD images + CUE need a lossless/container format (WAV/FLAC).
-        if job.copy_image and fmt not in ('flac', 'wav'):
+        if job.copy_image and fmt not in ('flac', 'wav', 'aiff'):
             log.info('Copy Image mode: using FLAC instead of %s', fmt)
             fmt = 'flac'
 
@@ -671,17 +675,25 @@ class RipEngine:
                 )
                 outputs.extend(data_paths)
 
-                # ReplayGain: track + album on complete set
-                if job.apply_replaygain and outputs and not self._cancelled:
+                # ReplayGain / Sound Check on the complete audio set
+                if (
+                    (job.apply_replaygain or job.write_sound_check)
+                    and outputs
+                    and not self._cancelled
+                ):
+                    loud_msg = (
+                        'Analyzing ReplayGain (track + album)…'
+                        if job.apply_replaygain
+                        else 'Analyzing loudness for Sound Check…'
+                    )
                     report(
                         tracks[-1] if tracks else 0,
                         RipState.REPLAYGAIN,
                         index=total_units - 1,
                         sub=1.0,
-                        message='Analyzing ReplayGain (track + album)…',
+                        message=loud_msg,
                         total_units=total_units,
                     )
-                    # Only audio tracks for ReplayGain (skip .cue if already present).
                     audio_for_rg = [
                         p
                         for p in outputs
@@ -691,22 +703,28 @@ class RipEngine:
                             '.m4a',
                             '.opus',
                             '.wav',
+                            '.aiff',
+                            '.aif',
                         }
                     ]
 
-                    def _rg_pulse() -> None:
+                    def _rg_pulse(*, _msg=loud_msg) -> None:
                         report(
                             tracks[-1] if tracks else 0,
                             RipState.REPLAYGAIN,
                             index=total_units - 1,
                             sub=1.0,
-                            message='Analyzing ReplayGain (track + album)…',
+                            message=_msg,
                             total_units=total_units,
                             nudge=True,
                         )
 
                     with ProgressPulse(_rg_pulse):
-                        rg_notes = apply_replaygain(audio_for_rg or outputs)
+                        rg_notes = apply_replaygain(
+                            audio_for_rg or outputs,
+                            write_rg_tags=job.apply_replaygain,
+                            write_sound_check=job.write_sound_check,
+                        )
                     notes.extend(rg_notes)
                     if rip_log is not None:
                         rip_log.replaygain_notes.extend(rg_notes)
@@ -1381,6 +1399,8 @@ class RipEngine:
             return 'lame encoder not found'
         if fmt == 'aac' and not shutil.which('ffmpeg'):
             return 'ffmpeg required for AAC'
+        if fmt == 'aiff' and not shutil.which('ffmpeg'):
+            return 'ffmpeg required for AIFF'
         if fmt == 'opus' and not shutil.which('opusenc') and not shutil.which('ffmpeg'):
             return 'opusenc or ffmpeg required for Opus'
         return None
@@ -1448,6 +1468,8 @@ class RipEngine:
                     if stem_path.suffix.lower() in {
                         '.flac',
                         '.wav',
+                        '.aiff',
+                        '.aif',
                         '.mp3',
                         '.m4a',
                         '.opus',
@@ -1498,7 +1520,7 @@ class RipEngine:
         cover is written once per album directory when missing. When
         *tag_as_image* is True, tags are album-level (no track/ISRC).
         """
-        # Lossy/lossless encodes first so a final WAV dest can rename the temp.
+        # Compressed encodes first so a final WAV dest can rename the temp.
         ordered = [d for d in dests if d.format != 'wav'] + [
             d for d in dests if d.format == 'wav'
         ]
@@ -3267,13 +3289,17 @@ class RipEngine:
                         (
                             'Writing image WAV…'
                             if enc_fmt == 'wav'
-                            else f'Encoding disc image to {enc_fmt.upper()}'
-                            + (
-                                f' ({t_i + 1}/{n_targets})'
-                                if n_targets > 1
-                                else ''
+                            else (
+                                'Writing image AIFF…'
+                                if enc_fmt == 'aiff'
+                                else f'Encoding disc image to {enc_fmt.upper()}'
+                                + (
+                                    f' ({t_i + 1}/{n_targets})'
+                                    if n_targets > 1
+                                    else ''
+                                )
+                                + '…'
                             )
-                            + '…'
                         ),
                     )
 
@@ -3327,7 +3353,7 @@ class RipEngine:
                         p
                         for p in output_files
                         if p.parent == dest.album_dir
-                        and p.suffix.lower() in {'.flac', '.wav'}
+                        and p.suffix.lower() in {'.flac', '.wav', '.aiff', '.aif'}
                         and p.stem == basename
                     ]
                     if not encoded:
@@ -3367,6 +3393,48 @@ class RipEngine:
                 primary_album = dests[0].album_dir
                 primary_out = output_files[0] if output_files else None
                 album_dir = primary_album
+
+                if (
+                    (job.apply_replaygain or job.write_sound_check)
+                    and output_files
+                    and not self._cancelled
+                ):
+                    loud_msg = (
+                        'Analyzing ReplayGain (track + album)…'
+                        if job.apply_replaygain
+                        else 'Analyzing loudness for Sound Check…'
+                    )
+                    report(RipState.REPLAYGAIN, 0.94, loud_msg)
+                    audio_for_rg = [
+                        p
+                        for p in output_files
+                        if p.suffix.lower() in {
+                            '.flac',
+                            '.mp3',
+                            '.m4a',
+                            '.opus',
+                            '.wav',
+                            '.aiff',
+                            '.aif',
+                        }
+                    ]
+
+                    def _img_rg_pulse(*, _msg=loud_msg) -> None:
+                        report(RipState.REPLAYGAIN, 0.94, _msg, nudge=True)
+
+                    with ProgressPulse(_img_rg_pulse):
+                        rg_notes = apply_replaygain(
+                            audio_for_rg or [
+                                p
+                                for p in output_files
+                                if p.suffix.lower() != '.cue'
+                            ],
+                            write_rg_tags=job.apply_replaygain,
+                            write_sound_check=job.write_sound_check,
+                        )
+                    notes.extend(rg_notes)
+                    if rip_log is not None:
+                        rip_log.replaygain_notes.extend(rg_notes)
 
                 if job.submit_ctdb and ctdb_verifier is not None and ctdb_results:
                     report(RipState.VERIFYING, 0.97, 'Submitting to CTDB…')
@@ -3644,6 +3712,11 @@ class RipEngine:
                     opus_ffmpeg_argv(wav_path, out_path, job.opus_bitrate),
                     what='ffmpeg opus',
                 )
+        elif fmt == 'aiff':
+            self._run(
+                aiff_encode_argv(wav_path, out_path),
+                what='ffmpeg aiff',
+            )
         else:
             raise RuntimeError(f'Unsupported encode format: {fmt}')
 

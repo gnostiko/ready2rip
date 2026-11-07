@@ -29,6 +29,14 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-06">
       <description>
         <p>
+          0.4.34: AIFF encode option; iTunes Sound Check (iTunNORM) for
+          MP3 / M4A / AIFF / WAV with a Tags preference toggle.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.33" date="2026-11-06">
+      <description>
+        <p>
           0.4.33: Encoded by tag on by default (Tags preference to disable);
           continuous whole-rip progress; custom naming fields only when
           Custom… is selected.

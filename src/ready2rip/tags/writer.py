@@ -106,6 +106,8 @@ class TagWriter:
             self._tag_ogg(path, **kw)
         elif suffix == '.wav':
             self._tag_wav(path, **kw)
+        elif suffix in {'.aiff', '.aif'}:
+            self._tag_aiff(path, **kw)
         else:
             log.warning('No tagger for %s', path)
 
@@ -200,8 +202,41 @@ class TagWriter:
             if values.album_peak is not None:
                 audio['REPLAYGAIN_ALBUM_PEAK'] = [f'{values.album_peak:.6f}']
             audio.save()
+        elif suffix in {'.wav', '.aiff', '.aif'}:
+            self._write_id3_replaygain(path, values, container=suffix)
         else:
             log.debug('No ReplayGain writer for %s', path)
+
+    def write_sound_check(
+        self,
+        path: Path,
+        *,
+        gain_db: float,
+        peak: float,
+    ) -> bool:
+        """Write iTunNORM for iPod-compatible formats. Return True if written."""
+        from ready2rip.rip.soundcheck import (
+            replaygain_to_itunnorm,
+            supports_sound_check,
+        )
+
+        suffix = path.suffix.lower()
+        if not supports_sound_check(suffix):
+            return False
+        text = replaygain_to_itunnorm(gain_db, peak)
+        try:
+            if suffix == '.mp3':
+                self._write_mp3_itunnorm(path, text)
+            elif suffix in {'.m4a', '.mp4', '.aac'}:
+                self._write_mp4_itunnorm(path, text)
+            elif suffix in {'.wav', '.aiff', '.aif'}:
+                self._write_id3_itunnorm(path, text, container=suffix)
+            else:
+                return False
+        except Exception:
+            log.debug('Sound Check write failed for %s', path, exc_info=True)
+            return False
+        return True
 
     def embed_artwork(
         self,
@@ -258,6 +293,8 @@ class TagWriter:
             )
             audio['covr'] = [MP4Cover(image_bytes, imageformat=fmt)]
             audio.save()
+        elif suffix in {'.aiff', '.aif', '.wav'}:
+            self._embed_id3_artwork(path, image_bytes, mime, container=suffix)
         elif suffix in {'.opus', '.ogg'}:
             import base64
 
@@ -285,6 +322,130 @@ class TagWriter:
             audio.save()
         else:
             log.debug('Artwork not embedded for %s', path)
+
+    @staticmethod
+    def _open_id3_container(path: Path, *, container: str):
+        """Open WAVE or AIFF with an ID3 tag bag."""
+        from mutagen.id3 import ID3
+
+        if container == '.wav':
+            from mutagen.wave import WAVE
+
+            audio = WAVE(path)
+        else:
+            from mutagen.aiff import AIFF
+
+            audio = AIFF(path)
+        if audio.tags is None:
+            audio.add_tags()
+        if audio.tags is None or not isinstance(audio.tags, ID3):
+            raise RuntimeError(f'No ID3 tags on {path}')
+        return audio
+
+    def _write_id3_replaygain(
+        self,
+        path: Path,
+        values: ReplayGainValues,
+        *,
+        container: str,
+    ) -> None:
+        from mutagen.id3 import TXXX
+
+        audio = self._open_id3_container(path, container=container)
+        tags = audio.tags
+        assert tags is not None
+        for desc, text in (
+            ('REPLAYGAIN_TRACK_GAIN', f'{values.track_gain_db:.2f} dB'),
+            ('REPLAYGAIN_TRACK_PEAK', f'{values.track_peak:.6f}'),
+        ):
+            tags.delall(f'TXXX:{desc}')
+            tags.add(TXXX(encoding=3, desc=desc, text=[text]))
+        if values.album_gain_db is not None:
+            tags.delall('TXXX:REPLAYGAIN_ALBUM_GAIN')
+            tags.add(
+                TXXX(
+                    encoding=3,
+                    desc='REPLAYGAIN_ALBUM_GAIN',
+                    text=[f'{values.album_gain_db:.2f} dB'],
+                )
+            )
+        if values.album_peak is not None:
+            tags.delall('TXXX:REPLAYGAIN_ALBUM_PEAK')
+            tags.add(
+                TXXX(
+                    encoding=3,
+                    desc='REPLAYGAIN_ALBUM_PEAK',
+                    text=[f'{values.album_peak:.6f}'],
+                )
+            )
+        audio.save()
+
+    def _write_mp3_itunnorm(self, path: Path, text: str) -> None:
+        from mutagen.id3 import COMM, ID3
+        from mutagen.mp3 import MP3
+
+        audio = MP3(path, ID3=ID3)
+        if audio.tags is None:
+            audio.add_tags()
+        assert audio.tags is not None
+        audio.tags.delall('COMM:iTunNORM:eng')
+        audio.tags.delall('COMM:iTunNORM:')
+        # Match iTunes: description iTunNORM, empty language often used too.
+        audio.tags.add(
+            COMM(encoding=3, lang='eng', desc='iTunNORM', text=[text])
+        )
+        audio.save(v2_version=4)
+
+    def _write_mp4_itunnorm(self, path: Path, text: str) -> None:
+        from mutagen.mp4 import MP4, MP4FreeForm
+
+        audio = MP4(path)
+        audio['----:com.apple.iTunes:iTunNORM'] = [
+            MP4FreeForm(text.encode('utf-8'))
+        ]
+        audio.save()
+
+    def _write_id3_itunnorm(
+        self, path: Path, text: str, *, container: str
+    ) -> None:
+        from mutagen.id3 import COMM
+
+        audio = self._open_id3_container(path, container=container)
+        tags = audio.tags
+        assert tags is not None
+        tags.delall('COMM:iTunNORM:eng')
+        tags.delall('COMM:iTunNORM:')
+        tags.add(COMM(encoding=3, lang='eng', desc='iTunNORM', text=[text]))
+        audio.save()
+
+    def _embed_id3_artwork(
+        self,
+        path: Path,
+        image_bytes: bytes,
+        mime: str,
+        *,
+        container: str,
+    ) -> None:
+        from mutagen.id3 import APIC
+
+        audio = self._open_id3_container(path, container=container)
+        tags = audio.tags
+        assert tags is not None
+        tags.delall('APIC')
+        tags.add(
+            APIC(
+                encoding=3,
+                mime=mime or 'image/jpeg',
+                type=3,
+                desc='Cover',
+                data=image_bytes,
+            )
+        )
+        audio.save()
+
+    def _tag_aiff(self, path: Path, **kw) -> None:
+        """AIFF ID3 tags — same fields as WAV."""
+        self._tag_id3_pcm_container(path, container='.aiff', **kw)
 
     def _tag_flac(self, path: Path, **kw) -> None:
         from mutagen.flac import FLAC
@@ -507,10 +668,14 @@ class TagWriter:
             tags.add(TENC(encoding=3, text=encoded_by))
         audio.save(v2_version=4)
 
-    def _tag_wav(
+    def _tag_wav(self, path: Path, **kw) -> None:
+        self._tag_id3_pcm_container(path, container='.wav', **kw)
+
+    def _tag_id3_pcm_container(
         self,
         path: Path,
         *,
+        container: str,
         title: str,
         artists: list[str],
         album: str,
@@ -520,18 +685,9 @@ class TagWriter:
         album_meta: AlbumMetadata | None = None,
         encoded_by: str | None = None,
     ) -> None:
-        try:
-            from mutagen.wave import WAVE
-        except ImportError:
-            log.debug('mutagen WAVE not available')
-            return
-        audio = WAVE(path)
-        if audio.tags is None:
-            audio.add_tags()
-        tags = audio.tags
+        """Shared ID3 tagging for WAV and AIFF."""
         try:
             from mutagen.id3 import (
-                ID3,
                 TALB,
                 TCON,
                 TDRC,
@@ -546,8 +702,24 @@ class TagWriter:
                 TXXX,
             )
 
-            if tags is None or not isinstance(tags, ID3):
-                return
+            audio = self._open_id3_container(path, container=container)
+            tags = audio.tags
+            assert tags is not None
+            for frame in (
+                'TIT2',
+                'TPE1',
+                'TALB',
+                'TPE2',
+                'TRCK',
+                'TPOS',
+                'TCON',
+                'TPUB',
+                'TDRC',
+                'TSRC',
+                'TENC',
+            ):
+                tags.delall(frame)
+            tags.delall('TXXX:BARCODE')
             tags.add(TIT2(encoding=3, text=title))
             tags.add(TPE1(encoding=3, text=artists))
             tags.add(TALB(encoding=3, text=album))
@@ -578,11 +750,15 @@ class TagWriter:
                 if isrc:
                     tags.add(TSRC(encoding=3, text=isrc))
             if encoded_by:
-                tags.delall('TENC')
                 tags.add(TENC(encoding=3, text=encoded_by))
             audio.save()
         except Exception:
-            log.debug('WAV tagging failed for %s', path, exc_info=True)
+            log.debug(
+                '%s tagging failed for %s',
+                container.lstrip('.').upper(),
+                path,
+                exc_info=True,
+            )
 
 
 def _artist_names_for_tags(value: str, *, style: str) -> list[str]:

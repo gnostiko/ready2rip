@@ -14,6 +14,7 @@ or forced resample flags. Compression uses stock quality presets only.
     fallback mirrors the same bitrate / VBR / audio application settings.
     (Opus packets are always 48 kHz internally; that is the codec, not a
     Ready2Rip pre-process.)
+  * AIFF — ffmpeg ``pcm_s16be`` classic AIFF (bit-identical CDDA PCM).
 """
 
 from __future__ import annotations
@@ -203,6 +204,23 @@ def opus_ffmpeg_argv(wav_path: Path, out_path: Path, bitrate_kbps: int) -> list[
     ]
 
 
+def aiff_encode_argv(wav_path: Path, out_path: Path) -> list[str]:
+    """Classic AIFF (big-endian 16-bit PCM) via ffmpeg — no resample/dither."""
+    return [
+        'ffmpeg',
+        '-y',
+        '-loglevel',
+        'error',
+        '-i',
+        str(wav_path),
+        '-c:a',
+        'pcm_s16be',
+        '-f',
+        'aiff',
+        str(out_path),
+    ]
+
+
 def encode_command_summary(
     fmt: str,
     *,
@@ -242,4 +260,6 @@ def encode_command_summary(
         )
     if fmt == 'wav':
         return 'WAV copy (uncompressed PCM)'
+    if fmt == 'aiff':
+        return 'ffmpeg -c:a pcm_s16be -f aiff (classic AIFF; PCM unaltered)'
     return fmt or 'unknown'

@@ -60,3 +60,4 @@ def test_audio_dir_format_subdir_only_when_multi() -> None:
 def test_format_folder_name() -> None:
     assert format_folder_name('aac') == 'M4A'
     assert format_folder_name('opus') == 'Opus'
+    assert format_folder_name('aiff') == 'AIFF'

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ready2rip.rip.encode import (
     aac_encode_argv,
+    aiff_encode_argv,
     encode_command_summary,
     flac_encode_argv,
     prefer_fdk_aac,
@@ -51,3 +52,15 @@ def test_native_aac_vbr_uses_quality_scale_not_cbr() -> None:
     assert '-b:a' not in cmd
     q = float(cmd[cmd.index('-q:a') + 1])
     assert q >= 1.0
+
+
+def test_aiff_encode_argv_is_pcm_be() -> None:
+    cmd = aiff_encode_argv(Path('in.wav'), Path('out.aiff'))
+    assert cmd[0] == 'ffmpeg'
+    assert 'pcm_s16be' in cmd
+    assert 'aiff' in cmd
+    assert cmd[-1] == 'out.aiff'
+
+
+def test_aiff_summary() -> None:
+    assert 'aiff' in encode_command_summary('aiff').lower()

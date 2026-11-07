@@ -33,6 +33,7 @@
     <key name="encode-format" type="s">
       <choices>
         <choice value="wav"/>
+        <choice value="aiff"/>
         <choice value="flac"/>
         <choice value="opus"/>
         <choice value="aac"/>
@@ -166,6 +167,16 @@
     <key name="apply-replaygain" type="b">
       <default>true</default>
       <summary>Compute and write ReplayGain tags</summary>
+    </key>
+
+    <key name="write-sound-check" type="b">
+      <default>true</default>
+      <summary>Write iTunes Sound Check (iTunNORM) on iPod-compatible formats</summary>
+      <description>
+        Converts ReplayGain loudness to iTunNORM for MP3, M4A, AIFF, and WAV.
+        FLAC and Opus are skipped. Requires loudness analysis (same pass as
+        ReplayGain when that option is also on).
+      </description>
     </key>
 
     <key name="add-ripper-tag" type="b">
