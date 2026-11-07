@@ -86,7 +86,9 @@ class RipLog:
         self.apply_replaygain: bool = True
         self.write_sound_check: bool = True
         self.add_ripper_tag: bool = True
+        self.embed_lyrics: bool = True
         self.embed_artwork: bool = True
+        self.embed_artwork_lossless: bool = False
         self.test_and_copy: bool = True
         self.write_cue_file: bool = True
         self.defeat_audio_cache: bool = True
@@ -141,7 +143,11 @@ class RipLog:
         self.apply_replaygain = job.apply_replaygain
         self.write_sound_check = bool(getattr(job, 'write_sound_check', True))
         self.add_ripper_tag = bool(getattr(job, 'add_ripper_tag', True))
+        self.embed_lyrics = bool(getattr(job, 'embed_lyrics', True))
         self.embed_artwork = job.embed_artwork
+        self.embed_artwork_lossless = bool(
+            getattr(job, 'embed_artwork_lossless', False)
+        )
         self.test_and_copy = getattr(job, 'test_and_copy', True)
         self.write_cue_file = getattr(job, 'write_cue_file', True)
         self.defeat_audio_cache = getattr(job, 'defeat_audio_cache', True)
@@ -368,7 +374,19 @@ class RipLog:
             f'Encoded by tag                   : '
             f'{"Yes" if self.add_ripper_tag else "No"}'
         )
-        lines.append(f'Embed artwork                   : {"Yes" if self.embed_artwork else "No"}')
+        lines.append(
+            f'Save lyrics (lossless)           : '
+            f'{"Yes" if self.embed_lyrics else "No"}'
+        )
+        if self.embed_artwork and self.embed_artwork_lossless:
+            embed_label = 'Yes (lossy + lossless)'
+        elif self.embed_artwork:
+            embed_label = 'Yes (lossy)'
+        elif self.embed_artwork_lossless:
+            embed_label = 'Yes (lossless)'
+        else:
+            embed_label = 'No'
+        lines.append(f'Embed artwork                   : {embed_label}')
         lines.append(f'ReplayGain                      : {"Yes" if self.apply_replaygain else "No"}')
         lines.append(
             f'iTunes Sound Check               : '

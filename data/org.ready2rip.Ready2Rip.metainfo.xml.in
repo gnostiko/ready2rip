@@ -26,7 +26,16 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-11-06">
+    <release version="@APPLICATION_VERSION@" date="2026-11-07">
+      <description>
+        <p>
+          0.4.36: Primary rip lossless-only; Also encode lossy companions;
+          LRCLIB lyrics (lossless tags + sidecars); settings UI cleanup;
+          lossless embed artwork option; 100 MB art limit; metadata cache prune.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.35" date="2026-11-06">
       <description>
         <p>
           0.4.35: Sound Check from track ReplayGain; multi-artist tags kept

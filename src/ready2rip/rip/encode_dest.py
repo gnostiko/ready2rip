@@ -57,14 +57,15 @@ def encode_format_list(
     to primary, or not a supported also-encode codec.
     """
     primary_fmt = (primary or 'flac').strip().lower() or 'flac'
+    if primary_fmt not in LOSSLESS_FORMATS:
+        primary_fmt = 'flac'
     formats = [primary_fmt]
     if not also_encode or not allow_also:
         return formats
     secondary = (also_format or 'mp3').strip().lower()
     if secondary not in _ALSO_ENCODER_IDS:
         secondary = 'mp3'
-    if secondary == primary_fmt:
-        return formats
+    # Primary is always lossless; secondary is always lossy — never equal.
     formats.append(secondary)
     return formats
 

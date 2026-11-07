@@ -38,11 +38,13 @@ from ready2rip.disc.overread import (
     probe_overread,
 )
 from ready2rip.disc.probe import DiscInfo, attach_mmc_toc
+from ready2rip.metadata.lyrics import write_lyrics_sidecar
 from ready2rip.metadata.providers import AlbumMetadata
 from ready2rip.paths import (
     DEFAULT_ALBUM_FOLDER_TEMPLATE,
     DEFAULT_FILENAME_TEMPLATE,
     build_output_paths,
+    track_meta_for,
 )
 from ready2rip.replaygain import apply_replaygain
 from ready2rip.rip.ctdb_quality import ctdb_submit_quality
@@ -65,6 +67,7 @@ from ready2rip.rip.encode_dest import (
     audio_dir_for_format,
     encode_format_list,
     is_lossless_extension,
+    is_lossless_format,
     is_lossy_format,
 )
 from ready2rip.rip.paranoia_run import run_paranoia_streaming
@@ -155,7 +158,10 @@ class RipJob:
     apply_replaygain: bool = True
     # iTunNORM on MP3 / M4A / AIFF / WAV (skipped for FLAC / Opus).
     write_sound_check: bool = True
+    # Embed cover into MP3 / M4A / Opus.
     embed_artwork: bool = True
+    # Embed cover into FLAC / WAV / AIFF.
+    embed_artwork_lossless: bool = False
     # Embed-sized image written into each audio file.
     artwork: ArtworkImage | None = None
     # Full-resolution image saved as cover.jpg/png in the album folder.
@@ -186,6 +192,8 @@ class RipJob:
     write_cue_file: bool = True
     # Write Encoded by / ENCODER tag (ready2rip + version).
     add_ripper_tag: bool = True
+    # Write lyrics tags when track metadata includes lyrics.
+    embed_lyrics: bool = True
     # Double-rip each track and require matching CRCs (test & copy).
     test_and_copy: bool = True
     # Extra secure test+copy cycles after a CRC mismatch.
@@ -202,8 +210,20 @@ class RipJob:
     # Copy Image: one continuous image (instead of per-track files).
     # Pair with write_cue_file for a matching image CUE sheet.
     copy_image: bool = False
-    # Longest edge for lossy embeds when preparing from folder art.
+    # Longest edge for embeds when preparing from folder art.
     artwork_max_size: int = 600  # match settings.DEFAULT_ARTWORK_MAX_SIZE
+
+    def wants_embed_artwork(self) -> bool:
+        return bool(self.embed_artwork or self.embed_artwork_lossless)
+
+    def should_embed_format(self, fmt: str) -> bool:
+        """Whether *fmt* should receive an embedded cover for this job."""
+        key = (fmt or '').strip().lower()
+        if is_lossy_format(key):
+            return bool(self.embed_artwork)
+        if is_lossless_format(key):
+            return bool(self.embed_artwork_lossless)
+        return False
 
 
 ProgressCallback = Callable[[RipProgress], None]
@@ -1568,6 +1588,12 @@ class RipEngine:
                 total_for_tags = (
                     len(job.album.tracks) if job.album.tracks else disc_track_count
                 )
+                # Lyrics tags + sidecars only for lossless (primary) encodes.
+                write_lyrics = (
+                    bool(job.embed_lyrics)
+                    and is_lossless_format(dest.format)
+                    and not tag_as_image
+                )
                 self._tags.write_album_tags(
                     dest.out_path,
                     job.album,
@@ -1578,17 +1604,18 @@ class RipEngine:
                     encoded_by=(
                         ripper_tag_value() if job.add_ripper_tag else None
                     ),
+                    embed_lyrics=write_lyrics,
                 )
+                if write_lyrics and track_number > 0:
+                    write_lyrics_sidecar(
+                        dest.out_path,
+                        track_meta_for(job.album, track_number),
+                    )
                 if retitle and not tag_as_image:
                     _retag_title(
                         dest.out_path, retitle, track_number=track_number
                     )
-            # Artwork embeds only into lossy encodes (MP3 / M4A / Opus).
-            if (
-                job.embed_artwork
-                and embed_art is not None
-                and is_lossy_format(dest.format)
-            ):
+            if job.should_embed_format(dest.format) and embed_art is not None:
                 self._tags.embed_artwork(
                     dest.out_path, embed_art.data, embed_art.mime
                 )
@@ -4056,7 +4083,7 @@ def _prepare_artwork(
     elif job.folder_artwork is None and job.artwork is not None:
         folder_art = job.artwork
         # Downscale for embed if needed.
-        if job.embed_artwork and job.artwork_max_size > 0:
+        if job.wants_embed_artwork() and job.artwork_max_size > 0:
             if job.artwork.max_edge > job.artwork_max_size:
                 embed_art = ArtworkFetcher().resize(
                     job.artwork, job.artwork_max_size
@@ -4110,13 +4137,13 @@ def _prepare_artwork(
             notes.append(f'Could not write cover: {exc}')
             cover_path = None
 
-    if job.embed_artwork and embed_art is None and folder_art is not None:
+    if job.wants_embed_artwork() and embed_art is None and folder_art is not None:
         if job.artwork_max_size > 0 and folder_art.max_edge > job.artwork_max_size:
             embed_art = ArtworkFetcher().resize(folder_art, job.artwork_max_size)
         else:
             embed_art = folder_art
 
-    if job.embed_artwork and embed_art is not None:
+    if job.wants_embed_artwork() and embed_art is not None:
         notes.append(
             f'Embed artwork ready ({embed_art.width}×{embed_art.height})'
         )

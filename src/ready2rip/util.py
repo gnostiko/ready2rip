@@ -24,8 +24,9 @@ _DEVICE_OK = re.compile(
 # Characters that must never appear in a device path passed to external tools.
 _DEVICE_BAD = re.compile(r'[\x00-\x1f;&|`$<>(){}\n\r]')
 
-# Max remote image payload we will hold in memory (bytes).
-MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
+# Max artwork payload we will hold in memory (bytes).
+# Applies to local picks and remote downloads (CAA / iTunes / cover URL).
+MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 
 # Cap for draining HTTPError bodies (ResourceWarning avoidance only).
 _HTTP_ERROR_DRAIN_BYTES = 64 * 1024
@@ -43,6 +44,7 @@ _FETCH_HOST_SUFFIXES = (
     'gnudb.gnudb.org',
     'cuetools.net',  # CTDB lookup + parity CDN
     'cue.tools',  # CTDB HTTPS frontend
+    'lrclib.net',  # lyrics
 )
 
 

@@ -65,6 +65,10 @@ class TrackMetadata:
     artist: str = ''
     musicbrainz_recording_id: str = ''
     isrc: str = ''
+    # Unsynced lyrics (plain text) and optional LRC; filled by LRCLIB / manual.
+    lyrics: str = ''
+    lyrics_synced: str = ''
+    lyrics_source: str = ''
 
 
 @dataclass

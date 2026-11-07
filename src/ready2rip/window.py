@@ -75,6 +75,7 @@ from ready2rip.settings import (
     normalize_aac_quality,
     normalize_also_encode_folder,
     normalize_also_encode_format,
+    normalize_encode_format,
     normalize_mp3_quality,
     opus_bitrate_label,
 )
@@ -240,6 +241,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._artwork: ArtworkImage | None = None
         self._artwork_embed: ArtworkImage | None = None
         self._art_generation = 0
+        self._lyrics_generation = 0
         self._ripping = False
         self._rip_engine: RipEngine | None = None
         self._suppress_meta_write = False
@@ -276,14 +278,40 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
         self._settings_dialog: Adw.Dialog | None = None
         # Preferences pages: Ripping / Encoding / Metadata / Drive
-        self.extraction_group = Adw.PreferencesGroup(title='Extraction')
+        self.verify_group = Adw.PreferencesGroup(
+            title='Verify',
+            description='CRC checks and verification databases',
+        )
+        self.extras_group = Adw.PreferencesGroup(
+            title='Extras',
+            description='Image layout, hidden audio, logs, and cue sheets',
+        )
         self.automation_group = Adw.PreferencesGroup(title='Automation')
-        self.encoding_group = Adw.PreferencesGroup(title='Encoding')
-        self.files_group = Adw.PreferencesGroup(title='Files')
+        self.encoding_group = Adw.PreferencesGroup(
+            title='Encoding',
+            description='Primary format and optional lossy companion',
+        )
+        self.files_group = Adw.PreferencesGroup(
+            title='Files',
+            description='Where ripped albums are written',
+        )
+        self.naming_group = Adw.PreferencesGroup(
+            title='Naming',
+            description='Album folders, track filenames, and multi-artist style',
+        )
         self.device_group = Adw.PreferencesGroup(title='Device')
-        self.lookup_group = Adw.PreferencesGroup(title='Lookup')
-        self.artwork_group = Adw.PreferencesGroup(title='Artwork')
-        self.tags_group = Adw.PreferencesGroup(title='Tags')
+        self.lookup_group = Adw.PreferencesGroup(
+            title='Lookup',
+            description='Online metadata sources',
+        )
+        self.artwork_group = Adw.PreferencesGroup(
+            title='Artwork',
+            description='Download covers and embed into audio files',
+        )
+        self.tags_group = Adw.PreferencesGroup(
+            title='Tags',
+            description='Loudness, lyrics, and encoder tags written into files',
+        )
         self.disc_group = Adw.PreferencesGroup(title='Disc')
         self.drive_group = Adw.PreferencesGroup(title='Drive')
         self._flac_levels = [level for level, _label in FLAC_LEVELS]
@@ -481,16 +509,16 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             (
                 'Ripping',
                 'media-optical-symbolic',
-                (self.extraction_group, self.automation_group),
+                (self.verify_group, self.extras_group, self.automation_group),
             ),
             (
                 'Encoding',
                 'audio-x-generic-symbolic',
-                (self.encoding_group, self.files_group),
+                (self.encoding_group, self.files_group, self.naming_group),
             ),
             (
                 'Metadata',
-                'folder-music-symbolic',
+                'document-properties-symbolic',
                 (self.lookup_group, self.artwork_group, self.tags_group),
             ),
             (
@@ -765,15 +793,22 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self.cover_size_label.set_visible(True)
 
         show_embed = False
-        if self.store.get().embed_artwork:
+        settings = self.store.get()
+        if settings.wants_embed_artwork():
             emb = self._artwork_embed
             if emb is None:
                 self._prepare_embed_artwork()
                 emb = self._artwork_embed
             if emb is not None:
                 self.cover_embed_label.set_text(f'Embed {emb.width}×{emb.height}')
+                parts: list[str] = []
+                if settings.embed_artwork:
+                    parts.append('lossy')
+                if settings.embed_artwork_lossless:
+                    parts.append('lossless')
+                kind = ' / '.join(parts) if parts else 'files'
                 self.cover_embed_label.set_tooltip_text(
-                    'Size embedded in lossy files (MP3 / M4A / Opus)'
+                    f'Size embedded in {kind} files'
                 )
                 show_embed = True
         if not show_embed:
@@ -868,7 +903,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         row: Gtk.Widget,
         group: Adw.PreferencesGroup | None = None,
     ) -> None:
-        (group or self.extraction_group).add(row)
+        (group or self.verify_group).add(row)
 
     def _add_metadata_row(
         self,
@@ -878,11 +913,17 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         (group or self.lookup_group).add(row)
 
     def _build_options_rows(self) -> None:
+        """Build Ripping / Encoding / Drive preference rows."""
         settings = self.store.get()
         default_out = default_output_directory()
         ids = [e[0] for e in ENCODERS]
 
-        # —— Drive page: Device → detect offset (Sample offset nested) ——
+        self._build_drive_settings(settings)
+        self._build_encoding_settings(settings, ids)
+        self._build_files_naming_settings(settings, default_out)
+        self._build_ripping_settings(settings)
+
+    def _build_drive_settings(self, settings) -> None:
         self._device_row = Adw.EntryRow(title='Device')
         self._device_row.set_text(settings.device or '/dev/sr0')
         self._device_row.set_tooltip_text('Optical device, for example /dev/sr0')
@@ -890,8 +931,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._add_option_row(self._device_row, self.device_group)
         self._build_calibration_row()
 
-        # —— Encoding page: format + quality ——
+    def _build_encoding_settings(self, settings, ids: list[str]) -> None:
         self._encoder_row = Adw.ComboRow(title='Format')
+        self._encoder_row.set_tooltip_text(
+            'Primary rip is always lossless (FLAC, WAV, or AIFF)'
+        )
         self._encoder_row.set_model(
             Gtk.StringList.new([label for _id, label in ENCODERS])
         )
@@ -906,19 +950,21 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._quality_row.connect('notify::selected', self._on_quality_changed)
         self._add_option_row(self._quality_row, self.encoding_group)
 
-        self._also_encode_row = Adw.SwitchRow(
-            title='Also encode lossy',
-            active=bool(settings.also_encode),
-        )
+        self._also_encode_row = Adw.ExpanderRow(title='Also encode lossy')
         self._also_encode_row.set_tooltip_text(
             'Encode a second lossy format from the same verified rip'
         )
+        self._also_encode_row.set_show_enable_switch(True)
+        self._also_encode_row.set_enable_expansion(bool(settings.also_encode))
+        self._also_encode_row.set_expanded(bool(settings.also_encode))
         self._also_encode_row.connect(
-            'notify::active', self._on_also_encode_toggled
+            'notify::enable-expansion', self._on_also_encode_toggled
         )
-        self._add_option_row(self._also_encode_row, self.encoding_group)
 
-        self._also_format_row = Adw.ComboRow(title='Lossy format')
+        self._also_format_row = Adw.ComboRow(title='Format')
+        self._also_format_row.set_tooltip_text(
+            'Lossy companion only (MP3, M4A, or Opus)'
+        )
         self._also_format_row.set_model(
             Gtk.StringList.new([label for _id, label in ALSO_ENCODERS])
         )
@@ -933,15 +979,15 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._also_format_row.connect(
             'notify::selected', self._on_also_format_changed
         )
-        self._add_option_row(self._also_format_row, self.encoding_group)
+        self._also_encode_row.add_row(self._also_format_row)
 
-        self._also_quality_row = Adw.ComboRow(title='Lossy quality')
+        self._also_quality_row = Adw.ComboRow(title='Quality')
         self._also_quality_row.connect(
             'notify::selected', self._on_also_quality_changed
         )
-        self._add_option_row(self._also_quality_row, self.encoding_group)
+        self._also_encode_row.add_row(self._also_quality_row)
 
-        self._also_folder_row = Adw.ComboRow(title='Lossy folder')
+        self._also_folder_row = Adw.ComboRow(title='Folder')
         self._also_folder_row.set_model(
             Gtk.StringList.new([label for _id, label in ALSO_FOLDER_LAYOUTS])
         )
@@ -961,18 +1007,15 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._also_folder_row.connect(
             'notify::selected', self._on_also_folder_changed
         )
-        self._add_option_row(self._also_folder_row, self.encoding_group)
+        self._also_encode_row.add_row(self._also_folder_row)
 
         also_dir_default = (settings.also_encode_directory or '').strip()
         self._custom_also_directory = also_dir_default
-        self._also_directory_row = Adw.EntryRow(title='Lossy output folder')
-        # Keep the remembered path in the entry even when Lossy folder is not
-        # Custom (row is hidden). Never blank it here — that used to fire
-        # ``changed`` and wipe also-encode-directory in the store.
+        self._also_directory_row = Adw.EntryRow(title='Custom folder')
         if also_dir_default:
             self._also_directory_row.set_text(also_dir_default)
         self._also_directory_row.set_tooltip_text(
-            'Root folder for the secondary encode when Lossy folder is Custom'
+            'Root folder for the secondary encode when Folder is Custom'
         )
         self._also_directory_row.connect(
             'changed', self._on_also_directory_changed
@@ -986,10 +1029,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         also_folder_btn.set_tooltip_text('Choose folder')
         also_folder_btn.connect('clicked', self._on_choose_also_directory)
         self._also_directory_row.add_suffix(also_folder_btn)
-        self._add_option_row(self._also_directory_row, self.encoding_group)
+        self._also_encode_row.add_row(self._also_directory_row)
+
+        self._add_option_row(self._also_encode_row, self.encoding_group)
         self._sync_encoding_ui()
 
-        # —— Encoding page: files ——
+    def _build_files_naming_settings(self, settings, default_out: str) -> None:
         self._output_row = Adw.EntryRow(title='Output folder')
         self._output_row.set_text(settings.output_directory or default_out)
         self._output_row.set_tooltip_text(default_out)
@@ -1003,8 +1048,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._output_row.add_suffix(folder_btn)
         self._add_option_row(self._output_row, self.files_group)
 
-        # Build both scheme UIs before connecting handlers so load/sync cannot
-        # touch a row that does not exist yet.
         self._folder_scheme_row = Adw.ComboRow(title='Album folder scheme')
         self._folder_template_row = Adw.EntryRow(title='Album folder template')
         self._folder_template_row.set_tooltip_text(FOLDER_TEMPLATE_HELP)
@@ -1040,10 +1083,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         )
         self._filename_row.connect('changed', self._on_filename_changed)
 
-        self._add_option_row(self._folder_scheme_row, self.files_group)
-        self._add_option_row(self._folder_template_row, self.files_group)
-        self._add_option_row(self._filename_scheme_row, self.files_group)
-        self._add_option_row(self._filename_row, self.files_group)
+        self._add_option_row(self._folder_scheme_row, self.naming_group)
+        self._add_option_row(self._folder_template_row, self.naming_group)
+        self._add_option_row(self._filename_scheme_row, self.naming_group)
+        self._add_option_row(self._filename_row, self.naming_group)
         self._sync_naming_scheme_ui()
 
         self._artist_style_row = Adw.ComboRow(title='Multiple artists')
@@ -1065,44 +1108,16 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._artist_style_row.connect(
             'notify::selected', self._on_artist_style_changed
         )
-        self._add_option_row(self._artist_style_row, self.files_group)
+        self._add_option_row(self._artist_style_row, self.naming_group)
 
-        # —— Ripping page: extraction ——
+    def _build_ripping_settings(self, settings) -> None:
         self._test_copy_row = Adw.SwitchRow(
             title='Test and copy',
             active=settings.test_and_copy,
         )
         self._test_copy_row.set_tooltip_text('Rip twice and require matching CRCs')
         self._test_copy_row.connect('notify::active', self._on_test_copy_toggled)
-        self._add_option_row(self._test_copy_row, self.extraction_group)
-
-        self._copy_image_row = Adw.SwitchRow(
-            title='Copy image',
-            active=settings.copy_image,
-        )
-        self._copy_image_row.set_tooltip_text(
-            'One continuous image file instead of per-track files'
-        )
-        self._copy_image_row.connect('notify::active', self._on_copy_image_toggled)
-        self._add_option_row(self._copy_image_row, self.extraction_group)
-
-        self._htoa_row = Adw.SwitchRow(
-            title='Hidden track (HTOA)',
-            active=settings.rip_htoa,
-        )
-        self._htoa_row.set_tooltip_text('Save non-silent audio before track 1')
-        self._htoa_row.connect('notify::active', self._on_htoa_toggled)
-        self._add_option_row(self._htoa_row, self.extraction_group)
-
-        self._data_tracks_row = Adw.SwitchRow(
-            title='Data tracks',
-            active=settings.rip_data_tracks,
-        )
-        self._data_tracks_row.set_tooltip_text(
-            'Rip mixed-mode and CD-Extra data as raw .bin files'
-        )
-        self._data_tracks_row.connect('notify::active', self._on_data_tracks_toggled)
-        self._add_option_row(self._data_tracks_row, self.extraction_group)
+        self._add_option_row(self._test_copy_row, self.verify_group)
 
         self._ar_row = Adw.SwitchRow(
             title='AccurateRip',
@@ -1110,7 +1125,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         )
         self._ar_row.set_tooltip_text('Verify against the AccurateRip database')
         self._ar_row.connect('notify::active', self._on_ar_toggled)
-        self._add_option_row(self._ar_row, self.extraction_group)
+        self._add_option_row(self._ar_row, self.verify_group)
 
         self._ctdb_row = Adw.SwitchRow(
             title='CTDB',
@@ -1118,7 +1133,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         )
         self._ctdb_row.set_tooltip_text('Verify against the CUETools Database')
         self._ctdb_row.connect('notify::active', self._on_ctdb_toggled)
-        self._add_option_row(self._ctdb_row, self.extraction_group)
+        self._add_option_row(self._ctdb_row, self.verify_group)
 
         self._submit_ctdb_row = Adw.SwitchRow(
             title='Submit to CTDB',
@@ -1128,7 +1143,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             'Confirm matches, or submit new parity for secure high-quality rips'
         )
         self._submit_ctdb_row.connect('notify::active', self._on_submit_ctdb_toggled)
-        self._add_option_row(self._submit_ctdb_row, self.extraction_group)
+        self._add_option_row(self._submit_ctdb_row, self.verify_group)
 
         self._burst_row = Adw.SwitchRow(
             title='Burst fallback',
@@ -1138,7 +1153,35 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             'Allow insecure -Z recovery after secure retries fail'
         )
         self._burst_row.connect('notify::active', self._on_burst_toggled)
-        self._add_option_row(self._burst_row, self.extraction_group)
+        self._add_option_row(self._burst_row, self.verify_group)
+
+        self._copy_image_row = Adw.SwitchRow(
+            title='Copy image',
+            active=settings.copy_image,
+        )
+        self._copy_image_row.set_tooltip_text(
+            'One continuous image file instead of per-track files'
+        )
+        self._copy_image_row.connect('notify::active', self._on_copy_image_toggled)
+        self._add_option_row(self._copy_image_row, self.extras_group)
+
+        self._htoa_row = Adw.SwitchRow(
+            title='Hidden track (HTOA)',
+            active=settings.rip_htoa,
+        )
+        self._htoa_row.set_tooltip_text('Save non-silent audio before track 1')
+        self._htoa_row.connect('notify::active', self._on_htoa_toggled)
+        self._add_option_row(self._htoa_row, self.extras_group)
+
+        self._data_tracks_row = Adw.SwitchRow(
+            title='Data tracks',
+            active=settings.rip_data_tracks,
+        )
+        self._data_tracks_row.set_tooltip_text(
+            'Rip mixed-mode and CD-Extra data as raw .bin files'
+        )
+        self._data_tracks_row.connect('notify::active', self._on_data_tracks_toggled)
+        self._add_option_row(self._data_tracks_row, self.extras_group)
 
         self._log_row = Adw.SwitchRow(
             title='Write log',
@@ -1146,7 +1189,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         )
         self._log_row.set_tooltip_text('Save a detailed rip log in the album folder')
         self._log_row.connect('notify::active', self._on_log_toggled)
-        self._add_option_row(self._log_row, self.extraction_group)
+        self._add_option_row(self._log_row, self.extras_group)
 
         self._cue_row = Adw.SwitchRow(
             title='Write CUE sheet',
@@ -1154,9 +1197,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         )
         self._cue_row.set_tooltip_text('Create a .cue file for the rip')
         self._cue_row.connect('notify::active', self._on_cue_toggled)
-        self._add_option_row(self._cue_row, self.extraction_group)
+        self._add_option_row(self._cue_row, self.extras_group)
 
-        # —— Ripping page: automation ——
         self._auto_rip_row = Adw.SwitchRow(
             title='Auto-rip',
             active=settings.auto_rip,
@@ -1176,6 +1218,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._add_option_row(self._auto_eject_row, self.automation_group)
 
     def _build_metadata_rows(self) -> None:
+        """Build Metadata page: Lookup, Artwork, Tags."""
         settings = self.store.get()
 
         self._auto_lookup_row = Adw.ExpanderRow(title='Look up automatically')
@@ -1236,17 +1279,36 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._fetch_art_row.add_row(self._art_itunes_row)
 
         self._add_metadata_row(self._fetch_art_row, self.artwork_group)
+        self._sync_artwork_source_sensitivity(settings.fetch_artwork)
+
+        embed_any = settings.wants_embed_artwork()
+        self._embed_art_expander = Adw.ExpanderRow(title='Embed artwork')
+        self._embed_art_expander.set_tooltip_text(
+            'Write the cover into ripped audio files'
+        )
+        self._embed_art_expander.set_expanded(embed_any)
 
         self._embed_art_row = Adw.SwitchRow(
-            title='Embed artwork in lossy',
+            title='Lossy files',
             active=settings.embed_artwork,
         )
         self._embed_art_row.set_tooltip_text(
-            'Write the cover into MP3 / M4A / Opus only. FLAC, WAV, and AIFF '
-            'use the album-folder cover instead.'
+            'Embed into MP3 / M4A / Opus'
         )
         self._embed_art_row.connect('notify::active', self._on_embed_art_toggled)
-        self._add_metadata_row(self._embed_art_row, self.artwork_group)
+        self._embed_art_expander.add_row(self._embed_art_row)
+
+        self._embed_lossless_row = Adw.SwitchRow(
+            title='Lossless files',
+            active=settings.embed_artwork_lossless,
+        )
+        self._embed_lossless_row.set_tooltip_text(
+            'Embed into FLAC / WAV / AIFF (folder cover.jpg is still written)'
+        )
+        self._embed_lossless_row.connect(
+            'notify::active', self._on_embed_lossless_toggled
+        )
+        self._embed_art_expander.add_row(self._embed_lossless_row)
 
         self._art_size_row = Adw.ComboRow(title='Embed size')
         self._art_size_values = [px for px, _label in ARTWORK_SIZES]
@@ -1265,13 +1327,13 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             except ValueError:
                 self._art_size_row.set_selected(len(self._art_size_values) - 1)
         self._art_size_row.set_tooltip_text(
-            'Longest edge for lossy embeds (300–800 px). Default 600. '
+            'Longest edge for embedded covers (300–800 px). Default 600. '
             'Folder cover.jpg stays full resolution.'
         )
         self._art_size_row.connect('notify::selected', self._on_art_size_changed)
-        self._art_size_row.set_sensitive(settings.embed_artwork)
-        self._add_metadata_row(self._art_size_row, self.artwork_group)
-        self._sync_artwork_source_sensitivity(settings.fetch_artwork)
+        self._embed_art_expander.add_row(self._art_size_row)
+        self._add_metadata_row(self._embed_art_expander, self.artwork_group)
+        self._sync_embed_artwork_ui()
 
         self._rg_row = Adw.SwitchRow(
             title='ReplayGain',
@@ -1305,6 +1367,32 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             'notify::active', self._on_ripper_tag_toggled
         )
         self._add_metadata_row(self._ripper_tag_row, self.tags_group)
+
+        self._fetch_lyrics_row = Adw.SwitchRow(
+            title='Fetch lyrics',
+            active=settings.fetch_lyrics,
+        )
+        self._fetch_lyrics_row.set_tooltip_text(
+            'Look up lyrics on LRCLIB after metadata (artist, title, album, '
+            'duration). Off by default.'
+        )
+        self._fetch_lyrics_row.connect(
+            'notify::active', self._on_fetch_lyrics_toggled
+        )
+        self._add_metadata_row(self._fetch_lyrics_row, self.tags_group)
+
+        self._embed_lyrics_row = Adw.SwitchRow(
+            title='Save lyrics (lossless)',
+            active=settings.embed_lyrics,
+        )
+        self._embed_lyrics_row.set_tooltip_text(
+            'Save lyrics with lossless rips only: tags plus a .lrc/.txt '
+            'sidecar next to each track. Lossy Also-encode files are skipped.'
+        )
+        self._embed_lyrics_row.connect(
+            'notify::active', self._on_embed_lyrics_toggled
+        )
+        self._add_metadata_row(self._embed_lyrics_row, self.tags_group)
 
     def sync_options_from_store(self) -> None:
         """Refresh settings widgets from store (e.g. after Drive setup)."""
@@ -1346,7 +1434,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             (self._rg_row, self._on_rg_toggled),
             (self._sound_check_row, self._on_sound_check_toggled),
             (self._ripper_tag_row, self._on_ripper_tag_toggled),
+            (self._fetch_lyrics_row, self._on_fetch_lyrics_toggled),
+            (self._embed_lyrics_row, self._on_embed_lyrics_toggled),
             (self._embed_art_row, self._on_embed_art_toggled),
+            (self._embed_lossless_row, self._on_embed_lossless_toggled),
             (self._fetch_art_row, self._on_fetch_art_toggled),
             (self._art_itunes_row, self._on_art_itunes_toggled),
             (self._art_caa_row, self._on_art_caa_toggled),
@@ -1388,7 +1479,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             # Force quality combo to reload from store values.
             self._quality_kind = None
             self._also_quality_kind = None
-            self._also_encode_row.set_active(bool(settings.also_encode))
+            self._also_encode_row.set_enable_expansion(bool(settings.also_encode))
+            self._also_encode_row.set_expanded(bool(settings.also_encode))
             try:
                 self._also_format_row.set_selected(
                     self._also_formats.index(
@@ -1435,12 +1527,16 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._rg_row.set_active(settings.apply_replaygain)
             self._sound_check_row.set_active(settings.write_sound_check)
             self._ripper_tag_row.set_active(settings.add_ripper_tag)
+            self._fetch_lyrics_row.set_active(settings.fetch_lyrics)
+            self._embed_lyrics_row.set_active(settings.embed_lyrics)
             self._embed_art_row.set_active(settings.embed_artwork)
-            self._art_size_row.set_sensitive(settings.embed_artwork)
+            self._embed_lossless_row.set_active(settings.embed_artwork_lossless)
+            self._embed_art_expander.set_expanded(settings.wants_embed_artwork())
             self._fetch_art_row.set_enable_expansion(settings.fetch_artwork)
             self._art_caa_row.set_active(settings.artwork_source_caa)
             self._art_itunes_row.set_active(settings.artwork_source_itunes)
             self._sync_artwork_source_sensitivity(settings.fetch_artwork)
+            self._sync_embed_artwork_ui()
             try:
                 self._art_size_row.set_selected(
                     self._art_size_values.index(settings.artwork_max_size)
@@ -1543,24 +1639,16 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             kind_attr='_quality_kind',
             handler=self._on_quality_changed,
         )
-        also_on = bool(self._also_encode_row.get_active())
-        primary = self._primary_encode_format()
+        also_on = bool(self._also_encode_row.get_enable_expansion())
         also_fmt = self._also_encode_format()
-        # Hide also-format when it would duplicate the primary codec.
-        also_usable = also_fmt != primary
         folder_idx = self._also_folder_row.get_selected()
         folder_id = (
             self._also_folders[folder_idx]
             if 0 <= folder_idx < len(self._also_folders)
             else 'format_subdir'
         )
-        show_also_dir = also_on and also_usable and folder_id == 'custom_folder'
-        for row in (
-            self._also_format_row,
-            self._also_quality_row,
-            self._also_folder_row,
-        ):
-            row.set_visible(also_on)
+        show_also_dir = also_on and folder_id == 'custom_folder'
+        # Nested under the expander; only the custom-folder path is hidden.
         self._also_directory_row.set_visible(show_also_dir)
         if also_on:
             self._fill_quality_combo(
@@ -1569,17 +1657,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 kind_attr='_also_quality_kind',
                 handler=self._on_also_quality_changed,
             )
-            self._also_quality_row.set_sensitive(also_usable)
-            self._also_folder_row.set_sensitive(also_usable)
-            self._also_directory_row.set_sensitive(also_usable)
-            if not also_usable:
-                self._also_format_row.set_subtitle(
-                    'Pick a different codec than Format'
-                )
-            else:
-                self._also_format_row.set_subtitle('')
-        else:
-            self._also_format_row.set_subtitle('')
+            self._also_format_row.set_sensitive(True)
+            self._also_quality_row.set_sensitive(True)
+            self._also_folder_row.set_sensitive(True)
+            self._also_directory_row.set_sensitive(True)
+        self._also_format_row.set_subtitle('')
 
     def _apply_quality_selection(self, fmt: str, index: int) -> None:
         if fmt == 'flac' and 0 <= index < len(self._flac_levels):
@@ -1894,8 +1976,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         fmt = self._quality_kind or self._primary_encode_format()
         self._apply_quality_selection(fmt, row.get_selected())
 
-    def _on_also_encode_toggled(self, row: Adw.SwitchRow, *_args) -> None:
-        self.store.update(also_encode=row.get_active())
+    def _on_also_encode_toggled(self, row: Adw.ExpanderRow, *_args) -> None:
+        enabled = bool(row.get_enable_expansion())
+        self.store.update(also_encode=enabled)
+        row.set_expanded(enabled)
         self._sync_encoding_ui()
 
     def _on_also_format_changed(self, row: Adw.ComboRow, *_args) -> None:
@@ -2022,6 +2106,19 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _on_ripper_tag_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(add_ripper_tag=row.get_active())
 
+    def _on_fetch_lyrics_toggled(self, row: Adw.SwitchRow, *_args) -> None:
+        enabled = bool(row.get_active())
+        self.store.update(fetch_lyrics=enabled)
+        if (
+            enabled
+            and self._album is not None
+            and self._meta_cache.has_useful_metadata(self._album)
+        ):
+            self._start_lyrics_fetch(self._album)
+
+    def _on_embed_lyrics_toggled(self, row: Adw.SwitchRow, *_args) -> None:
+        self.store.update(embed_lyrics=bool(row.get_active()))
+
     def _on_ar_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(verify_accuraterip=row.get_active())
 
@@ -2053,12 +2150,25 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self.store.update(auto_eject=row.get_active())
 
     def _on_embed_art_toggled(self, row: Adw.SwitchRow, *_args) -> None:
-        enabled = row.get_active()
-        self.store.update(embed_artwork=enabled)
-        self._art_size_row.set_sensitive(enabled)
-        if enabled and self._artwork is not None:
+        self.store.update(embed_artwork=bool(row.get_active()))
+        self._sync_embed_artwork_ui()
+        if self.store.get().wants_embed_artwork() and self._artwork is not None:
             self._prepare_embed_artwork()
         self._update_cover_size_label()
+
+    def _on_embed_lossless_toggled(self, row: Adw.SwitchRow, *_args) -> None:
+        self.store.update(embed_artwork_lossless=bool(row.get_active()))
+        self._sync_embed_artwork_ui()
+        if self.store.get().wants_embed_artwork() and self._artwork is not None:
+            self._prepare_embed_artwork()
+        self._update_cover_size_label()
+
+    def _sync_embed_artwork_ui(self) -> None:
+        """Show embed size only when lossy and/or lossless embed is on."""
+        enabled = self.store.get().wants_embed_artwork()
+        self._art_size_row.set_visible(enabled)
+        if enabled:
+            self._embed_art_expander.set_expanded(True)
 
     def _on_fetch_art_toggled(self, row: Adw.ExpanderRow, *_args) -> None:
         enabled = row.get_enable_expansion()
@@ -2291,7 +2401,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         # Full-res for folder cover; embed-sized for files. Fetch before rip if missing.
         folder_art = self._artwork
         embed_art = self._artwork_embed or self._artwork
-        need_art = settings.embed_artwork or settings.fetch_artwork
+        need_art = settings.wants_embed_artwork() or settings.fetch_artwork
         if need_art and folder_art is None and self._album is not None:
             self._show_progress_panel(title='Ripping disc')
             self.rip_status_label.set_label('Fetching artwork…')
@@ -2327,7 +2437,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             device=device,
             track_numbers=track_numbers,
             output_directory=settings.resolved_output_directory(),
-            encode_format=settings.encode_format,
+            encode_format=normalize_encode_format(settings.encode_format),
             flac_compression=settings.flac_compression,
             mp3_quality=settings.mp3_quality,
             aac_quality=settings.aac_quality,
@@ -2349,8 +2459,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             apply_replaygain=settings.apply_replaygain,
             write_sound_check=settings.write_sound_check,
             add_ripper_tag=settings.add_ripper_tag,
+            embed_lyrics=settings.embed_lyrics,
             embed_artwork=settings.embed_artwork,
-            artwork=embed_art if settings.embed_artwork else None,
+            embed_artwork_lossless=settings.embed_artwork_lossless,
+            artwork=embed_art if settings.wants_embed_artwork() else None,
             folder_artwork=folder_art,
             album=self._album,
             filename_template=settings.filename_template,
@@ -4230,6 +4342,57 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             and self._artwork_source_options().any_enabled
         ):
             self._start_artwork_fetch(self._album)
+        if self.store.get().fetch_lyrics:
+            self._start_lyrics_fetch(self._album)
+
+    def _start_lyrics_fetch(self, album: AlbumMetadata) -> None:
+        """Background LRCLIB lookup for tracks missing lyrics."""
+        if album is None or not self.store.get().fetch_lyrics:
+            return
+        self._lyrics_generation += 1
+        generation = self._lyrics_generation
+        disc = self._disc
+        self._toast('Fetching lyrics…')
+
+        def worker() -> None:
+            from ready2rip.metadata.lyrics import LrclibClient
+
+            count = 0
+            error: str | None = None
+            try:
+                count = LrclibClient().fetch_album(album, disc, only_missing=True)
+            except Exception as exc:
+                error = str(exc)
+
+            def done() -> bool:
+                self._on_lyrics_finished(generation, album, count, error)
+                return GLib.SOURCE_REMOVE
+
+            GLib.idle_add(done)
+
+        threading.Thread(
+            target=worker, daemon=True, name='ready2rip-lyrics'
+        ).start()
+
+    def _on_lyrics_finished(
+        self,
+        generation: int,
+        album: AlbumMetadata,
+        count: int,
+        error: str | None,
+    ) -> None:
+        if generation != self._lyrics_generation:
+            return
+        if self._album is not album:
+            return
+        if error:
+            self._toast(f'Lyrics fetch failed: {error}')
+            return
+        self._save_metadata_cache()
+        if count:
+            self._toast(f'Lyrics found for {count} track(s)')
+        else:
+            self._toast('No lyrics found')
 
     def _refresh_track_fields_from_album(self) -> None:
         """Update existing track rows in place (avoids full list rebuild)."""

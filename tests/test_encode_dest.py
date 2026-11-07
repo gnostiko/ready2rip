@@ -29,13 +29,23 @@ def test_encode_format_list_adds_lossy_companion() -> None:
     ) == ['flac', 'opus']
 
 
-def test_encode_format_list_skips_duplicate_and_copy_image() -> None:
+def test_encode_format_list_forces_lossless_primary() -> None:
+    # Legacy lossy primary migrates to FLAC; also-encode still adds lossy.
     assert encode_format_list(
         'mp3', also_encode=True, also_format='mp3'
-    ) == ['mp3']
+    ) == ['flac', 'mp3']
     assert encode_format_list(
         'flac', also_encode=True, also_format='mp3', allow_also=False
     ) == ['flac']
+
+
+def test_normalize_encode_format() -> None:
+    from ready2rip.settings import normalize_encode_format
+
+    assert normalize_encode_format('flac') == 'flac'
+    assert normalize_encode_format('WAV') == 'wav'
+    assert normalize_encode_format('mp3') == 'flac'
+    assert normalize_encode_format('opus') == 'flac'
 
 
 def test_audio_dir_format_subdir_only_when_multi() -> None:
@@ -71,3 +81,26 @@ def test_is_lossy_format() -> None:
     assert not is_lossy_format('flac')
     assert not is_lossy_format('wav')
     assert not is_lossy_format('aiff')
+
+
+def test_ripjob_should_embed_format() -> None:
+    from pathlib import Path
+
+    from ready2rip.rip.engine import RipJob
+
+    job = RipJob(
+        device='/dev/sr0',
+        track_numbers=[1],
+        output_directory=Path('/tmp'),
+        embed_artwork=True,
+        embed_artwork_lossless=False,
+    )
+    assert job.should_embed_format('mp3')
+    assert job.should_embed_format('aac')
+    assert not job.should_embed_format('flac')
+    job.embed_artwork_lossless = True
+    assert job.should_embed_format('flac')
+    assert job.should_embed_format('wav')
+    job.embed_artwork = False
+    assert not job.should_embed_format('opus')
+    assert job.wants_embed_artwork()

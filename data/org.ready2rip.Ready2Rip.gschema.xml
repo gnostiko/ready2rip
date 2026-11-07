@@ -35,12 +35,13 @@
         <choice value="wav"/>
         <choice value="aiff"/>
         <choice value="flac"/>
-        <choice value="opus"/>
-        <choice value="aac"/>
-        <choice value="mp3"/>
       </choices>
       <default>'flac'</default>
-      <summary>Primary encoder / output format</summary>
+      <summary>Primary encoder / output format (lossless only)</summary>
+      <description>
+        The first rip is always lossless (FLAC, WAV, or AIFF). Use Also encode
+        lossy for MP3 / M4A / Opus companions.
+      </description>
     </key>
 
     <key name="flac-compression" type="i">
@@ -136,6 +137,11 @@
       <summary>Embed album artwork in lossy encodes (MP3, M4A, Opus)</summary>
     </key>
 
+    <key name="embed-artwork-lossless" type="b">
+      <default>false</default>
+      <summary>Embed album artwork in lossless encodes (FLAC, WAV, AIFF)</summary>
+    </key>
+
     <key name="fetch-artwork" type="b">
       <default>true</default>
       <summary>Download album artwork when available</summary>
@@ -154,12 +160,11 @@
     <key name="artwork-max-size" type="i">
       <range min="300" max="800"/>
       <default>600</default>
-      <summary>Maximum embedded artwork edge length for lossy encodes (pixels)</summary>
+      <summary>Maximum embedded artwork edge length (pixels)</summary>
       <description>
         Full-resolution art is always kept for preview and folder cover.jpg.
-        Lossy embeds (MP3 / M4A / Opus) are scaled so the longest edge is this
-        many pixels (300–800). Default is 600. FLAC / WAV / AIFF are never
-        embedded — use the album-folder cover instead.
+        Embedded covers (lossy and/or lossless, when enabled) are scaled so the
+        longest edge is this many pixels (300–800). Default is 600.
       </description>
     </key>
 
@@ -181,6 +186,24 @@
     <key name="add-ripper-tag" type="b">
       <default>true</default>
       <summary>Write Encoded by / ENCODER tag with ready2rip and version</summary>
+    </key>
+
+    <key name="fetch-lyrics" type="b">
+      <default>false</default>
+      <summary>Fetch lyrics from LRCLIB after metadata lookup</summary>
+      <description>
+        Looks up plain and synced lyrics per track using artist, title, album,
+        and CD duration. Off by default.
+      </description>
+    </key>
+
+    <key name="embed-lyrics" type="b">
+      <default>true</default>
+      <summary>Save lyrics with lossless rips when available</summary>
+      <description>
+        Writes lyrics into lossless audio tags and a .lrc/.txt sidecar next to
+        each lossless track. Lossy Also-encode companions are skipped.
+      </description>
     </key>
 
     <key name="use-musicbrainz" type="b">

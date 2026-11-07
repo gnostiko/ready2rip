@@ -27,14 +27,14 @@ log = logging.getLogger(__name__)
 SCHEMA_ID = 'org.ready2rip.Ready2Rip'
 _SCHEMA_XML = 'org.ready2rip.Ready2Rip.gschema.xml'
 
+# Primary rip formats — lossless / PCM only.
 ENCODERS = (
     ('wav', 'WAV (uncompressed)'),
     ('aiff', 'AIFF (uncompressed)'),
     ('flac', 'FLAC (lossless)'),
-    ('opus', 'Opus'),
-    ('aac', 'M4A'),
-    ('mp3', 'MP3'),
 )
+
+ENCODER_IDS = frozenset(e[0] for e in ENCODERS)
 
 # Secondary “Also encode lossy” codecs (lossy companions to a primary encode).
 ALSO_ENCODERS = (
@@ -44,6 +44,14 @@ ALSO_ENCODERS = (
 )
 
 ALSO_ENCODER_IDS = frozenset(e[0] for e in ALSO_ENCODERS)
+
+
+def normalize_encode_format(value: str | None) -> str:
+    """Primary format must be lossless; legacy lossy settings migrate to FLAC."""
+    raw = (value or '').strip().lower()
+    if raw in ENCODER_IDS:
+        return raw
+    return 'flac'
 
 # Where secondary encodes are written relative to the album folder.
 ALSO_FOLDER_LAYOUTS = (
@@ -56,6 +64,7 @@ ALSO_FOLDER_LAYOUT_IDS = frozenset(e[0] for e in ALSO_FOLDER_LAYOUTS)
 
 
 def normalize_also_encode_format(value: str | None) -> str:
+    """Secondary encode is always a lossy companion codec."""
     raw = (value or '').strip().lower()
     if raw in ALSO_ENCODER_IDS:
         return raw
@@ -316,7 +325,14 @@ class AppSettings:
     write_sound_check: bool = True
     # Write Encoded by / ENCODER / ©too with ready2rip + version.
     add_ripper_tag: bool = True
+    # Fetch lyrics from LRCLIB after a successful album match.
+    fetch_lyrics: bool = False
+    # Write lyrics tags when a track has lyrics text.
+    embed_lyrics: bool = True
+    # Embed cover into MP3 / M4A / Opus.
     embed_artwork: bool = True
+    # Embed cover into FLAC / WAV / AIFF (off by default; folder cover still written).
+    embed_artwork_lossless: bool = False
     fetch_artwork: bool = True
     artwork_source_itunes: bool = True
     artwork_source_caa: bool = True
@@ -347,6 +363,10 @@ class AppSettings:
     copy_image: bool = False
     auto_rip: bool = False
     auto_eject: bool = False
+
+    def wants_embed_artwork(self) -> bool:
+        """True when lossy and/or lossless file embeds are enabled."""
+        return bool(self.embed_artwork or self.embed_artwork_lossless)
 
     def resolved_output_directory(self) -> Path:
         """Output folder for rips; empty setting means the Music directory."""
@@ -460,7 +480,9 @@ class SettingsStore:
                 device=s.get_string('device') or '/dev/sr0',
                 color_scheme=scheme,
                 output_directory=s.get_string('output-directory') or '',
-                encode_format=s.get_string('encode-format') or 'flac',
+                encode_format=normalize_encode_format(
+                    _get_string(s, 'encode-format', 'flac')
+                ),
                 flac_compression=s.get_int('flac-compression'),
                 mp3_quality=_load_mp3_quality(s),
                 aac_quality=(aq := _load_aac_quality(s)),
@@ -483,7 +505,12 @@ class SettingsStore:
                 apply_replaygain=s.get_boolean('apply-replaygain'),
                 write_sound_check=_get_bool(s, 'write-sound-check', True),
                 add_ripper_tag=_get_bool(s, 'add-ripper-tag', True),
+                fetch_lyrics=_get_bool(s, 'fetch-lyrics', False),
+                embed_lyrics=_get_bool(s, 'embed-lyrics', True),
                 embed_artwork=s.get_boolean('embed-artwork'),
+                embed_artwork_lossless=_get_bool(
+                    s, 'embed-artwork-lossless', False
+                ),
                 fetch_artwork=s.get_boolean('fetch-artwork'),
                 artwork_source_itunes=_get_bool(s, 'artwork-source-itunes', True),
                 artwork_source_caa=_get_bool(s, 'artwork-source-caa', True),
@@ -520,7 +547,7 @@ class SettingsStore:
         if not snap.output_directory.strip():
             snap.output_directory = default_output_directory()
 
-        # Persist migrated naming defaults when the stored template was legacy.
+        # Persist migrated naming defaults / primary format when legacy.
         if s is not None:
             stored_folder = (s.get_string('album-folder-template') or '').strip()
             if snap.album_folder_template != stored_folder:
@@ -528,6 +555,15 @@ class SettingsStore:
             stored_name = (s.get_string('filename-template') or '').strip()
             if snap.filename_template != stored_name:
                 s.set_string('filename-template', snap.filename_template)
+            try:
+                stored_fmt = (s.get_string('encode-format') or '').strip().lower()
+            except Exception:
+                stored_fmt = ''
+            if snap.encode_format != stored_fmt:
+                try:
+                    s.set_string('encode-format', snap.encode_format)
+                except Exception:
+                    pass
 
         # Migrate removed / oversized artwork presets (e.g. 1000 → 800).
         allowed = {px for px, _label in ARTWORK_SIZES}
@@ -570,7 +606,10 @@ class SettingsStore:
             'apply_replaygain': ('apply-replaygain', 'bool'),
             'write_sound_check': ('write-sound-check', 'bool'),
             'add_ripper_tag': ('add-ripper-tag', 'bool'),
+            'fetch_lyrics': ('fetch-lyrics', 'bool'),
+            'embed_lyrics': ('embed-lyrics', 'bool'),
             'embed_artwork': ('embed-artwork', 'bool'),
+            'embed_artwork_lossless': ('embed-artwork-lossless', 'bool'),
             'fetch_artwork': ('fetch-artwork', 'bool'),
             'artwork_source_itunes': ('artwork-source-itunes', 'bool'),
             'artwork_source_caa': ('artwork-source-caa', 'bool'),
@@ -622,6 +661,9 @@ class SettingsStore:
                 elif attr == 'artist_style':
                     value = normalize_artist_style(str(value))
                     current = replace(current, artist_style=value)
+                elif attr == 'encode_format':
+                    value = normalize_encode_format(str(value))
+                    current = replace(current, encode_format=value)
                 elif attr == 'also_encode_format':
                     value = normalize_also_encode_format(str(value))
                     current = replace(current, also_encode_format=value)

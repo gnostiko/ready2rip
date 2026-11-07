@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ready2rip.config import APPLICATION_NAME, APPLICATION_VERSION
+from ready2rip.metadata.lyrics import embed_lyrics_text
 from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
 from ready2rip.paths import track_meta_for
 from ready2rip.tags.artists import (
@@ -50,6 +51,7 @@ class TagWriter:
         artist_style: str | None = DEFAULT_ARTIST_STYLE,
         image: bool = False,
         encoded_by: str | None = None,
+        embed_lyrics: bool = True,
     ) -> None:
         """Tag an encoded file.
 
@@ -63,6 +65,8 @@ class TagWriter:
             _artist_names_for_tags(raw_album_artist, style=style)
         )
 
+        lyrics = ''
+        synced_lyrics = ''
         if image:
             title = album_title
             artists = album_artists
@@ -89,6 +93,11 @@ class TagWriter:
             total = total_tracks if total_tracks is not None else (
                 len(album.tracks) if album.tracks else None
             )
+            if embed_lyrics:
+                lyrics = embed_lyrics_text(track)
+                synced_lyrics = (
+                    (track.lyrics_synced or '').strip() if track is not None else ''
+                )
         kw = dict(
             title=title,
             artists=artists,
@@ -98,6 +107,8 @@ class TagWriter:
             total_tracks=total,
             album_meta=album,
             encoded_by=(encoded_by or '').strip() or None,
+            lyrics=lyrics,
+            synced_lyrics=synced_lyrics,
         )
 
         if suffix == '.flac':
@@ -482,6 +493,8 @@ class TagWriter:
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
         encoded_by: str | None = None,
+        lyrics: str = '',
+        synced_lyrics: str = '',
     ) -> None:
         audio['TITLE'] = [title]
         # Vorbis comments: one ARTIST=/ALBUMARTIST= field per name.
@@ -524,6 +537,7 @@ class TagWriter:
             audio['ENCODER'] = [encoded_by]
         else:
             audio.pop('ENCODER', None)
+        _apply_vorbis_lyrics(audio, lyrics=lyrics, synced_lyrics=synced_lyrics)
 
     def _tag_mp4(
         self,
@@ -537,6 +551,8 @@ class TagWriter:
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
         encoded_by: str | None = None,
+        lyrics: str = '',
+        synced_lyrics: str = '',
     ) -> None:
         from mutagen.mp4 import MP4, MP4FreeForm
 
@@ -583,6 +599,11 @@ class TagWriter:
             audio['\xa9too'] = [encoded_by]
         elif '\xa9too' in audio:
             del audio['\xa9too']
+        text = (lyrics or '').strip() or (synced_lyrics or '').strip()
+        if text:
+            audio['\xa9lyr'] = [text]
+        elif '\xa9lyr' in audio:
+            del audio['\xa9lyr']
         audio.save()
 
     def _tag_mp3(
@@ -597,6 +618,8 @@ class TagWriter:
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
         encoded_by: str | None = None,
+        lyrics: str = '',
+        synced_lyrics: str = '',
     ) -> None:
         from mutagen.id3 import (
             ID3,
@@ -612,6 +635,7 @@ class TagWriter:
             TRCK,
             TSRC,
             TXXX,
+            USLT,
         )
         from mutagen.mp3 import MP3
 
@@ -677,6 +701,10 @@ class TagWriter:
         tags.delall('TXXX:LABEL')
         if encoded_by:
             tags.add(TENC(encoding=3, text=encoded_by))
+        tags.delall('USLT')
+        uslt_text = (lyrics or '').strip() or (synced_lyrics or '').strip()
+        if uslt_text:
+            tags.add(USLT(encoding=3, lang='eng', desc='', text=uslt_text))
         audio.save(v2_version=4)
 
     def _tag_wav(self, path: Path, **kw) -> None:
@@ -695,6 +723,8 @@ class TagWriter:
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
         encoded_by: str | None = None,
+        lyrics: str = '',
+        synced_lyrics: str = '',
     ) -> None:
         """Shared ID3 tagging for WAV and AIFF."""
         try:
@@ -711,6 +741,7 @@ class TagWriter:
                 TRCK,
                 TSRC,
                 TXXX,
+                USLT,
             )
 
             audio = self._open_id3_container(path, container=container)
@@ -764,6 +795,10 @@ class TagWriter:
                     tags.add(TSRC(encoding=3, text=isrc))
             if encoded_by:
                 tags.add(TENC(encoding=3, text=encoded_by))
+            tags.delall('USLT')
+            uslt_text = (lyrics or '').strip() or (synced_lyrics or '').strip()
+            if uslt_text:
+                tags.add(USLT(encoding=3, lang='eng', desc='', text=uslt_text))
             # ID3v2.4 keeps multi-artist TPE1/TPE2 as separate values.
             audio.save(v2_version=4)
         except Exception:
@@ -773,6 +808,21 @@ class TagWriter:
                 path,
                 exc_info=True,
             )
+
+
+def _apply_vorbis_lyrics(audio, *, lyrics: str, synced_lyrics: str) -> None:
+    plain = (lyrics or '').strip()
+    synced = (synced_lyrics or '').strip()
+    if plain:
+        audio['LYRICS'] = [plain]
+        audio['UNSYNCEDLYRICS'] = [plain]
+    else:
+        audio.pop('LYRICS', None)
+        audio.pop('UNSYNCEDLYRICS', None)
+    if synced:
+        audio['SYNCEDLYRICS'] = [synced]
+    else:
+        audio.pop('SYNCEDLYRICS', None)
 
 
 def _people_tag_values(names: list[str] | str | None) -> list[str]:
