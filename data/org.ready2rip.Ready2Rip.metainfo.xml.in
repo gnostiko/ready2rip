@@ -29,6 +29,16 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-07">
       <description>
         <p>
+          0.4.37: Keep encode-format helpers free of PyGObject so CI unit
+          tests import cleanly; same features as 0.4.36 (lossless-primary rip,
+          Also encode lossy, LRCLIB lyrics, settings cleanup, lossless embed
+          art, 100 MB art limit, metadata cache prune).
+        </p>
+      </description>
+    </release>
+    <release version="0.4.36" date="2026-11-07">
+      <description>
+        <p>
           0.4.36: Primary rip lossless-only; Also encode lossy companions;
           LRCLIB lyrics (lossless tags + sidecars); settings UI cleanup;
           lossless embed artwork option; 100 MB art limit; metadata cache prune.
