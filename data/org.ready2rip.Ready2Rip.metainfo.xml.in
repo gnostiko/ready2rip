@@ -26,7 +26,17 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-11-07">
+    <release version="@APPLICATION_VERSION@" date="2026-11-08">
+      <description>
+        <p>
+          0.4.38: QAAC Also-encode; Encoded by always names the codec tool;
+          Ripper tag comment; separate lossy/lossless embed sizes (no loose
+          cover beside lossy); lyrics save mode (embed / sidecar / both);
+          smoother settings expanders; AppImage / deb / rpm packaging only.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.37" date="2026-11-07">
       <description>
         <p>
           0.4.37: Keep encode-format helpers free of PyGObject so CI unit
@@ -260,10 +270,9 @@
       <description>
         <p>
           Artwork hover actions, naming scheme presets, nested
-          sample-offset settings, GNOME 51 Flatpak, and UI
-          capitalization cleanup. Remove dual-encode option. Album
-          fields grey out while ripping; track Title/Artist spacing
-          restored.
+          sample-offset settings, and UI capitalization cleanup.
+          Remove dual-encode option. Album fields grey out while
+          ripping; track Title/Artist spacing restored.
         </p>
       </description>
     </release>

@@ -20,12 +20,7 @@ from ready2rip.tags.writer import TagWriter
 
 
 def test_plain_from_lrc_strips_timestamps() -> None:
-    lrc = (
-        '[00:12.00]Line one\n'
-        '[00:15.50]Line two\n'
-        '[ar:Someone]\n'
-        'Bare line\n'
-    )
+    lrc = '[00:12.00]Line one\n[00:15.50]Line two\n[ar:Someone]\nBare line\n'
     assert plain_from_lrc(lrc) == 'Line one\nLine two\nBare line'
 
 
@@ -114,7 +109,7 @@ def test_fetch_album_fills_tracks() -> None:
     )
 
     def fake_fetch(**kwargs):
-        return LyricsResult(plain=f"Lyrics for {kwargs['title']}")
+        return LyricsResult(plain=f'Lyrics for {kwargs["title"]}')
 
     with patch.object(client, 'fetch_for_track', side_effect=fake_fetch):
         updated = client.fetch_album(album, disc, only_missing=True)
@@ -159,3 +154,17 @@ def test_apply_vorbis_writes_lyrics() -> None:
     assert audio['LYRICS'] == ['Hello\nWorld']
     assert audio['UNSYNCEDLYRICS'] == ['Hello\nWorld']
     assert audio['SYNCEDLYRICS'] == ['[00:01.00]Hello']
+
+
+def test_lyrics_save_mode_helpers() -> None:
+    from ready2rip.settings import (
+        lyrics_mode_writes_sidecar,
+        lyrics_mode_writes_tags,
+        normalize_lyrics_save_mode,
+    )
+
+    assert normalize_lyrics_save_mode('EMBED') == 'embed'
+    assert normalize_lyrics_save_mode('nope') == 'both'
+    assert lyrics_mode_writes_tags('embed') and not lyrics_mode_writes_sidecar('embed')
+    assert lyrics_mode_writes_sidecar('sidecar') and not lyrics_mode_writes_tags('sidecar')
+    assert lyrics_mode_writes_tags('both') and lyrics_mode_writes_sidecar('both')

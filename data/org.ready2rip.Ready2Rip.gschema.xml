@@ -40,7 +40,7 @@
       <summary>Primary encoder / output format (lossless only)</summary>
       <description>
         The first rip is always lossless (FLAC, WAV, or AIFF). Use Also encode
-        lossy for MP3 / M4A / Opus companions.
+        lossy for LAME MP3 / FDK AAC / QAAC / Opus companions.
       </description>
     </key>
 
@@ -96,6 +96,18 @@
       <summary>Deprecated AAC CBR bitrate (kbps); prefer aac-quality</summary>
     </key>
 
+    <key name="qaac-quality" type="s">
+      <choices>
+        <choice value="tvbr82"/>
+        <choice value="tvbr91"/>
+        <choice value="tvbr100"/>
+        <choice value="cvbr256"/>
+        <choice value="cbr256"/>
+      </choices>
+      <default>'cvbr256'</default>
+      <summary>QAAC quality (Apple AAC via Wine; popular TVBR / CVBR / CBR)</summary>
+    </key>
+
     <key name="opus-bitrate" type="i">
       <range min="48" max="512"/>
       <default>160</default>
@@ -111,6 +123,7 @@
       <choices>
         <choice value="mp3"/>
         <choice value="aac"/>
+        <choice value="qaac"/>
         <choice value="opus"/>
       </choices>
       <default>'mp3'</default>
@@ -160,11 +173,20 @@
     <key name="artwork-max-size" type="i">
       <range min="300" max="800"/>
       <default>600</default>
-      <summary>Maximum embedded artwork edge length (pixels)</summary>
+      <summary>Lossy embed artwork edge length (pixels)</summary>
       <description>
-        Full-resolution art is always kept for preview and folder cover.jpg.
-        Embedded covers (lossy and/or lossless, when enabled) are scaled so the
-        longest edge is this many pixels (300–800). Default is 600.
+        Longest edge for covers embedded into MP3 / M4A / Opus (300–800).
+        Folder cover.jpg stays full resolution. Default is 600.
+      </description>
+    </key>
+
+    <key name="artwork-max-size-lossless" type="i">
+      <range min="300" max="800"/>
+      <default>600</default>
+      <summary>Lossless embed artwork edge length (pixels)</summary>
+      <description>
+        Longest edge for covers embedded into FLAC / WAV / AIFF (300–800).
+        Folder cover.jpg stays full resolution. Default is 600.
       </description>
     </key>
 
@@ -185,7 +207,11 @@
 
     <key name="add-ripper-tag" type="b">
       <default>true</default>
-      <summary>Write Encoded by / ENCODER tag with ready2rip and version</summary>
+      <summary>Write ready2rip and version into the comment tag (Ripper tag)</summary>
+      <description>
+        When enabled, COMMENT / ©cmt receives “ready2rip &lt;version&gt;”.
+        Encoded by / ENCODER / ©too always records the codec tool and its version.
+      </description>
     </key>
 
     <key name="fetch-lyrics" type="b">
@@ -201,8 +227,17 @@
       <default>true</default>
       <summary>Save lyrics with lossless rips when available</summary>
       <description>
-        Writes lyrics into lossless audio tags and a .lrc/.txt sidecar next to
-        each lossless track. Lossy Also-encode companions are skipped.
+        When enabled, writes lyrics for lossless tracks according to
+        lyrics-save-mode. Lossy Also-encode companions are skipped.
+      </description>
+    </key>
+
+    <key name="lyrics-save-mode" type="s">
+      <default>'both'</default>
+      <summary>How to store lyrics for lossless rips</summary>
+      <description>
+        both = embed tags and write .lrc/.txt sidecars; embed = tags only;
+        sidecar = .lrc/.txt files only.
       </description>
     </key>
 

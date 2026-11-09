@@ -1,6 +1,6 @@
 [project]
 name = "ready2rip"
-version = "0.4.37"
+version = "0.4.38"
 description = "Secure CD ripper for Linux"
 requires-python = ">=3.11"
 dependencies = [
@@ -12,6 +12,9 @@ dependencies = [
 target-version = "py311"
 src = ["src"]
 line-length = 100
+
+[tool.ruff.format]
+quote-style = "single"
 
 [tool.ruff.lint]
 select = [

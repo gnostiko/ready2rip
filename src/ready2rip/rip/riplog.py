@@ -20,7 +20,11 @@ from ready2rip.metadata.providers import AlbumMetadata
 from ready2rip.paths import sanitize_component, track_meta_for
 from ready2rip.rip.eac_logcrc import append_eac_checksum
 from ready2rip.rip.encode import encode_command_summary
-from ready2rip.settings import rip_log_aac_quality, rip_log_mp3_quality
+from ready2rip.settings import (
+    rip_log_aac_quality,
+    rip_log_mp3_quality,
+    rip_log_qaac_quality,
+)
 
 
 @dataclass
@@ -74,6 +78,7 @@ class RipLog:
         self.mp3_quality: str = 'v0'
         self.aac_quality: str = 'cbr256'
         self.aac_bitrate: int = 256
+        self.qaac_quality: str = 'cvbr256'
         self.opus_bitrate: int = 160
         self.also_encode: bool = False
         self.also_encode_format: str = 'mp3'
@@ -87,6 +92,7 @@ class RipLog:
         self.write_sound_check: bool = True
         self.add_ripper_tag: bool = True
         self.embed_lyrics: bool = True
+        self.lyrics_save_mode: str = 'both'
         self.embed_artwork: bool = True
         self.embed_artwork_lossless: bool = False
         self.test_and_copy: bool = True
@@ -115,9 +121,7 @@ class RipLog:
         self.sample_offset = job.sample_offset
         self.offset_configured = bool(getattr(job, 'offset_configured', False))
         overread = getattr(job, 'overread', None)
-        self.overread_label = (
-            overread.log_label if overread is not None else 'No'
-        )
+        self.overread_label = overread.log_label if overread is not None else 'No'
         self.encode_format = job.encode_format
         self.flac_compression = job.flac_compression
         self.mp3_quality = job.mp3_quality or 'v0'
@@ -125,17 +129,12 @@ class RipLog:
             f'cbr{int(job.aac_bitrate)}' if getattr(job, 'aac_bitrate', 0) else 'cbr256'
         )
         self.aac_bitrate = job.aac_bitrate
+        self.qaac_quality = getattr(job, 'qaac_quality', None) or 'cvbr256'
         self.opus_bitrate = job.opus_bitrate
         self.also_encode = bool(getattr(job, 'also_encode', False))
-        self.also_encode_format = (
-            getattr(job, 'also_encode_format', None) or 'mp3'
-        )
-        self.also_encode_folder = (
-            getattr(job, 'also_encode_folder', None) or 'format_subdir'
-        )
-        self.also_encode_directory = (
-            getattr(job, 'also_encode_directory', None) or ''
-        )
+        self.also_encode_format = getattr(job, 'also_encode_format', None) or 'mp3'
+        self.also_encode_folder = getattr(job, 'also_encode_folder', None) or 'format_subdir'
+        self.also_encode_directory = getattr(job, 'also_encode_directory', None) or ''
         self.burst_fallback = job.burst_fallback
         self.verify_accuraterip = job.verify_accuraterip
         self.verify_ctdb = getattr(job, 'verify_ctdb', True)
@@ -144,10 +143,9 @@ class RipLog:
         self.write_sound_check = bool(getattr(job, 'write_sound_check', True))
         self.add_ripper_tag = bool(getattr(job, 'add_ripper_tag', True))
         self.embed_lyrics = bool(getattr(job, 'embed_lyrics', True))
+        self.lyrics_save_mode = getattr(job, 'lyrics_save_mode', None) or 'both'
         self.embed_artwork = job.embed_artwork
-        self.embed_artwork_lossless = bool(
-            getattr(job, 'embed_artwork_lossless', False)
-        )
+        self.embed_artwork_lossless = bool(getattr(job, 'embed_artwork_lossless', False))
         self.test_and_copy = getattr(job, 'test_and_copy', True)
         self.write_cue_file = getattr(job, 'write_cue_file', True)
         self.defeat_audio_cache = getattr(job, 'defeat_audio_cache', True)
@@ -155,9 +153,7 @@ class RipLog:
         self.rip_data_tracks = getattr(job, 'rip_data_tracks', True)
         self.album = job.album
         self.disc = job.disc_info
-        self.test_copy_max_retries = int(
-            getattr(job, 'test_copy_max_retries', 3) or 0
-        )
+        self.test_copy_max_retries = int(getattr(job, 'test_copy_max_retries', 3) or 0)
 
     def begin_track(
         self,
@@ -193,9 +189,7 @@ class RipLog:
             f'{app} extraction logfile from {self.started_at.strftime("%d. %B %Y, %H:%M")}'
         )
         if self.finished_at is not None:
-            lines.append(
-                f'Finished: {self.finished_at.strftime("%d. %B %Y, %H:%M")}'
-            )
+            lines.append(f'Finished: {self.finished_at.strftime("%d. %B %Y, %H:%M")}')
         lines.append('')
 
         artist = (self.album.artist if self.album else '') or 'Unknown Artist'
@@ -208,7 +202,9 @@ class RipLog:
         lines.append('')
 
         lines.append(f'Used drive  : {self.device or "unknown"}')
-        lines.append(f'Host system : {platform.system()} {platform.release()} ({platform.machine()})')
+        lines.append(
+            f'Host system : {platform.system()} {platform.release()} ({platform.machine()})'
+        )
         lines.append('')
 
         # Reflect what was actually used for the final audio, not only intent.
@@ -216,27 +212,18 @@ class RipLog:
         any_burst = any('burst' in m for m in final_modes)
         all_burst = bool(final_modes) and all('burst' in m for m in final_modes)
         if all_burst:
-            read_mode = (
-                'Burst (paranoia disabled / -Z) — full-disc or per-track fallback'
-            )
+            read_mode = 'Burst (paranoia disabled / -Z) — full-disc or per-track fallback'
             read_cmd = 'cdparanoia -w -Z -e (-O offset when calibrated)'
         elif any_burst:
-            read_mode = (
-                'Secure with burst fallback (some tracks re-read with -Z)'
-            )
+            read_mode = 'Secure with burst fallback (some tracks re-read with -Z)'
             read_cmd = (
-                'cdparanoia -w --never-skip=500 -X -o 8  (burst: -Z) '
-                '(-O offset when calibrated)'
+                'cdparanoia -w --never-skip=500 -X -o 8  (burst: -Z) (-O offset when calibrated)'
             )
         else:
             read_mode = (
-                'Secure (cdparanoia full paranoia, never-skip + abort-on-skip '
-                '+ forced overlap)'
+                'Secure (cdparanoia full paranoia, never-skip + abort-on-skip + forced overlap)'
             )
-            read_cmd = (
-                'cdparanoia -w --never-skip=500 -X -o 8 '
-                '(-O offset when calibrated)'
-            )
+            read_cmd = 'cdparanoia -w --never-skip=500 -X -o 8 (-O offset when calibrated)'
         lines.append(f'Read mode               : {read_mode}')
         lines.append(f'Read command            : {read_cmd}')
         if self.test_and_copy:
@@ -257,9 +244,7 @@ class RipLog:
             else 'Defeat audio cache      : No'
         )
         lines.append(
-            'Rip HTOA / pregap       : Yes'
-            if self.rip_htoa
-            else 'Rip HTOA / pregap       : No'
+            'Rip HTOA / pregap       : Yes' if self.rip_htoa else 'Rip HTOA / pregap       : No'
         )
         lines.append(
             'Rip data tracks         : Yes'
@@ -270,27 +255,19 @@ class RipLog:
             lines.append(f'Pregap source           : {self.disc.pregap_source}')
         lines.append('')
         offset_note = (
-            'calibrated'
-            if self.offset_configured
-            else 'NOT CALIBRATED — AccurateRip may mismatch'
+            'calibrated' if self.offset_configured else 'NOT CALIBRATED — AccurateRip may mismatch'
         )
         lines.append(
-            f'Read offset correction                      : '
-            f'{self.sample_offset} ({offset_note})'
+            f'Read offset correction                      : {self.sample_offset} ({offset_note})'
         )
-        lines.append(
-            'Overread into Lead-In and Lead-Out          : '
-            f'{self.overread_label}'
-        )
+        lines.append(f'Overread into Lead-In and Lead-Out          : {self.overread_label}')
         if self.overread_label == 'Yes':
             fill = 'No (drive overreads; offset edges use real samples)'
         elif self.overread_label == 'No':
             fill = 'Yes (cdparanoia -O / AccurateRip edges)'
         else:
             fill = 'Partial (silence where overread is unavailable)'
-        lines.append(
-            f'Fill up missing offset samples with silence : {fill}'
-        )
+        lines.append(f'Fill up missing offset samples with silence : {fill}')
         lines.append('Delete leading and trailing silent blocks   : No')
         lines.append('Null samples used in CRC calculations       : Yes')
         lines.append(
@@ -321,18 +298,14 @@ class RipLog:
             lines.append('Selected bitrate                : lossless')
         elif self.encode_format == 'mp3':
             lines.append(
-                f'Selected bitrate                : '
-                f'{rip_log_mp3_quality(self.mp3_quality)}'
+                f'Selected bitrate                : {rip_log_mp3_quality(self.mp3_quality)}'
             )
         elif self.encode_format == 'aac':
             lines.append(
-                f'Selected bitrate                : '
-                f'{rip_log_aac_quality(self.aac_quality)}'
+                f'Selected bitrate                : {rip_log_aac_quality(self.aac_quality)}'
             )
         elif self.encode_format == 'opus':
-            lines.append(
-                f'Selected bitrate                : {self.opus_bitrate} kBit/s VBR'
-            )
+            lines.append(f'Selected bitrate                : {self.opus_bitrate} kBit/s VBR')
         else:
             lines.append('Selected bitrate                : uncompressed PCM')
         lines.append(
@@ -342,19 +315,28 @@ class RipLog:
                 flac_compression=self.flac_compression,
                 mp3_quality=self.mp3_quality,
                 aac_quality=self.aac_quality,
+                qaac_quality=self.qaac_quality,
                 opus_bitrate=self.opus_bitrate,
             )
         )
         if self.also_encode:
-            also = (self.also_encode_format or 'mp3').upper()
+            also_fmt = (self.also_encode_format or 'mp3').strip().lower()
+            also_label = {
+                'mp3': 'LAME MP3',
+                'aac': 'FDK AAC',
+                'qaac': 'QAAC',
+                'opus': 'Opus',
+            }.get(also_fmt, also_fmt.upper())
             layout = self.also_encode_folder or 'format_subdir'
             if layout == 'custom_folder' and self.also_encode_directory:
                 layout_note = f'custom → {self.also_encode_directory}'
             else:
                 layout_note = layout
-            lines.append(
-                f'Also encode lossy               : {also} ({layout_note})'
-            )
+            lines.append(f'Also encode lossy               : {also_label} ({layout_note})')
+            if also_fmt == 'qaac':
+                lines.append(
+                    f'Selected bitrate                : {rip_log_qaac_quality(self.qaac_quality)}'
+                )
             lines.append(
                 'Lossy encoder command           : '
                 + encode_command_summary(
@@ -362,6 +344,7 @@ class RipLog:
                     flac_compression=self.flac_compression,
                     mp3_quality=self.mp3_quality,
                     aac_quality=self.aac_quality,
+                    qaac_quality=self.qaac_quality,
                     opus_bitrate=self.opus_bitrate,
                 )
             )
@@ -370,14 +353,18 @@ class RipLog:
             '(no gain, EQ, fade, remix, or forced resample before encode)'
         )
         lines.append('Add tags                        : Yes')
-        lines.append(
-            f'Encoded by tag                   : '
-            f'{"Yes" if self.add_ripper_tag else "No"}'
-        )
-        lines.append(
-            f'Save lyrics (lossless)           : '
-            f'{"Yes" if self.embed_lyrics else "No"}'
-        )
+        lines.append('Encoded by tag                   : Yes (codec tool + version)')
+        lines.append(f'Ripper tag (comment)             : {"Yes" if self.add_ripper_tag else "No"}')
+        if not self.embed_lyrics:
+            lyrics_label = 'No'
+        else:
+            mode = (self.lyrics_save_mode or 'both').strip().lower()
+            lyrics_label = {
+                'embed': 'Yes (embed in tags)',
+                'sidecar': 'Yes (sidecar files)',
+                'both': 'Yes (embed + sidecar)',
+            }.get(mode, f'Yes ({mode})')
+        lines.append(f'Save lyrics (lossless)           : {lyrics_label}')
         if self.embed_artwork and self.embed_artwork_lossless:
             embed_label = 'Yes (lossy + lossless)'
         elif self.embed_artwork:
@@ -387,20 +374,21 @@ class RipLog:
         else:
             embed_label = 'No'
         lines.append(f'Embed artwork                   : {embed_label}')
-        lines.append(f'ReplayGain                      : {"Yes" if self.apply_replaygain else "No"}')
         lines.append(
-            f'iTunes Sound Check               : '
-            f'{"Yes" if self.write_sound_check else "No"}'
+            f'ReplayGain                      : {"Yes" if self.apply_replaygain else "No"}'
         )
-        lines.append(f'AccurateRip                     : {"Yes" if self.verify_accuraterip else "No"}')
+        lines.append(
+            f'iTunes Sound Check               : {"Yes" if self.write_sound_check else "No"}'
+        )
+        lines.append(
+            f'AccurateRip                     : {"Yes" if self.verify_accuraterip else "No"}'
+        )
         if self.ar_status:
             lines.append(f'AccurateRip database            : {self.ar_status}')
         lines.append(f'CTDB                            : {"Yes" if self.verify_ctdb else "No"}')
         if self.ctdb_status:
             lines.append(f'CTDB database                   : {self.ctdb_status}')
-        lines.append(
-            f'CTDB submit                      : {"Yes" if self.submit_ctdb else "No"}'
-        )
+        lines.append(f'CTDB submit                      : {"Yes" if self.submit_ctdb else "No"}')
         lines.append(
             'Write CUE sheet                 : Yes '
             '(multi-file with INDEX 00 in previous, or image CUE; '
@@ -410,16 +398,10 @@ class RipLog:
         )
         lines.append('')
 
-        burst_early = [
-            t.number
-            for t in self.tracks
-            if 'burst' in (t.extract_mode or '').lower()
-        ]
+        burst_early = [t.number for t in self.tracks if 'burst' in (t.extract_mode or '').lower()]
         if burst_early:
             lines.append('WARNING: Insecure burst extraction (-Z) on this session')
-            lines.append(
-                f'  Affected track(s): {", ".join(str(n) for n in burst_early)}'
-            )
+            lines.append(f'  Affected track(s): {", ".join(str(n) for n in burst_early)}')
             lines.append(
                 '  Those tracks are not archival-grade secure rips '
                 '(paranoia disabled for the final audio).'
@@ -429,12 +411,8 @@ class RipLog:
         if self.disc and self.disc.tracks:
             lines.append('TOC of the extracted CD')
             lines.append('')
-            lines.append(
-                '     Track |   Start  |  Length  |   Pregap | Start sector | End sector'
-            )
-            lines.append(
-                '    ------------------------------------------------------------------'
-            )
+            lines.append('     Track |   Start  |  Length  |   Pregap | Start sector | End sector')
+            lines.append('    ------------------------------------------------------------------')
             for t in self.disc.tracks:
                 end = t.start_sector + t.length_sectors - 1
                 start_lab = _msf_from_sectors(t.start_sector)
@@ -509,10 +487,7 @@ class RipLog:
                 lines.append('     AccurateRip not checked')
             if entry.ctdb is not None:
                 lines.append(f'     {_format_ctdb_line(entry.ctdb)}')
-            elif (
-                self.verify_ctdb
-                and not (entry.extract_mode or '').lower().startswith('raw')
-            ):
+            elif self.verify_ctdb and not (entry.extract_mode or '').lower().startswith('raw'):
                 lines.append('     CTDB not checked')
             # Error correction block (skip duplicate quality line).
             for ec in entry.error_correction_lines:
@@ -535,80 +510,55 @@ class RipLog:
             matches = sum(
                 1
                 for t in ar_checked
-                if t.accuraterip
-                and t.accuraterip.confidence == AccurateRipConfidence.MATCH
+                if t.accuraterip and t.accuraterip.confidence == AccurateRipConfidence.MATCH
             )
             if matches == len(ar_checked):
                 lines.append('All tracks accurately ripped')
             elif matches == 0:
                 lines.append('No tracks could be verified as accurate')
             else:
-                lines.append(
-                    f'{matches} of {len(ar_checked)} tracks accurately ripped'
-                )
+                lines.append(f'{matches} of {len(ar_checked)} tracks accurately ripped')
             lines.append('')
 
         ctdb_checked = [t for t in self.tracks if t.ctdb is not None]
         if ctdb_checked:
             matches = sum(
-                1
-                for t in ctdb_checked
-                if t.ctdb and t.ctdb.confidence == CtdbConfidence.MATCH
+                1 for t in ctdb_checked if t.ctdb and t.ctdb.confidence == CtdbConfidence.MATCH
             )
             if matches == len(ctdb_checked):
                 lines.append('All tracks verified by CTDB')
             elif matches == 0:
                 lines.append('No tracks could be verified by CTDB')
             else:
-                lines.append(
-                    f'{matches} of {len(ctdb_checked)} tracks verified by CTDB'
-                )
+                lines.append(f'{matches} of {len(ctdb_checked)} tracks verified by CTDB')
             lines.append('')
 
-        burst = [
-            t.number
-            for t in self.tracks
-            if 'burst' in (t.extract_mode or '').lower()
-        ]
+        burst = [t.number for t in self.tracks if 'burst' in (t.extract_mode or '').lower()]
         if burst:
             lines.append('WARNING: Insecure burst extraction (-Z)')
             lines.append(
                 f'  Track(s) {", ".join(str(n) for n in burst)} were NOT ripped '
                 'with full paranoia. Audio may contain uncorrected errors.'
             )
-            lines.append(
-                '  Do not treat this as an archival-grade secure rip for those tracks.'
-            )
+            lines.append('  Do not treat this as an archival-grade secure rip for those tracks.')
             lines.append('')
 
-        crc_ok = [
-            t.number
-            for t in self.tracks
-            if t.crc_verified is True
-        ]
-        crc_bad = [
-            t.number
-            for t in self.tracks
-            if t.crc_verified is False
-        ]
+        crc_ok = [t.number for t in self.tracks if t.crc_verified is True]
+        crc_bad = [t.number for t in self.tracks if t.crc_verified is False]
         if crc_ok:
             lines.append(
-                f'Test & copy CRC matched on track(s): '
-                f'{", ".join(str(n) for n in crc_ok)}'
+                f'Test & copy CRC matched on track(s): {", ".join(str(n) for n in crc_ok)}'
             )
             lines.append('')
         if crc_bad:
             lines.append(
-                f'Test & copy CRC MISMATCH on track(s): '
-                f'{", ".join(str(n) for n in crc_bad)}'
+                f'Test & copy CRC MISMATCH on track(s): {", ".join(str(n) for n in crc_bad)}'
             )
             lines.append('')
 
         errored = [t.number for t in self.tracks if t.had_errors]
         if errored:
-            lines.append(
-                f'There were errors on track(s): {", ".join(str(n) for n in errored)}'
-            )
+            lines.append(f'There were errors on track(s): {", ".join(str(n) for n in errored)}')
             lines.append('')
 
         if self.history:
@@ -647,12 +597,8 @@ class RipLog:
         return append_eac_checksum('\n'.join(lines))
 
     def default_log_filename(self) -> str:
-        artist = sanitize_component(
-            (self.album.artist if self.album else '') or 'Unknown Artist'
-        )
-        album = sanitize_component(
-            (self.album.title if self.album else '') or 'Unknown Album'
-        )
+        artist = sanitize_component((self.album.artist if self.album else '') or 'Unknown Artist')
+        album = sanitize_component((self.album.title if self.album else '') or 'Unknown Album')
         stamp = self.started_at.strftime('%Y-%m-%d')
         return f'{artist} - {album} ({stamp}).log'
 
@@ -778,10 +724,7 @@ def _format_ar_line(ar: AccurateRipResult) -> str:
 
 def _format_ctdb_line(ctdb: CtdbResult) -> str:
     if ctdb.confidence == CtdbConfidence.MATCH:
-        return (
-            f'CTDB accurately ripped (confidence {ctdb.confidence_count})  '
-            f'[CRC {ctdb.crc}]'
-        )
+        return f'CTDB accurately ripped (confidence {ctdb.confidence_count})  [CRC {ctdb.crc}]'
     if ctdb.confidence == CtdbConfidence.MISMATCH:
         return (
             f'CTDB cannot be verified as accurate '

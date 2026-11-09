@@ -5,13 +5,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_ALSO_ENCODER_IDS = frozenset({'mp3', 'aac', 'opus'})
+_ALSO_ENCODER_IDS = frozenset({'mp3', 'aac', 'qaac', 'opus'})
 _FOLDER_LAYOUT_IDS = frozenset({'format_subdir', 'same_folder', 'custom_folder'})
 
 # Formats / extensions that may receive a .cue sheet (lossless / PCM only).
 LOSSLESS_FORMATS = frozenset({'flac', 'wav', 'aiff'})
 LOSSLESS_EXTENSIONS = frozenset({'.flac', '.wav', '.aiff', '.aif'})
-LOSSY_FORMATS = frozenset({'mp3', 'aac', 'opus'})
+LOSSY_FORMATS = frozenset({'mp3', 'aac', 'qaac', 'opus'})
 
 _FORMAT_FOLDER_NAMES = {
     'flac': 'FLAC',
@@ -19,6 +19,7 @@ _FORMAT_FOLDER_NAMES = {
     'aiff': 'AIFF',
     'mp3': 'MP3',
     'aac': 'M4A',
+    'qaac': 'M4A',
     'opus': 'Opus',
 }
 
@@ -39,9 +40,7 @@ def normalize_encode_format(value: str | None) -> str:
     return 'flac'
 
 
-def should_embed_artwork_for_format(
-    fmt: str, *, embed_lossy: bool, embed_lossless: bool
-) -> bool:
+def should_embed_artwork_for_format(fmt: str, *, embed_lossy: bool, embed_lossless: bool) -> bool:
     """Whether *fmt* should receive an embedded cover."""
     key = (fmt or '').strip().lower()
     if is_lossy_format(key):

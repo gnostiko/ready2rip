@@ -39,8 +39,9 @@ ENCODER_IDS = frozenset(e[0] for e in ENCODERS)
 
 # Secondary “Also encode lossy” codecs (lossy companions to a primary encode).
 ALSO_ENCODERS = (
-    ('mp3', 'MP3'),
-    ('aac', 'M4A'),
+    ('mp3', 'LAME MP3'),
+    ('aac', 'FDK AAC'),
+    ('qaac', 'QAAC'),
     ('opus', 'Opus'),
 )
 
@@ -54,6 +55,30 @@ ALSO_FOLDER_LAYOUTS = (
 )
 
 ALSO_FOLDER_LAYOUT_IDS = frozenset(e[0] for e in ALSO_FOLDER_LAYOUTS)
+
+# How lyrics are stored when “Save lyrics (lossless)” is on.
+LYRICS_SAVE_MODES = (
+    ('both', 'Embed and sidecar'),
+    ('embed', 'Embed in tags'),
+    ('sidecar', 'Sidecar files only'),
+)
+LYRICS_SAVE_MODE_IDS = frozenset(m[0] for m in LYRICS_SAVE_MODES)
+DEFAULT_LYRICS_SAVE_MODE = 'both'
+
+
+def normalize_lyrics_save_mode(value: str | None) -> str:
+    raw = (value or '').strip().lower()
+    if raw in LYRICS_SAVE_MODE_IDS:
+        return raw
+    return DEFAULT_LYRICS_SAVE_MODE
+
+
+def lyrics_mode_writes_tags(mode: str | None) -> bool:
+    return normalize_lyrics_save_mode(mode) in ('embed', 'both')
+
+
+def lyrics_mode_writes_sidecar(mode: str | None) -> bool:
+    return normalize_lyrics_save_mode(mode) in ('sidecar', 'both')
 
 
 def normalize_also_encode_format(value: str | None) -> str:
@@ -119,6 +144,17 @@ AAC_QUALITIES = (
 )
 
 AAC_QUALITY_IDS = frozenset(q[0] for q in AAC_QUALITIES)
+
+# Popular qaac presets (Apple AAC via Wine) — lowest → highest within each mode.
+QAAC_QUALITIES = (
+    ('tvbr82', 'TVBR 82 (~192 kbps)'),
+    ('tvbr91', 'TVBR 91 (~224 kbps)'),
+    ('tvbr100', 'TVBR 100 (~256 kbps)'),
+    ('cvbr256', 'CVBR 256 kbps'),
+    ('cbr256', 'CBR 256 kbps'),
+)
+
+QAAC_QUALITY_IDS = frozenset(q[0] for q in QAAC_QUALITIES)
 
 
 def normalize_mp3_quality(value: str | None) -> str:
@@ -191,11 +227,30 @@ def rip_log_aac_quality(quality: str) -> str:
     return q.upper()
 
 
+def normalize_qaac_quality(value: str | None) -> str:
+    raw = (value or '').strip().lower()
+    if raw in QAAC_QUALITY_IDS:
+        return raw
+    return 'cvbr256'
+
+
+def rip_log_qaac_quality(quality: str) -> str:
+    """Human-readable QAAC setting for the rip log."""
+    q = normalize_qaac_quality(quality)
+    if q.startswith('tvbr') and q[4:].isdigit():
+        return f'qaac TVBR {q[4:]}'
+    if q.startswith('cvbr') and q[4:].isdigit():
+        return f'qaac CVBR {q[4:]} kBit/s'
+    if q.startswith('cbr') and q[3:].isdigit():
+        return f'qaac CBR {q[3:]} kBit/s'
+    return f'qaac {q.upper()}'
+
+
 def opus_bitrate_label(bitrate: int) -> str:
     return f'{int(bitrate)} kbps VBR'
 
 
-# Embed sizes for lossy encodes only (≤800 px keeps tags small on phones/cars).
+# Embed sizes (≤800 px). Lossy and lossless each have their own setting.
 DEFAULT_ARTWORK_MAX_SIZE = 600
 ARTWORK_SIZES = (
     (300, '300 px'),
@@ -203,6 +258,7 @@ ARTWORK_SIZES = (
     (600, '600 px'),
     (800, '800 px'),
 )
+ARTWORK_SIZE_IDS = frozenset(px for px, _label in ARTWORK_SIZES)
 
 # Map removed / oversized legacy presets down to the 800 px ceiling.
 _ARTWORK_SIZE_ALIASES = {
@@ -211,6 +267,20 @@ _ARTWORK_SIZE_ALIASES = {
     1200: 800,
     0: 800,
 }
+
+
+def normalize_artwork_max_size(value: int | None) -> int:
+    """Clamp / migrate an embed-size preference to a known preset."""
+    try:
+        raw = int(value) if value is not None else DEFAULT_ARTWORK_MAX_SIZE
+    except (TypeError, ValueError):
+        return DEFAULT_ARTWORK_MAX_SIZE
+    if raw in _ARTWORK_SIZE_ALIASES:
+        return _ARTWORK_SIZE_ALIASES[raw]
+    if raw in ARTWORK_SIZE_IDS:
+        return raw
+    return DEFAULT_ARTWORK_MAX_SIZE
+
 
 def _get_bool(settings: Gio.Settings, key: str, default: bool) -> bool:
     """Read a boolean key; fall back if the installed schema is older."""
@@ -232,6 +302,26 @@ def _get_int(settings: Gio.Settings, key: str, default: int) -> int:
         return int(settings.get_int(key))
     except Exception:
         return default
+
+
+def _load_artwork_max_size_lossless(settings: Gio.Settings) -> int:
+    """Lossless embed size; seed once from legacy shared size, then stay independent."""
+    try:
+        user = settings.get_user_value('artwork-max-size-lossless')
+        if user is not None:
+            return normalize_artwork_max_size(int(user.get_int32()))
+    except Exception:
+        pass
+    # First run after the split: pin a copy of the old shared size so later
+    # lossy changes do not drag lossless along.
+    seeded = normalize_artwork_max_size(
+        _get_int(settings, 'artwork-max-size', DEFAULT_ARTWORK_MAX_SIZE)
+    )
+    try:
+        settings.set_int('artwork-max-size-lossless', int(seeded))
+    except Exception:
+        pass
+    return seeded
 
 
 def _load_mp3_quality(settings: Gio.Settings) -> str:
@@ -306,6 +396,8 @@ class AppSettings:
     aac_quality: str = 'cbr256'
     # Legacy mirror of CBR aac_quality for older code paths; prefer aac_quality.
     aac_bitrate: int = 256
+    # qaac (Apple AAC / Wine) — popular TVBR / CVBR / CBR presets.
+    qaac_quality: str = 'cvbr256'
     opus_bitrate: int = 160
     # Optional second encode from the same verified WAV (lossy companion).
     also_encode: bool = False
@@ -316,12 +408,15 @@ class AppSettings:
     apply_replaygain: bool = True
     # iTunNORM Sound Check on iPod-compatible formats (MP3/M4A/AIFF/WAV).
     write_sound_check: bool = True
-    # Write Encoded by / ENCODER / ©too with ready2rip + version.
+    # Write ready2rip + version into COMMENT / ©cmt (Ripper tag).
+    # Encoded by / ENCODER / ©too always uses the codec tool + version.
     add_ripper_tag: bool = True
     # Fetch lyrics from LRCLIB after a successful album match.
     fetch_lyrics: bool = False
-    # Write lyrics tags when a track has lyrics text.
+    # Save lyrics with lossless rips (master switch).
     embed_lyrics: bool = True
+    # How to store them: both | embed | sidecar.
+    lyrics_save_mode: str = DEFAULT_LYRICS_SAVE_MODE
     # Embed cover into MP3 / M4A / Opus.
     embed_artwork: bool = True
     # Embed cover into FLAC / WAV / AIFF (off by default; folder cover still written).
@@ -329,7 +424,10 @@ class AppSettings:
     fetch_artwork: bool = True
     artwork_source_itunes: bool = True
     artwork_source_caa: bool = True
+    # Longest edge for embeds into lossy files (MP3 / M4A / Opus).
     artwork_max_size: int = DEFAULT_ARTWORK_MAX_SIZE
+    # Longest edge for embeds into lossless files (FLAC / WAV / AIFF).
+    artwork_max_size_lossless: int = DEFAULT_ARTWORK_MAX_SIZE
     use_musicbrainz: bool = True
     use_freedb: bool = True
     auto_lookup_metadata: bool = True
@@ -436,9 +534,7 @@ def _schema_source() -> Gio.SettingsSchemaSource | None:
     cache = _compile_checkout_schemas()
     if cache is not None:
         try:
-            return Gio.SettingsSchemaSource.new_from_directory(
-                str(cache), default, True
-            )
+            return Gio.SettingsSchemaSource.new_from_directory(str(cache), default, True)
         except GLib.Error as exc:
             log.debug('Could not load checkout schema source: %s', exc)
     return default
@@ -473,9 +569,7 @@ class SettingsStore:
                 device=s.get_string('device') or '/dev/sr0',
                 color_scheme=scheme,
                 output_directory=s.get_string('output-directory') or '',
-                encode_format=normalize_encode_format(
-                    _get_string(s, 'encode-format', 'flac')
-                ),
+                encode_format=normalize_encode_format(_get_string(s, 'encode-format', 'flac')),
                 flac_compression=s.get_int('flac-compression'),
                 mp3_quality=_load_mp3_quality(s),
                 aac_quality=(aq := _load_aac_quality(s)),
@@ -484,6 +578,7 @@ class SettingsStore:
                     if aq.startswith('cbr') and aq[3:].isdigit()
                     else _get_int(s, 'aac-bitrate', 256)
                 ),
+                qaac_quality=normalize_qaac_quality(_get_string(s, 'qaac-quality', 'cvbr256')),
                 opus_bitrate=s.get_int('opus-bitrate'),
                 also_encode=_get_bool(s, 'also-encode', False),
                 also_encode_format=normalize_also_encode_format(
@@ -492,28 +587,28 @@ class SettingsStore:
                 also_encode_folder=normalize_also_encode_folder(
                     _get_string(s, 'also-encode-folder', 'format_subdir')
                 ),
-                also_encode_directory=_get_string(
-                    s, 'also-encode-directory', ''
-                ),
+                also_encode_directory=_get_string(s, 'also-encode-directory', ''),
                 apply_replaygain=s.get_boolean('apply-replaygain'),
                 write_sound_check=_get_bool(s, 'write-sound-check', True),
                 add_ripper_tag=_get_bool(s, 'add-ripper-tag', True),
                 fetch_lyrics=_get_bool(s, 'fetch-lyrics', False),
                 embed_lyrics=_get_bool(s, 'embed-lyrics', True),
-                embed_artwork=s.get_boolean('embed-artwork'),
-                embed_artwork_lossless=_get_bool(
-                    s, 'embed-artwork-lossless', False
+                lyrics_save_mode=normalize_lyrics_save_mode(
+                    _get_string(s, 'lyrics-save-mode', DEFAULT_LYRICS_SAVE_MODE)
                 ),
+                embed_artwork=s.get_boolean('embed-artwork'),
+                embed_artwork_lossless=_get_bool(s, 'embed-artwork-lossless', False),
                 fetch_artwork=s.get_boolean('fetch-artwork'),
                 artwork_source_itunes=_get_bool(s, 'artwork-source-itunes', True),
                 artwork_source_caa=_get_bool(s, 'artwork-source-caa', True),
-                artwork_max_size=s.get_int('artwork-max-size'),
+                artwork_max_size=normalize_artwork_max_size(
+                    _get_int(s, 'artwork-max-size', DEFAULT_ARTWORK_MAX_SIZE)
+                ),
+                artwork_max_size_lossless=_load_artwork_max_size_lossless(s),
                 use_musicbrainz=s.get_boolean('use-musicbrainz'),
                 use_freedb=s.get_boolean('use-freedb'),
                 auto_lookup_metadata=s.get_boolean('auto-lookup-metadata'),
-                filename_template=migrate_filename_template(
-                    s.get_string('filename-template')
-                ),
+                filename_template=migrate_filename_template(s.get_string('filename-template')),
                 album_folder_template=migrate_album_folder_template(
                     s.get_string('album-folder-template')
                 ),
@@ -559,15 +654,21 @@ class SettingsStore:
                     pass
 
         # Migrate removed / oversized artwork presets (e.g. 1000 → 800).
-        allowed = {px for px, _label in ARTWORK_SIZES}
-        prior_art = int(snap.artwork_max_size)
-        if snap.artwork_max_size in _ARTWORK_SIZE_ALIASES:
-            snap.artwork_max_size = _ARTWORK_SIZE_ALIASES[snap.artwork_max_size]
-        elif snap.artwork_max_size not in allowed:
-            snap.artwork_max_size = DEFAULT_ARTWORK_MAX_SIZE
-        if s is not None and snap.artwork_max_size != prior_art:
+        prior_lossy = int(snap.artwork_max_size)
+        prior_lossless = int(snap.artwork_max_size_lossless)
+        snap.artwork_max_size = normalize_artwork_max_size(snap.artwork_max_size)
+        snap.artwork_max_size_lossless = normalize_artwork_max_size(snap.artwork_max_size_lossless)
+        if s is not None and snap.artwork_max_size != prior_lossy:
             try:
                 s.set_int('artwork-max-size', int(snap.artwork_max_size))
+            except Exception:
+                pass
+        if s is not None and snap.artwork_max_size_lossless != prior_lossless:
+            try:
+                s.set_int(
+                    'artwork-max-size-lossless',
+                    int(snap.artwork_max_size_lossless),
+                )
             except Exception:
                 pass
         return snap
@@ -591,6 +692,7 @@ class SettingsStore:
             'mp3_quality': ('mp3-quality', 'string'),
             'aac_quality': ('aac-quality', 'string'),
             'aac_bitrate': ('aac-bitrate', 'int'),
+            'qaac_quality': ('qaac-quality', 'string'),
             'opus_bitrate': ('opus-bitrate', 'int'),
             'also_encode': ('also-encode', 'bool'),
             'also_encode_format': ('also-encode-format', 'string'),
@@ -601,12 +703,14 @@ class SettingsStore:
             'add_ripper_tag': ('add-ripper-tag', 'bool'),
             'fetch_lyrics': ('fetch-lyrics', 'bool'),
             'embed_lyrics': ('embed-lyrics', 'bool'),
+            'lyrics_save_mode': ('lyrics-save-mode', 'string'),
             'embed_artwork': ('embed-artwork', 'bool'),
             'embed_artwork_lossless': ('embed-artwork-lossless', 'bool'),
             'fetch_artwork': ('fetch-artwork', 'bool'),
             'artwork_source_itunes': ('artwork-source-itunes', 'bool'),
             'artwork_source_caa': ('artwork-source-caa', 'bool'),
             'artwork_max_size': ('artwork-max-size', 'int'),
+            'artwork_max_size_lossless': ('artwork-max-size-lossless', 'int'),
             'use_musicbrainz': ('use-musicbrainz', 'bool'),
             'use_freedb': ('use-freedb', 'bool'),
             'auto_lookup_metadata': ('auto-lookup-metadata', 'bool'),
@@ -651,6 +755,9 @@ class SettingsStore:
                             s.set_int('aac-bitrate', int(value[3:]))
                         except Exception:
                             pass
+                elif attr == 'qaac_quality':
+                    value = normalize_qaac_quality(str(value))
+                    current = replace(current, qaac_quality=value)
                 elif attr == 'artist_style':
                     value = normalize_artist_style(str(value))
                     current = replace(current, artist_style=value)
@@ -663,6 +770,9 @@ class SettingsStore:
                 elif attr == 'also_encode_folder':
                     value = normalize_also_encode_folder(str(value))
                     current = replace(current, also_encode_folder=value)
+                elif attr == 'lyrics_save_mode':
+                    value = normalize_lyrics_save_mode(str(value))
+                    current = replace(current, lyrics_save_mode=value)
                 s.set_string(gkey, str(value))
             elif kind == 'int':
                 s.set_int(gkey, int(value))

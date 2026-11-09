@@ -58,16 +58,20 @@ from ready2rip.rip.cue import (
 from ready2rip.rip.encode import (
     aac_encode_argv,
     aiff_encode_argv,
+    encoder_tag_for_format,
     flac_encode_argv,
     mp3_encode_argv,
     opus_encode_argv,
     opus_ffmpeg_argv,
+    qaac_available,
+    qaac_encode_argv,
 )
 from ready2rip.rip.encode_dest import (
     audio_dir_for_format,
     encode_format_list,
     is_lossless_extension,
     is_lossless_format,
+    is_lossy_format,
     should_embed_artwork_for_format,
 )
 from ready2rip.rip.paranoia_run import run_paranoia_streaming
@@ -95,6 +99,10 @@ from ready2rip.rip.secure import (
     wav_size_minimum,
 )
 from ready2rip.rip.wav_trim import trim_wav_to_expected
+from ready2rip.settings import (
+    lyrics_mode_writes_sidecar,
+    lyrics_mode_writes_tags,
+)
 from ready2rip.tags.artists import DEFAULT_ARTIST_STYLE
 from ready2rip.tags.writer import TagWriter, ripper_tag_value
 from ready2rip.util import find_cdparanoia, validate_device_path
@@ -143,11 +151,12 @@ class RipJob:
     device: str
     track_numbers: list[int]
     output_directory: Path
-    encode_format: str = 'flac'  # flac | mp3 | aac | opus | wav | aiff
+    encode_format: str = 'flac'  # flac | wav | aiff (+ lossy via also-encode)
     flac_compression: int = 5
     mp3_quality: str = 'v0'  # LAME v0–v5 or cbr128/192/256/320
     aac_quality: str = 'cbr256'  # FDK VBR 1–5 or cbr128/192/256/320
     aac_bitrate: int = 256  # legacy; prefer aac_quality
+    qaac_quality: str = 'cvbr256'  # popular TVBR / CVBR / CBR
     opus_bitrate: int = 160
     # Optional second (lossy) encode from the same verified WAV.
     also_encode: bool = False
@@ -162,9 +171,11 @@ class RipJob:
     embed_artwork: bool = True
     # Embed cover into FLAC / WAV / AIFF.
     embed_artwork_lossless: bool = False
-    # Embed-sized image written into each audio file.
+    # Lossy embed-sized image (MP3 / M4A / Opus).
     artwork: ArtworkImage | None = None
-    # Full-resolution image saved as cover.jpg/png in the album folder.
+    # Lossless embed-sized image (FLAC / WAV / AIFF).
+    artwork_lossless: ArtworkImage | None = None
+    # Full-resolution image for folder cover.jpg (lossless dirs only).
     folder_artwork: ArtworkImage | None = None
     album: AlbumMetadata | None = None
     filename_template: str = DEFAULT_FILENAME_TEMPLATE
@@ -190,10 +201,12 @@ class RipJob:
     write_rip_log: bool = True
     # Write multi-file (or image) CUE sheet after a secure rip (lossless only).
     write_cue_file: bool = True
-    # Write Encoded by / ENCODER tag (ready2rip + version).
+    # Write ready2rip + version into the comment field (Ripper tag preference).
+    # Encoded by / ENCODER / ©too always records the codec tool + version.
     add_ripper_tag: bool = True
-    # Write lyrics tags when track metadata includes lyrics.
+    # Save lyrics with lossless encodes (master); mode chooses tags / sidecar / both.
     embed_lyrics: bool = True
+    lyrics_save_mode: str = 'both'
     # Double-rip each track and require matching CRCs (test & copy).
     test_and_copy: bool = True
     # Extra secure test+copy cycles after a CRC mismatch.
@@ -211,7 +224,8 @@ class RipJob:
     # Pair with write_cue_file for a matching image CUE sheet.
     copy_image: bool = False
     # Longest edge for embeds when preparing from folder art.
-    artwork_max_size: int = 600  # match settings.DEFAULT_ARTWORK_MAX_SIZE
+    artwork_max_size: int = 600  # lossy embed edge; match settings default
+    artwork_max_size_lossless: int = 600
 
     def wants_embed_artwork(self) -> bool:
         return bool(self.embed_artwork or self.embed_artwork_lossless)
@@ -223,6 +237,21 @@ class RipJob:
             embed_lossy=bool(self.embed_artwork),
             embed_lossless=bool(self.embed_artwork_lossless),
         )
+
+
+@dataclass(frozen=True)
+class EmbedArtworkSet:
+    """Per-format-family embed images (lossy vs lossless sizes)."""
+
+    lossy: ArtworkImage | None = None
+    lossless: ArtworkImage | None = None
+
+    def for_format(self, fmt: str, job: RipJob) -> ArtworkImage | None:
+        if is_lossy_format(fmt):
+            return self.lossy if job.embed_artwork else None
+        if is_lossless_format(fmt):
+            return self.lossless if job.embed_artwork_lossless else None
+        return None
 
 
 ProgressCallback = Callable[[RipProgress], None]
@@ -311,6 +340,7 @@ class RipEngine:
         'flac': '.flac',
         'mp3': '.mp3',
         'aac': '.m4a',
+        'qaac': '.m4a',
         'opus': '.opus',
         'wav': '.wav',
         'aiff': '.aiff',
@@ -389,9 +419,7 @@ class RipEngine:
         layout_notes = self._detect_disc_layout(job, on_progress)
 
         if job.copy_image:
-            return self._run_copy_image(
-                job, base, fmt, on_progress, layout_notes=layout_notes
-            )
+            return self._run_copy_image(job, base, fmt, on_progress, layout_notes=layout_notes)
 
         # Work units: optional HTOA (track 0) + selected audio tracks.
         outputs: list[Path] = []
@@ -424,9 +452,7 @@ class RipEngine:
         primary_audio_dir = dests0[0].album_dir
         album_dir = primary_audio_dir
         for dest in dests0:
-            target_note = (
-                f'Encode target: {dest.format.upper()} → {dest.album_dir}'
-            )
+            target_note = f'Encode target: {dest.format.upper()} → {dest.album_dir}'
             notes.append(target_note)
             if rip_log is not None:
                 rip_log.notes.append(target_note)
@@ -443,9 +469,7 @@ class RipEngine:
             weight_sectors.append(int(htoa_info.length_sectors))
         for track_no in tracks:
             toc_track = self._toc_track(job.disc_info, track_no)
-            weight_sectors.append(
-                int(toc_track.length_sectors) if toc_track is not None else 1
-            )
+            weight_sectors.append(int(toc_track.length_sectors) if toc_track is not None else 1)
         for data_track in data_tracks:
             weight_sectors.append(int(data_track.length_sectors))
         unit_weights = normalize_unit_weights(weight_sectors or [1])
@@ -517,9 +541,7 @@ class RipEngine:
             message='Preparing album folder and artwork…',
         )
 
-        embed_art, _folder_art, cover_path, art_notes = _prepare_artwork(
-            job, meta_dir0
-        )
+        embed_art, _folder_art, cover_path, art_notes = _prepare_artwork(job, meta_dir0)
         notes.extend(art_notes)
         if cover_path is not None:
             notes.append(f'Cover art saved: {cover_path}')
@@ -717,7 +739,8 @@ class RipEngine:
                     audio_for_rg = [
                         p
                         for p in outputs
-                        if p.suffix.lower() in {
+                        if p.suffix.lower()
+                        in {
                             '.flac',
                             '.mp3',
                             '.m4a',
@@ -750,23 +773,13 @@ class RipEngine:
                         rip_log.replaygain_notes.extend(rg_notes)
 
                 # Multi-file CUE for lossless encodes only (FLAC / WAV).
-                if (
-                    job.write_cue_file
-                    and track_output_pairs
-                    and not self._cancelled
-                ):
-                    by_group: dict[
-                        tuple[Path, str], list[tuple[int, Path]]
-                    ] = defaultdict(list)
+                if job.write_cue_file and track_output_pairs and not self._cancelled:
+                    by_group: dict[tuple[Path, str], list[tuple[int, Path]]] = defaultdict(list)
                     for track_no, path in track_output_pairs:
-                        by_group[(path.parent, path.suffix.lower())].append(
-                            (track_no, path)
-                        )
+                        by_group[(path.parent, path.suffix.lower())].append((track_no, path))
                     htoa_by_dir: dict[Path, Path] = {}
                     if htoa_ripped:
-                        for hp in htoa_paths or (
-                            [htoa_path] if htoa_path is not None else []
-                        ):
+                        for hp in htoa_paths or ([htoa_path] if htoa_path is not None else []):
                             htoa_by_dir[hp.parent] = hp
                     wrote_cue = False
                     for (cue_album_dir, cue_ext), pairs in by_group.items():
@@ -790,13 +803,9 @@ class RipEngine:
                                 outputs.append(cue_path)
                                 notes.append(f'CUE sheet: {cue_path.name}')
                                 if rip_log is not None:
-                                    rip_log.notes.append(
-                                        f'CUE sheet (multi-file): {cue_path.name}'
-                                    )
+                                    rip_log.notes.append(f'CUE sheet (multi-file): {cue_path.name}')
                         except Exception as cue_exc:
-                            log.warning(
-                                'Failed to write multi-file CUE: %s', cue_exc
-                            )
+                            log.warning('Failed to write multi-file CUE: %s', cue_exc)
                             notes.append(f'CUE sheet warning: {cue_exc}')
                     if not wrote_cue:
                         skip_note = 'CUE sheet skipped (lossless encode only)'
@@ -854,9 +863,7 @@ class RipEngine:
             try:
                 from ready2rip.disc.drive_info import probe_drive
 
-                drivename = probe_drive(
-                    job.device, allow_optical=False
-                ).ctdb_drivename
+                drivename = probe_drive(job.device, allow_optical=False).ctdb_drivename
             except Exception:
                 drivename = ''
             album = job.album
@@ -883,9 +890,7 @@ class RipEngine:
             notes.append(submit.message)
             if rip_log is not None:
                 rip_log.notes.append(submit.message)
-            if not submit.ok and any(
-                r.confidence == CtdbConfidence.MISMATCH for r in ctdb_results
-            ):
+            if not submit.ok and any(r.confidence == CtdbConfidence.MISMATCH for r in ctdb_results):
                 try:
                     probe = ctdb_verifier.attempt_repair_for_mismatch(ctdb_results)
                     notes.append(probe.message)
@@ -907,9 +912,7 @@ class RipEngine:
             done_msg = f'{done_msg} · {ctdb_summary}'
         if burst_tracks:
             tracks_txt = ', '.join(str(n) for n in burst_tracks)
-            done_msg = (
-                f'{done_msg} · WARNING: burst (-Z) on track(s) {tracks_txt}'
-            )
+            done_msg = f'{done_msg} · WARNING: burst (-Z) on track(s) {tracks_txt}'
             notes.append(
                 f'WARNING: Insecure burst extraction on track(s) {tracks_txt} '
                 '(not archival-grade for those tracks)'
@@ -918,8 +921,7 @@ class RipEngine:
             if test_copy_mismatches:
                 tracks_txt = ', '.join(str(n) for n in test_copy_mismatches)
                 done_msg = (
-                    f'{done_msg} · test & copy mismatch on track(s) '
-                    f'{tracks_txt} (burst recovery)'
+                    f'{done_msg} · test & copy mismatch on track(s) {tracks_txt} (burst recovery)'
                 )
             else:
                 done_msg = f'{done_msg} · test & copy OK'
@@ -959,7 +961,7 @@ class RipEngine:
         job: RipJob,
         htoa_info,
         tmp_path: Path,
-        embed_art: ArtworkImage | None,
+        embed_art: EmbedArtworkSet,
         defeat_cache: bool,
         rip_log: RipLog | None,
         report: Callable,
@@ -1018,8 +1020,7 @@ class RipEngine:
 
         if is_digitally_silent(test_wav):
             notes.append(
-                f'HTOA pregap is digitally silent '
-                f'({htoa_info.length_sectors} sectors) — not saved'
+                f'HTOA pregap is digitally silent ({htoa_info.length_sectors} sectors) — not saved'
             )
             if log_entry is not None:
                 log_entry.status = 'SKIPPED (silence)'
@@ -1030,9 +1031,7 @@ class RipEngine:
                 pass
             return False, None, [], notes
 
-        notes.append(
-            f'Non-silent HTOA detected ({htoa_info.duration_label}) — ripping'
-        )
+        notes.append(f'Non-silent HTOA detected ({htoa_info.duration_label}) — ripping')
 
         test_crc = ''
         copy_crc = ''
@@ -1071,9 +1070,7 @@ class RipEngine:
                     mode = 'burst'
                 else:
                     raise
-            copy_crc, peak, _ = analyze_wav_for_log(
-                copy_wav, htoa_info.length_sectors
-            )
+            copy_crc, peak, _ = analyze_wav_for_log(copy_wav, htoa_info.length_sectors)
             if test_crc != copy_crc:
                 max_htoa_retries = max(0, int(job.test_copy_max_retries))
                 matched_htoa = False
@@ -1109,15 +1106,10 @@ class RipEngine:
                         mode='secure',
                         sample_offset=job.sample_offset,
                     )
-                    copy_crc, peak, _ = analyze_wav_for_log(
-                        copy_wav, htoa_info.length_sectors
-                    )
+                    copy_crc, peak, _ = analyze_wav_for_log(copy_wav, htoa_info.length_sectors)
                     if test_crc and copy_crc and test_crc == copy_crc:
                         matched_htoa = True
-                        notes.append(
-                            f'HTOA test/copy CRC matched on retry '
-                            f'{htoa_attempt + 1}'
-                        )
+                        notes.append(f'HTOA test/copy CRC matched on retry {htoa_attempt + 1}')
                         break
                 if not matched_htoa and test_crc != copy_crc:
                     if job.burst_fallback:
@@ -1136,9 +1128,7 @@ class RipEngine:
                             sample_offset=job.sample_offset,
                         )
                         mode = 'burst'
-                        copy_crc, peak, _ = analyze_wav_for_log(
-                            copy_wav, htoa_info.length_sectors
-                        )
+                        copy_crc, peak, _ = analyze_wav_for_log(copy_wav, htoa_info.length_sectors)
                         notes.append(
                             f'HTOA test/copy CRC mismatch '
                             f'(test={test_crc} copy={copy_crc}); '
@@ -1153,15 +1143,11 @@ class RipEngine:
             wav_for_encode = copy_wav
         else:
             wav_for_encode = test_wav
-            copy_crc, peak, _ = analyze_wav_for_log(
-                test_wav, htoa_info.length_sectors
-            )
+            copy_crc, peak, _ = analyze_wav_for_log(test_wav, htoa_info.length_sectors)
             test_crc = copy_crc
 
         safe_title = ''.join(c if c not in '<>:"/\\|?*' else '_' for c in title)
-        dests = self._destinations_for_track(
-            job, 1, filename=f'00 - {safe_title}'
-        )
+        dests = self._destinations_for_track(job, 1, filename=f'00 - {safe_title}')
         self._ensure_destination_dirs(dests)
         n_targets = max(1, len(dests))
 
@@ -1286,8 +1272,7 @@ class RipEngine:
                 notes.append(f'INDEX 00 pregaps on {n_gaps} audio track(s)')
             if disc.data_tracks:
                 parts = ', '.join(
-                    f'#{d.number} {d.cue_mode} session {d.session}'
-                    for d in disc.data_tracks
+                    f'#{d.number} {d.cue_mode} session {d.session}' for d in disc.data_tracks
                 )
                 notes.append(f'Data tracks: {parts}')
         except Exception as exc:
@@ -1310,12 +1295,7 @@ class RipEngine:
         data is enabled and extract fails.
         """
         disc = job.disc_info
-        if (
-            not job.rip_data_tracks
-            or disc is None
-            or not disc.data_tracks
-            or not album_dirs
-        ):
+        if not job.rip_data_tracks or disc is None or not disc.data_tracks or not album_dirs:
             return [], []
         if self._cancelled:
             return [], []
@@ -1419,6 +1399,11 @@ class RipEngine:
             return 'lame encoder not found'
         if fmt == 'aac' and not shutil.which('ffmpeg'):
             return 'ffmpeg required for AAC'
+        if fmt == 'qaac' and not qaac_available():
+            return (
+                'qaac not found — install Wine + qaac.exe + Apple AAC codecs '
+                '(or set READY2RIP_QAAC)'
+            )
         if fmt == 'aiff' and not shutil.which('ffmpeg'):
             return 'ffmpeg required for AIFF'
         if fmt == 'opus' and not shutil.which('opusenc') and not shutil.which('ffmpeg'):
@@ -1526,7 +1511,7 @@ class RipEngine:
         job: RipJob,
         *,
         track_number: int,
-        embed_art: ArtworkImage | None,
+        embed_art: EmbedArtworkSet,
         disc_track_count: int,
         retitle: str | None = None,
         write_cover: bool = True,
@@ -1541,9 +1526,7 @@ class RipEngine:
         *tag_as_image* is True, tags are album-level (no track/ISRC).
         """
         # Compressed encodes first so a final WAV dest can rename the temp.
-        ordered = [d for d in dests if d.format != 'wav'] + [
-            d for d in dests if d.format == 'wav'
-        ]
+        ordered = [d for d in dests if d.format != 'wav'] + [d for d in dests if d.format == 'wav']
         outputs_by_dest: dict[int, Path] = {}
         n = max(1, len(ordered))
         covered: set[Path] = set()
@@ -1552,11 +1535,17 @@ class RipEngine:
             dest.album_dir.mkdir(parents=True, exist_ok=True)
             dest.meta_dir.mkdir(parents=True, exist_ok=True)
             cover_dir = dest.meta_dir
+            # Loose cover.jpg only beside lossless encodes; lossy keeps embeds only.
             if (
                 write_cover
                 and job.save_cover_file
+                and is_lossless_format(dest.format)
                 and cover_dir not in covered
-                and (job.folder_artwork is not None or job.artwork is not None)
+                and (
+                    job.folder_artwork is not None
+                    or job.artwork is not None
+                    or job.artwork_lossless is not None
+                )
                 and not (cover_dir / 'cover.jpg').is_file()
                 and not (cover_dir / 'cover.png').is_file()
             ):
@@ -1584,15 +1573,13 @@ class RipEngine:
                     self._encode(dest.format, wav_path, dest.out_path, job)
 
             if job.album is not None:
-                total_for_tags = (
-                    len(job.album.tracks) if job.album.tracks else disc_track_count
+                total_for_tags = len(job.album.tracks) if job.album.tracks else disc_track_count
+                # Lyrics only for lossless (primary) encodes; mode picks tags / sidecar.
+                lyrics_on = (
+                    bool(job.embed_lyrics) and is_lossless_format(dest.format) and not tag_as_image
                 )
-                # Lyrics tags + sidecars only for lossless (primary) encodes.
-                write_lyrics = (
-                    bool(job.embed_lyrics)
-                    and is_lossless_format(dest.format)
-                    and not tag_as_image
-                )
+                write_lyrics_tags = lyrics_on and lyrics_mode_writes_tags(job.lyrics_save_mode)
+                write_lyrics_files = lyrics_on and lyrics_mode_writes_sidecar(job.lyrics_save_mode)
                 self._tags.write_album_tags(
                     dest.out_path,
                     job.album,
@@ -1600,24 +1587,20 @@ class RipEngine:
                     total_tracks=total_for_tags or None,
                     artist_style=job.artist_style,
                     image=tag_as_image,
-                    encoded_by=(
-                        ripper_tag_value() if job.add_ripper_tag else None
-                    ),
-                    embed_lyrics=write_lyrics,
+                    encoded_by=encoder_tag_for_format(dest.format),
+                    ripper_comment=(ripper_tag_value() if job.add_ripper_tag else None),
+                    embed_lyrics=write_lyrics_tags,
                 )
-                if write_lyrics and track_number > 0:
+                if write_lyrics_files and track_number > 0:
                     write_lyrics_sidecar(
                         dest.out_path,
                         track_meta_for(job.album, track_number),
                     )
                 if retitle and not tag_as_image:
-                    _retag_title(
-                        dest.out_path, retitle, track_number=track_number
-                    )
-            if job.should_embed_format(dest.format) and embed_art is not None:
-                self._tags.embed_artwork(
-                    dest.out_path, embed_art.data, embed_art.mime
-                )
+                    _retag_title(dest.out_path, retitle, track_number=track_number)
+            art = embed_art.for_format(dest.format, job)
+            if art is not None:
+                self._tags.embed_artwork(dest.out_path, art.data, art.mime)
             outputs_by_dest[id(dest)] = dest.out_path
             log.info(
                 'Encoded %s → %s (%s/%s)',
@@ -1636,7 +1619,7 @@ class RipEngine:
         tracks: list[int],
         tmp_path: Path,
         album_dir: Path | None,
-        embed_art: ArtworkImage | None,
+        embed_art: EmbedArtworkSet,
         defeat_cache: bool,
         expected_sizes: dict[int, int],
         ar_verifier: AccurateRipVerifier | None,
@@ -1684,6 +1667,7 @@ class RipEngine:
                             pass
                     self._unlink_quiet(job_pending.test_wav, job_pending.copy_wav)
                     return album_dir
+
                 # Blocking join — keep the banner honest while the encoder
                 # finishes (extract of the next track already completed).
                 def _wait_encode_tick(
@@ -1707,10 +1691,7 @@ class RipEngine:
                         RipState.ENCODING,
                         index=job_pending.idx,
                         sub=0.95,
-                        message=(
-                            f'Finishing encode for track '
-                            f'{job_pending.track_no}…'
-                        ),
+                        message=(f'Finishing encode for track {job_pending.track_no}…'),
                         total_units=total_units,
                     )
                     with ProgressPulse(_wait_encode_tick):
@@ -1718,14 +1699,10 @@ class RipEngine:
                 else:
                     written = job_pending.future.result()
                 primary_out: Path | None = None
-                for dest, out_path in zip(
-                    job_pending.dests, written, strict=True
-                ):
+                for dest, out_path in zip(job_pending.dests, written, strict=True):
                     outputs.append(out_path)
                     if dest.primary:
-                        track_output_pairs.append(
-                            (job_pending.track_no, out_path)
-                        )
+                        track_output_pairs.append((job_pending.track_no, out_path))
                         if primary_out is None:
                             primary_out = out_path
                             album_dir = dest.meta_dir
@@ -1739,9 +1716,7 @@ class RipEngine:
                 if job_pending.extracted.mode == 'burst':
                     done_extra = ' (burst)'
                 elif job.test_and_copy and job_pending.extracted.copy_crc:
-                    done_extra = (
-                        f' (test=copy CRC {job_pending.extracted.copy_crc})'
-                    )
+                    done_extra = f' (test=copy CRC {job_pending.extracted.copy_crc})'
                 if len(job_pending.dests) > 1:
                     done_extra = f'{done_extra} · {len(job_pending.dests)} encodes'
                 report(
@@ -1768,9 +1743,7 @@ class RipEngine:
                     log_entry = rip_log.begin_track(
                         track_no,
                         title=title_for_track(job.album, track_no),
-                        length_label=(
-                            toc_track.duration_label if toc_track else ''
-                        ),
+                        length_label=(toc_track.duration_label if toc_track else ''),
                         start_sector=toc_track.start_sector if toc_track else 0,
                         length_sectors=sectors,
                     )
@@ -1830,9 +1803,7 @@ class RipEngine:
                     test_and_copy=job.test_and_copy,
                 )
 
-                def _verify_tick(
-                    *, _tn=track_no, _idx=idx
-                ) -> None:
+                def _verify_tick(*, _tn=track_no, _idx=idx) -> None:
                     report(
                         _tn,
                         RipState.VERIFYING,
@@ -1973,9 +1944,8 @@ class RipEngine:
                 attempt_t0 = time.monotonic()
 
                 if job.test_and_copy:
-                    test_label = (
-                        f'Testing track {track_no}'
-                        + (f' (retry {attempt})' if attempt else '')
+                    test_label = f'Testing track {track_no}' + (
+                        f' (retry {attempt})' if attempt else ''
                     )
                     report(
                         track_no,
@@ -2022,9 +1992,7 @@ class RipEngine:
                         total_units=total_units,
                     )
 
-                    def _test_crc_tick(
-                        *, _tn=track_no, _idx=idx
-                    ) -> None:
+                    def _test_crc_tick(*, _tn=track_no, _idx=idx) -> None:
                         report(
                             _tn,
                             RipState.RIPPING,
@@ -2108,10 +2076,7 @@ class RipEngine:
                             RipState.RIPPING,
                             index=idx,
                             sub=0.35,
-                            message=(
-                                f'Secure extract struggled on track '
-                                f'{track_no} — burst mode…'
-                            ),
+                            message=(f'Secure extract struggled on track {track_no} — burst mode…'),
                             total_units=total_units,
                         )
                     ),
@@ -2130,9 +2095,7 @@ class RipEngine:
                     total_units=total_units,
                 )
 
-                def _copy_crc_tick(
-                    *, _tn=track_no, _idx=idx
-                ) -> None:
+                def _copy_crc_tick(*, _tn=track_no, _idx=idx) -> None:
                     report(
                         _tn,
                         RipState.RIPPING,
@@ -2174,16 +2137,12 @@ class RipEngine:
                     copy_mode = attempt_copy_mode
                     final_mode = attempt_copy_mode
                     track_stats = attempt_stats
-                    attempt_log.append(
-                        f'pass {attempt + 1}: CRC match '
-                        f'{copy_crc.upper()}'
-                    )
+                    attempt_log.append(f'pass {attempt + 1}: CRC match {copy_crc.upper()}')
                     break
 
                 matched = False
                 last_err = (
-                    f'Test/Copy CRC mismatch on track {track_no}: '
-                    f'test={test_crc} copy={copy_crc}'
+                    f'Test/Copy CRC mismatch on track {track_no}: test={test_crc} copy={copy_crc}'
                 )
                 log.warning('%s', last_err)
                 notes.append(last_err)
@@ -2204,27 +2163,19 @@ class RipEngine:
                     attempt,
                     exc,
                 )
-                attempt_log.append(
-                    f'pass {attempt + 1}: FAILED — {exc}'
-                )
+                attempt_log.append(f'pass {attempt + 1}: FAILED — {exc}')
                 self._unlink_quiet(test_wav, copy_wav)
                 if attempt + 1 >= attempts:
                     break
 
-        if (
-            job.test_and_copy
-            and not matched
-            and job.burst_fallback
-            and not self._cancelled
-        ):
+        if job.test_and_copy and not matched and job.burst_fallback and not self._cancelled:
             report(
                 track_no,
                 RipState.RIPPING,
                 index=idx,
                 sub=0.40,
                 message=(
-                    f'Test & copy failed on track {track_no} — '
-                    f'recovering that track in burst…'
+                    f'Test & copy failed on track {track_no} — recovering that track in burst…'
                 ),
                 total_units=total_units,
             )
@@ -2246,12 +2197,9 @@ class RipEngine:
                 final_mode = 'burst'
                 copy_mode = 'burst'
                 attempt_log.extend(recovered.attempt_log)
-                attempt_log.append(
-                    f'per-track burst recovery CRC={copy_crc.upper() or "?"}'
-                )
+                attempt_log.append(f'per-track burst recovery CRC={copy_crc.upper() or "?"}')
                 notes.append(
-                    f'Track {track_no}: recovered in burst after secure '
-                    f'test & copy mismatch'
+                    f'Track {track_no}: recovered in burst after secure test & copy mismatch'
                 )
             except Exception as exc:
                 last_err = str(exc)
@@ -2338,10 +2286,7 @@ class RipEngine:
             dual_pass=False,
             test_mode='',
             copy_mode='burst',
-            attempt_log=[
-                f'burst extract CRC={copy_crc.upper()} '
-                f'({elapsed:.1f}s)'
-            ],
+            attempt_log=[f'burst extract CRC={copy_crc.upper()} ({elapsed:.1f}s)'],
             expected_wav_bytes=int(expected or 0),
         )
 
@@ -2401,9 +2346,7 @@ class RipEngine:
             test_and_copy=test_and_copy,
         )
         log_entry.extract_seconds = extracted.elapsed
-        log_entry.extract_speed_x = extraction_speed_x(
-            sectors, extracted.elapsed
-        )
+        log_entry.extract_speed_x = extraction_speed_x(sectors, extracted.elapsed)
         # Only record a test CRC when a real dual-pass was performed.
         if extracted.dual_pass:
             log_entry.test_crc = extracted.test_crc
@@ -2415,9 +2358,7 @@ class RipEngine:
             log_entry.crc_verified = None
         log_entry.peak_percent = extracted.peak
         log_entry.quality_percent = extracted.stats.quality_percent(sectors)
-        log_entry.error_correction_lines = extracted.stats.summary_lines(
-            length_sectors=sectors
-        )
+        log_entry.error_correction_lines = extracted.stats.summary_lines(length_sectors=sectors)
         log_entry.had_errors = bool(
             extracted.stats.had_errors
             or extracted.mode == 'burst'
@@ -2427,26 +2368,20 @@ class RipEngine:
             log_entry.status = 'finished with errors'
         else:
             log_entry.status = 'OK'
-        log_entry.expected_wav_bytes = int(
-            expected_bytes or extracted.expected_wav_bytes or 0
-        )
+        log_entry.expected_wav_bytes = int(expected_bytes or extracted.expected_wav_bytes or 0)
         try:
             log_entry.wav_bytes = extracted.copy_wav.stat().st_size
         except OSError:
             pass
         log_entry.attempt_log = list(extracted.attempt_log)
         if extracted.dual_pass and extracted.matched:
-            log_entry.notes.append(
-                f'Test and copy CRCs match ({extracted.copy_crc.upper()})'
-            )
+            log_entry.notes.append(f'Test and copy CRCs match ({extracted.copy_crc.upper()})')
         elif extracted.mode == 'burst' and extracted.dual_pass:
             log_entry.notes.append(
                 'Secure test & copy mismatched; this track recovered in burst (-Z)'
             )
         elif extracted.mode == 'burst':
-            log_entry.notes.append(
-                'Secure paranoia failed — burst (-Z) used for final audio'
-            )
+            log_entry.notes.append('Secure paranoia failed — burst (-Z) used for final audio')
         if (
             log_entry.expected_wav_bytes > 0
             and log_entry.wav_bytes > 0
@@ -2489,9 +2424,7 @@ class RipEngine:
         if edge is not None:
             read_start, read_end, toc_expected = edge
             progress_bytes = 44 + max(0, read_end - read_start) * 2352
-            assert_expected = (
-                expected_bytes if expected_bytes is not None else toc_expected
-            )
+            assert_expected = expected_bytes if expected_bytes is not None else toc_expected
             mode, stats = self._rip_span(
                 device,
                 read_start,
@@ -2628,9 +2561,7 @@ class RipEngine:
             timeout_burst = _extract_timeout(expected_bytes, mode='burst')
         expected_frames = max(0, int(end_sector) - int(start_sector)) * FRAMES_PER_SECTOR
         progress_bytes = (
-            expected_bytes
-            if progress_expected_bytes is None
-            else progress_expected_bytes
+            expected_bytes if progress_expected_bytes is None else progress_expected_bytes
         )
 
         def run_secure() -> ParanoiaStats:
@@ -2724,8 +2655,7 @@ class RipEngine:
             # even when the file is large enough to pass the size check.
             if self._secure_pass_needs_burst(secure_stats, wav_path, expected_bytes):
                 raise RuntimeError(
-                    'Secure pass aborted or incomplete after skips '
-                    f'(exit {secure_stats.exit_code})'
+                    f'Secure pass aborted or incomplete after skips (exit {secure_stats.exit_code})'
                 )
             return 'secure', secure_stats
         except Exception as exc:
@@ -2735,9 +2665,7 @@ class RipEngine:
             log.warning('Secure rip failed for %s: %s', what, secure_err)
             # Keep a full-size secure file if we already have one *and*
             # paranoia did not report an abort-with-skips situation.
-            if not self._secure_pass_needs_burst(
-                secure_stats, wav_path, expected_bytes
-            ):
+            if not self._secure_pass_needs_burst(secure_stats, wav_path, expected_bytes):
                 try:
                     self._assert_wav_ok(
                         wav_path,
@@ -2776,14 +2704,11 @@ class RipEngine:
             )
         except Exception as exc:
             raise RuntimeError(
-                f'Secure and burst rip both failed for {what}. '
-                f'Secure: {secure_err}; burst: {exc}'
+                f'Secure and burst rip both failed for {what}. Secure: {secure_err}; burst: {exc}'
             ) from exc
 
         log.info('%s recovered via burst mode (-Z)', what)
-        combined = (
-            secure_stats.merge(burst_stats) if secure_stats.reads else burst_stats
-        )
+        combined = secure_stats.merge(burst_stats) if secure_stats.reads else burst_stats
         return 'burst', combined
 
     @staticmethod
@@ -2921,8 +2846,7 @@ class RipEngine:
             rip_log = RipLog()
             rip_log.configure_from_job(job)
             rip_log.notes.append(
-                'Mode: Copy Image'
-                + (' + CUE sheet' if job.write_cue_file else '')
+                'Mode: Copy Image' + (' + CUE sheet' if job.write_cue_file else '')
             )
 
         try:
@@ -2994,9 +2918,7 @@ class RipEngine:
                 image_burst_recovered = False
                 report(RipState.RIPPING, 0.15, 'Extracting disc image…')
                 try:
-                    mode, img_stats = _img_span(
-                        test_wav, on_extract_progress=_img_extract_progress
-                    )
+                    mode, img_stats = _img_span(test_wav, on_extract_progress=_img_extract_progress)
                 except Exception as first_exc:
                     if not job.burst_fallback or self._cancelled:
                         raise
@@ -3012,8 +2934,7 @@ class RipEngine:
                     )
                     image_burst_recovered = True
                     notes.append(
-                        f'Secure image extract failed ({first_exc}); '
-                        'recovered in burst mode'
+                        f'Secure image extract failed ({first_exc}); recovered in burst mode'
                     )
                 report(RipState.RIPPING, 0.40, 'Disc image extracted…')
                 trim_wav_to_expected(test_wav, expected_bytes)
@@ -3026,11 +2947,7 @@ class RipEngine:
 
                 use_wav = test_wav
                 # Burst-recovered first pass skips test&copy CRC theater.
-                if (
-                    job.test_and_copy
-                    and not image_burst_recovered
-                    and not self._cancelled
-                ):
+                if job.test_and_copy and not image_burst_recovered and not self._cancelled:
                     max_img_retries = max(0, int(job.test_copy_max_retries))
                     img_attempts = 1 + max_img_retries
                     img_matched = False
@@ -3047,8 +2964,7 @@ class RipEngine:
                             report(
                                 RipState.RIPPING,
                                 extract_base,
-                                f'Retrying disc image test & copy '
-                                f'(attempt {img_attempt + 1})…',
+                                f'Retrying disc image test & copy (attempt {img_attempt + 1})…',
                             )
                             self._unlink_quiet(test_wav, copy_wav)
                             flush_drive_cache(
@@ -3058,9 +2974,7 @@ class RipEngine:
                                 avoid_end=end_sector,
                             )
 
-                            def _img_retry_progress(
-                                local: float, *, _base=extract_base
-                            ) -> None:
+                            def _img_retry_progress(local: float, *, _base=extract_base) -> None:
                                 local_c = max(0.0, min(1.0, local))
                                 report(
                                     RipState.RIPPING,
@@ -3114,9 +3028,7 @@ class RipEngine:
                             'Copy pass for disc image…',
                         )
 
-                        def _img_copy_progress(
-                            local: float, *, _base=copy_base
-                        ) -> None:
+                        def _img_copy_progress(local: float, *, _base=copy_base) -> None:
                             local_c = max(0.0, min(1.0, local))
                             report(
                                 RipState.RIPPING,
@@ -3161,11 +3073,7 @@ class RipEngine:
                         notes.append(
                             f'Image test/copy CRC mismatch '
                             f'({test_crc} ≠ {copy_crc})'
-                            + (
-                                '; retrying'
-                                if img_attempt + 1 < img_attempts
-                                else ''
-                            )
+                            + ('; retrying' if img_attempt + 1 < img_attempts else '')
                         )
 
                     if not img_matched:
@@ -3232,9 +3140,7 @@ class RipEngine:
                     for line in img_stats.summary_lines(length_sectors=total_sectors):
                         rip_log.notes.append(f'Image: {line}')
                     if mode == 'burst':
-                        rip_log.notes.append(
-                            'Image: secure paranoia failed — burst (-Z) used'
-                        )
+                        rip_log.notes.append('Image: secure paranoia failed — burst (-Z) used')
 
                 if self._cancelled:
                     return RipResult(
@@ -3244,9 +3150,7 @@ class RipEngine:
                 ar_results: list[AccurateRipResult] = []
                 ctdb_results: list[CtdbResult] = []
                 burst_tracks: list[int] = [0] if mode == 'burst' else []
-                image_test_copy_ok = bool(
-                    job.test_and_copy and mode != 'burst'
-                )
+                image_test_copy_ok = bool(job.test_and_copy and mode != 'burst')
 
                 ar_verifier: AccurateRipVerifier | None = None
                 ctdb_verifier: CtdbVerifier | None = None
@@ -3303,14 +3207,10 @@ class RipEngine:
                         burst_tracks=burst_tracks,
                     )
 
-                dests = self._destinations_for_track(
-                    job, 1, filename=basename
-                )
+                dests = self._destinations_for_track(job, 1, filename=basename)
                 self._ensure_destination_dirs(dests)
                 for dest in dests:
-                    notes.append(
-                        f'Encode target: {dest.format.upper()} → {dest.album_dir}'
-                    )
+                    notes.append(f'Encode target: {dest.format.upper()} → {dest.album_dir}')
                 n_targets = max(1, len(dests))
 
                 def _img_progress(t_i: int, enc_fmt: str, _out_path: Path) -> None:
@@ -3325,11 +3225,7 @@ class RipEngine:
                                 'Writing image AIFF…'
                                 if enc_fmt == 'aiff'
                                 else f'Encoding disc image to {enc_fmt.upper()}'
-                                + (
-                                    f' ({t_i + 1}/{n_targets})'
-                                    if n_targets > 1
-                                    else ''
-                                )
+                                + (f' ({t_i + 1}/{n_targets})' if n_targets > 1 else '')
                                 + '…'
                             )
                         ),
@@ -3374,9 +3270,7 @@ class RipEngine:
                     album_dirs,
                     notes=notes,
                     rip_log=rip_log,
-                    report=lambda state, sub, msg: report(
-                        state, 0.88 + 0.06 * sub, msg
-                    ),
+                    report=lambda state, sub, msg: report(state, 0.88 + 0.06 * sub, msg),
                 )
                 output_files.extend(data_paths)
 
@@ -3415,9 +3309,7 @@ class RipEngine:
                         notes.append(f'CUE sheet: {this_cue.name}')
                         output_files.append(this_cue)
                         if rip_log is not None:
-                            rip_log.notes.append(
-                                f'CUE sheet (image): {this_cue.name}'
-                            )
+                            rip_log.notes.append(f'CUE sheet (image): {this_cue.name}')
 
                 if not job.write_cue_file:
                     notes.append('CUE sheet skipped (Write .cue file is off)')
@@ -3440,7 +3332,8 @@ class RipEngine:
                     audio_for_rg = [
                         p
                         for p in output_files
-                        if p.suffix.lower() in {
+                        if p.suffix.lower()
+                        in {
                             '.flac',
                             '.mp3',
                             '.m4a',
@@ -3456,11 +3349,7 @@ class RipEngine:
 
                     with ProgressPulse(_img_rg_pulse):
                         rg_notes = apply_replaygain(
-                            audio_for_rg or [
-                                p
-                                for p in output_files
-                                if p.suffix.lower() != '.cue'
-                            ],
+                            audio_for_rg or [p for p in output_files if p.suffix.lower() != '.cue'],
                             write_rg_tags=job.apply_replaygain,
                             write_sound_check=job.write_sound_check,
                         )
@@ -3474,21 +3363,15 @@ class RipEngine:
                     try:
                         from ready2rip.disc.drive_info import probe_drive
 
-                        drivename = probe_drive(
-                            job.device, allow_optical=False
-                        ).ctdb_drivename
+                        drivename = probe_drive(job.device, allow_optical=False).ctdb_drivename
                     except Exception:
                         drivename = ''
                     album = job.album
                     ctdb_quality = ctdb_submit_quality(
                         test_and_copy=job.test_and_copy,
                         burst_tracks=burst_tracks,
-                        test_copy_mismatches=(
-                            [] if image_test_copy_ok else [0]
-                        ),
-                        track_entries=(
-                            rip_log.tracks if rip_log is not None else None
-                        ),
+                        test_copy_mismatches=([] if image_test_copy_ok else [0]),
+                        track_entries=(rip_log.tracks if rip_log is not None else None),
                         image_stats=img_stats,
                         image_sectors=total_sectors,
                     )
@@ -3510,13 +3393,10 @@ class RipEngine:
                     if rip_log is not None:
                         rip_log.notes.append(submit.message)
                     if not submit.ok and any(
-                        r.confidence == CtdbConfidence.MISMATCH
-                        for r in ctdb_results
+                        r.confidence == CtdbConfidence.MISMATCH for r in ctdb_results
                     ):
                         try:
-                            probe = ctdb_verifier.attempt_repair_for_mismatch(
-                                ctdb_results
-                            )
+                            probe = ctdb_verifier.attempt_repair_for_mismatch(ctdb_results)
                             notes.append(probe.message)
                             if rip_log is not None:
                                 rip_log.notes.append(probe.message)
@@ -3540,20 +3420,12 @@ class RipEngine:
                     done_label = f'{done_label} · {len(dests)} encodes'
                 if ar_results:
                     ar_ok = sum(
-                        1
-                        for r in ar_results
-                        if r.confidence == AccurateRipConfidence.MATCH
+                        1 for r in ar_results if r.confidence == AccurateRipConfidence.MATCH
                     )
                     done_label = f'{done_label} · AR {ar_ok}/{len(ar_results)}'
                 if ctdb_results:
-                    ctdb_ok = sum(
-                        1
-                        for r in ctdb_results
-                        if r.confidence == CtdbConfidence.MATCH
-                    )
-                    done_label = (
-                        f'{done_label} · CTDB {ctdb_ok}/{len(ctdb_results)}'
-                    )
+                    ctdb_ok = sum(1 for r in ctdb_results if r.confidence == CtdbConfidence.MATCH)
+                    done_label = f'{done_label} · CTDB {ctdb_ok}/{len(ctdb_results)}'
                 report(
                     RipState.DONE,
                     1.0,
@@ -3617,9 +3489,7 @@ class RipEngine:
         binary = find_cdparanoia()
         if not binary:
             raise RuntimeError('cdparanoia not found')
-        cmd = self._paranoia_cmd_base(
-            binary, device, mode=mode, sample_offset=sample_offset
-        )
+        cmd = self._paranoia_cmd_base(binary, device, mode=mode, sample_offset=sample_offset)
         cmd.extend([str(track_number), str(wav_path)])
         return self._run_paranoia(
             cmd,
@@ -3660,15 +3530,11 @@ class RipEngine:
         start = int(start_sector)
         end = int(end_sector)
         if end <= start:
-            raise RuntimeError(
-                f'Invalid sector span [{start}, {end}) for disc image'
-            )
+            raise RuntimeError(f'Invalid sector span [{start}, {end}) for disc image')
         # N = end - start sectors → last inclusive = end - 1 → relative B.
         rel_end = end - start - 1
         span = f'[.{start}]-[.{rel_end}]'
-        cmd = self._paranoia_cmd_base(
-            binary, device, mode=mode, sample_offset=sample_offset
-        )
+        cmd = self._paranoia_cmd_base(binary, device, mode=mode, sample_offset=sample_offset)
         cmd.extend([span, str(wav_path)])
         return self._run_paranoia(
             cmd,
@@ -3691,14 +3557,10 @@ class RipEngine:
         label: str = 'secure',
     ) -> None:
         if not wav_path.is_file():
-            raise RuntimeError(
-                f'{label} extraction produced no file for track {track_number}'
-            )
+            raise RuntimeError(f'{label} extraction produced no file for track {track_number}')
         size = wav_path.stat().st_size
         if size < 1000:
-            raise RuntimeError(
-                f'{label} extraction produced empty data for track {track_number}'
-            )
+            raise RuntimeError(f'{label} extraction produced empty data for track {track_number}')
         if expected_bytes and expected_bytes > 0:
             minimum = wav_size_minimum(expected_bytes, min_ratio)
             if size < minimum:
@@ -3732,6 +3594,15 @@ class RipEngine:
             self._run(
                 aac_encode_argv(wav_path, out_path, quality),
                 what='ffmpeg aac',
+            )
+        elif fmt == 'qaac':
+            self._run(
+                qaac_encode_argv(
+                    wav_path,
+                    out_path,
+                    job.qaac_quality or 'cvbr256',
+                ),
+                what='qaac',
             )
         elif fmt == 'opus':
             if shutil.which('opusenc'):
@@ -4059,40 +3930,31 @@ def _place_wav_output(src: Path, dest: Path, *, move: bool) -> None:
     shutil.copy2(src, dest)
 
 
+def _scaled_embed(source: ArtworkImage | None, max_edge: int) -> ArtworkImage | None:
+    """Return *source* scaled so the longest edge is at most *max_edge*."""
+    if source is None:
+        return None
+    if max_edge > 0 and source.max_edge > max_edge:
+        return ArtworkFetcher().resize(source, max_edge)
+    return source
+
+
 def _prepare_artwork(
     job: RipJob,
     album_dir: Path,
-) -> tuple[ArtworkImage | None, ArtworkImage | None, Path | None, list[str]]:
-    """Save full-size cover to the album folder; return embed + folder art.
+) -> tuple[EmbedArtworkSet, ArtworkImage | None, Path | None, list[str]]:
+    """Save full-size cover to the album folder; return lossy/lossless embeds.
 
     Called **before** track extraction begins.
     """
     notes: list[str] = []
-    folder_art = job.folder_artwork or job.artwork
-    embed_art = job.artwork
-
-    # Prefer keeping a larger image for the folder when both are set.
-    if (
-        job.folder_artwork is not None
-        and job.artwork is not None
-        and job.folder_artwork.max_edge >= job.artwork.max_edge
-    ):
-        folder_art = job.folder_artwork
-        embed_art = job.artwork
-    elif job.folder_artwork is None and job.artwork is not None:
-        folder_art = job.artwork
-        # Downscale for embed if needed.
-        if job.wants_embed_artwork() and job.artwork_max_size > 0:
-            if job.artwork.max_edge > job.artwork_max_size:
-                embed_art = ArtworkFetcher().resize(
-                    job.artwork, job.artwork_max_size
-                )
-            else:
-                embed_art = job.artwork
-        else:
-            embed_art = job.artwork
+    candidates = [
+        img for img in (job.folder_artwork, job.artwork, job.artwork_lossless) if img is not None
+    ]
+    folder_art = max(candidates, key=lambda img: img.max_edge) if candidates else None
 
     cover_path: Path | None = None
+    embeds = EmbedArtworkSet()
     if job.save_cover_file and folder_art is not None and folder_art.data:
         if folder_art.mime == 'image/png':
             cover_path = album_dir / 'cover.png'
@@ -4116,10 +3978,9 @@ def _prepare_artwork(
                         buf = io.BytesIO()
                         im.save(buf, format='JPEG', quality=92, optimize=True)
                         cover_path.write_bytes(buf.getvalue())
-                        notes.append(
-                            f'Folder cover written ({im.size[0]}×{im.size[1]})'
-                        )
-                        return embed_art, folder_art, cover_path, notes
+                        notes.append(f'Folder cover written ({im.size[0]}×{im.size[1]})')
+                        embeds = _embed_set_from_job(job, folder_art)
+                        return embeds, folder_art, cover_path, notes
                 except ImportError:
                     # Pillow not installed — fall through and write raw bytes.
                     pass
@@ -4128,26 +3989,40 @@ def _prepare_artwork(
         try:
             cover_path.write_bytes(folder_art.data)
             notes.append(
-                f'Folder cover written '
-                f'({folder_art.width}×{folder_art.height} {folder_art.source})'
+                f'Folder cover written ({folder_art.width}×{folder_art.height} {folder_art.source})'
             )
         except OSError as exc:
             log.warning('Could not write cover file: %s', exc)
             notes.append(f'Could not write cover: {exc}')
             cover_path = None
 
-    if job.wants_embed_artwork() and embed_art is None and folder_art is not None:
-        if job.artwork_max_size > 0 and folder_art.max_edge > job.artwork_max_size:
-            embed_art = ArtworkFetcher().resize(folder_art, job.artwork_max_size)
-        else:
-            embed_art = folder_art
-
-    if job.wants_embed_artwork() and embed_art is not None:
+    embeds = _embed_set_from_job(job, folder_art)
+    if embeds.lossy is not None:
+        notes.append(f'Lossy embed artwork ready ({embeds.lossy.width}×{embeds.lossy.height})')
+    if embeds.lossless is not None:
         notes.append(
-            f'Embed artwork ready ({embed_art.width}×{embed_art.height})'
+            f'Lossless embed artwork ready ({embeds.lossless.width}×{embeds.lossless.height})'
         )
 
-    return embed_art, folder_art, cover_path, notes
+    return embeds, folder_art, cover_path, notes
+
+
+def _embed_set_from_job(job: RipJob, folder_art: ArtworkImage | None) -> EmbedArtworkSet:
+    """Build lossy/lossless embed images from job fields + folder source."""
+    lossy: ArtworkImage | None = None
+    lossless: ArtworkImage | None = None
+    if job.embed_artwork:
+        lossy = _scaled_embed(
+            job.artwork or folder_art,
+            int(job.artwork_max_size),
+        )
+    if job.embed_artwork_lossless:
+        lossless = _scaled_embed(
+            job.artwork_lossless or folder_art,
+            int(job.artwork_max_size_lossless),
+        )
+    return EmbedArtworkSet(lossy=lossy, lossless=lossless)
+
 
 def _retag_title(path: Path, title: str, *, track_number: int = 0) -> None:
     """Overwrite title / track number for HTOA after generic album tags."""
@@ -4220,9 +4095,7 @@ def _extract_timeout(expected_bytes: int | None, *, mode: str) -> int:
     return int(min(2400, max(300, audio_sec * 4 + 60)))
 
 
-def _track_avoid_span(
-    disc: DiscInfo | None, track_no: int
-) -> tuple[int | None, int | None]:
+def _track_avoid_span(disc: DiscInfo | None, track_no: int) -> tuple[int | None, int | None]:
     """Absolute ``[start, end)`` for the track just extracted (cache flush)."""
     if disc is None:
         return None, None
@@ -4233,9 +4106,7 @@ def _track_avoid_span(
     return None, None
 
 
-def _job_per_track_overread_span(
-    job: RipJob | None, track_no: int
-) -> tuple[int, int, int] | None:
+def _job_per_track_overread_span(job: RipJob | None, track_no: int) -> tuple[int, int, int] | None:
     """Job-aware wrapper around :func:`per_track_overread_read_span`."""
     if job is None:
         return None
@@ -4353,12 +4224,8 @@ def _summarize_ar(results: list[AccurateRipResult]) -> str:
     if not results:
         return ''
     matches = sum(1 for r in results if r.confidence == AccurateRipConfidence.MATCH)
-    mismatches = sum(
-        1 for r in results if r.confidence == AccurateRipConfidence.MISMATCH
-    )
-    missing = sum(
-        1 for r in results if r.confidence == AccurateRipConfidence.NOT_IN_DB
-    )
+    mismatches = sum(1 for r in results if r.confidence == AccurateRipConfidence.MISMATCH)
+    missing = sum(1 for r in results if r.confidence == AccurateRipConfidence.NOT_IN_DB)
     parts = [f'AR {matches}/{len(results)} match']
     if mismatches:
         parts.append(f'{mismatches} mismatch')
@@ -4371,12 +4238,8 @@ def _summarize_ctdb(results: list[CtdbResult]) -> str:
     if not results:
         return ''
     matches = sum(1 for r in results if r.confidence == CtdbConfidence.MATCH)
-    mismatches = sum(
-        1 for r in results if r.confidence == CtdbConfidence.MISMATCH
-    )
-    missing = sum(
-        1 for r in results if r.confidence == CtdbConfidence.NOT_IN_DB
-    )
+    mismatches = sum(1 for r in results if r.confidence == CtdbConfidence.MISMATCH)
+    missing = sum(1 for r in results if r.confidence == CtdbConfidence.NOT_IN_DB)
     parts = [f'CTDB {matches}/{len(results)} match']
     if mismatches:
         parts.append(f'{mismatches} mismatch')

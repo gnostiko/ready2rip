@@ -26,8 +26,26 @@ log = logging.getLogger(__name__)
 
 
 def ripper_tag_value() -> str:
-    """Encoded-by string: ``ready2rip <version>``."""
+    """Comment string for the optional Ripper tag: ``ready2rip <version>``."""
     return f'{APPLICATION_NAME} {APPLICATION_VERSION}'
+
+
+def _apply_id3_encoder_and_comment(
+    tags,
+    *,
+    encoded_by: str | None,
+    ripper_comment: str | None,
+) -> None:
+    """Write TENC + standard COMM; leave COMM:iTunNORM:* alone."""
+    from mutagen.id3 import COMM, TENC
+
+    tags.delall('TENC')
+    tags.delall('COMM::eng')
+    tags.delall('COMM::XXX')
+    if encoded_by:
+        tags.add(TENC(encoding=3, text=encoded_by))
+    if ripper_comment:
+        tags.add(COMM(encoding=3, lang='eng', desc='', text=[ripper_comment]))
 
 
 @dataclass
@@ -51,19 +69,20 @@ class TagWriter:
         artist_style: str | None = DEFAULT_ARTIST_STYLE,
         image: bool = False,
         encoded_by: str | None = None,
+        ripper_comment: str | None = None,
         embed_lyrics: bool = True,
     ) -> None:
         """Tag an encoded file.
 
         When *image* is True, write album-level identity only (no track/ISRC).
+        *encoded_by* is the codec/tool string (always written when provided).
+        *ripper_comment* is optional ``ready2rip <version>`` in the comment field.
         """
         suffix = path.suffix.lower()
         style = normalize_artist_style(artist_style)
         album_title = album.title or 'Unknown Album'
         raw_album_artist = normalize_artists(album.artist or 'Unknown Artist')
-        album_artists = _people_tag_values(
-            _artist_names_for_tags(raw_album_artist, style=style)
-        )
+        album_artists = _people_tag_values(_artist_names_for_tags(raw_album_artist, style=style))
 
         lyrics = ''
         synced_lyrics = ''
@@ -74,9 +93,7 @@ class TagWriter:
             total = None
         else:
             track = track_meta_for(album, track_number)
-            raw_title = (
-                track.title if track and track.title else f'Track {track_number:02d}'
-            )
+            raw_title = track.title if track and track.title else f'Track {track_number:02d}'
             # UI / paths keep "A; B; C"; tags use native multi-value (or feat. title).
             raw_artist = normalize_artists(
                 (track.artist if track and track.artist else None)
@@ -87,17 +104,15 @@ class TagWriter:
                 title = format_title_with_artists(raw_title, raw_artist, style)
             else:
                 title = raw_title
-            artists = _people_tag_values(
-                _artist_names_for_tags(raw_artist, style=style)
-            )
-            total = total_tracks if total_tracks is not None else (
-                len(album.tracks) if album.tracks else None
+            artists = _people_tag_values(_artist_names_for_tags(raw_artist, style=style))
+            total = (
+                total_tracks
+                if total_tracks is not None
+                else (len(album.tracks) if album.tracks else None)
             )
             if embed_lyrics:
                 lyrics = embed_lyrics_text(track)
-                synced_lyrics = (
-                    (track.lyrics_synced or '').strip() if track is not None else ''
-                )
+                synced_lyrics = (track.lyrics_synced or '').strip() if track is not None else ''
         kw = dict(
             title=title,
             artists=artists,
@@ -107,6 +122,7 @@ class TagWriter:
             total_tracks=total,
             album_meta=album,
             encoded_by=(encoded_by or '').strip() or None,
+            ripper_comment=(ripper_comment or '').strip() or None,
             lyrics=lyrics,
             synced_lyrics=synced_lyrics,
         )
@@ -301,11 +317,7 @@ class TagWriter:
             from mutagen.mp4 import MP4, MP4Cover
 
             audio = MP4(path)
-            fmt = (
-                MP4Cover.FORMAT_PNG
-                if mime == 'image/png'
-                else MP4Cover.FORMAT_JPEG
-            )
+            fmt = MP4Cover.FORMAT_PNG if mime == 'image/png' else MP4Cover.FORMAT_JPEG
             audio['covr'] = [MP4Cover(image_bytes, imageformat=fmt)]
             audio.save()
         elif suffix in {'.aiff', '.aif', '.wav'}:
@@ -331,9 +343,7 @@ class TagWriter:
             if width and height:
                 pic.width = width
                 pic.height = height
-            audio['metadata_block_picture'] = [
-                base64.b64encode(pic.write()).decode('ascii')
-            ]
+            audio['metadata_block_picture'] = [base64.b64encode(pic.write()).decode('ascii')]
             audio.save()
         else:
             log.debug('Artwork not embedded for %s', path)
@@ -406,23 +416,17 @@ class TagWriter:
         audio.tags.delall('COMM:iTunNORM:eng')
         audio.tags.delall('COMM:iTunNORM:')
         # Match iTunes: description iTunNORM, empty language often used too.
-        audio.tags.add(
-            COMM(encoding=3, lang='eng', desc='iTunNORM', text=[text])
-        )
+        audio.tags.add(COMM(encoding=3, lang='eng', desc='iTunNORM', text=[text]))
         audio.save(v2_version=4)
 
     def _write_mp4_itunnorm(self, path: Path, text: str) -> None:
         from mutagen.mp4 import MP4, MP4FreeForm
 
         audio = MP4(path)
-        audio['----:com.apple.iTunes:iTunNORM'] = [
-            MP4FreeForm(text.encode('utf-8'))
-        ]
+        audio['----:com.apple.iTunes:iTunNORM'] = [MP4FreeForm(text.encode('utf-8'))]
         audio.save()
 
-    def _write_id3_itunnorm(
-        self, path: Path, text: str, *, container: str
-    ) -> None:
+    def _write_id3_itunnorm(self, path: Path, text: str, *, container: str) -> None:
         from mutagen.id3 import COMM
 
         audio = self._open_id3_container(path, container=container)
@@ -493,6 +497,7 @@ class TagWriter:
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
         encoded_by: str | None = None,
+        ripper_comment: str | None = None,
         lyrics: str = '',
         synced_lyrics: str = '',
     ) -> None:
@@ -537,6 +542,10 @@ class TagWriter:
             audio['ENCODER'] = [encoded_by]
         else:
             audio.pop('ENCODER', None)
+        if ripper_comment:
+            audio['COMMENT'] = [ripper_comment]
+        else:
+            audio.pop('COMMENT', None)
         _apply_vorbis_lyrics(audio, lyrics=lyrics, synced_lyrics=synced_lyrics)
 
     def _tag_mp4(
@@ -551,6 +560,7 @@ class TagWriter:
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
         encoded_by: str | None = None,
+        ripper_comment: str | None = None,
         lyrics: str = '',
         synced_lyrics: str = '',
     ) -> None:
@@ -581,9 +591,7 @@ class TagWriter:
             audio['\xa9day'] = [date]
         barcode = _album_barcode(album_meta)
         if barcode:
-            audio['----:com.apple.iTunes:BARCODE'] = [
-                MP4FreeForm(barcode.encode('utf-8'))
-            ]
+            audio['----:com.apple.iTunes:BARCODE'] = [MP4FreeForm(barcode.encode('utf-8'))]
         isrc_key = '----:com.apple.iTunes:ISRC'
         if track_number > 0:
             isrc = _track_isrc(album_meta, track_number)
@@ -599,6 +607,10 @@ class TagWriter:
             audio['\xa9too'] = [encoded_by]
         elif '\xa9too' in audio:
             del audio['\xa9too']
+        if ripper_comment:
+            audio['\xa9cmt'] = [ripper_comment]
+        elif '\xa9cmt' in audio:
+            del audio['\xa9cmt']
         text = (lyrics or '').strip() or (synced_lyrics or '').strip()
         if text:
             audio['\xa9lyr'] = [text]
@@ -618,6 +630,7 @@ class TagWriter:
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
         encoded_by: str | None = None,
+        ripper_comment: str | None = None,
         lyrics: str = '',
         synced_lyrics: str = '',
     ) -> None:
@@ -626,7 +639,6 @@ class TagWriter:
             TALB,
             TCON,
             TDRC,
-            TENC,
             TIT2,
             TPE1,
             TPE2,
@@ -656,7 +668,6 @@ class TagWriter:
             'TCMP',
             'TDRC',
             'TSRC',
-            'TENC',
         ):
             tags.delall(frame)
         tags.delall('TXXX:BARCODE')
@@ -699,8 +710,7 @@ class TagWriter:
                 tags.delall('TXXX:COMPILATION')
                 tags.add(TXXX(encoding=3, desc='COMPILATION', text=['1']))
         tags.delall('TXXX:LABEL')
-        if encoded_by:
-            tags.add(TENC(encoding=3, text=encoded_by))
+        _apply_id3_encoder_and_comment(tags, encoded_by=encoded_by, ripper_comment=ripper_comment)
         tags.delall('USLT')
         uslt_text = (lyrics or '').strip() or (synced_lyrics or '').strip()
         if uslt_text:
@@ -723,6 +733,7 @@ class TagWriter:
         total_tracks: int | None,
         album_meta: AlbumMetadata | None = None,
         encoded_by: str | None = None,
+        ripper_comment: str | None = None,
         lyrics: str = '',
         synced_lyrics: str = '',
     ) -> None:
@@ -732,7 +743,6 @@ class TagWriter:
                 TALB,
                 TCON,
                 TDRC,
-                TENC,
                 TIT2,
                 TPE1,
                 TPE2,
@@ -758,7 +768,6 @@ class TagWriter:
                 'TPUB',
                 'TDRC',
                 'TSRC',
-                'TENC',
             ):
                 tags.delall(frame)
             tags.delall('TXXX:BARCODE')
@@ -770,9 +779,7 @@ class TagWriter:
             tags.add(TPE2(encoding=3, text=album_people))
             if track_number > 0:
                 if total_tracks and total_tracks > 0:
-                    tags.add(
-                        TRCK(encoding=3, text=f'{track_number}/{total_tracks}')
-                    )
+                    tags.add(TRCK(encoding=3, text=f'{track_number}/{total_tracks}'))
                 else:
                     tags.add(TRCK(encoding=3, text=str(track_number)))
             disc_num, disc_total = _disc_numbers(album_meta)
@@ -793,8 +800,9 @@ class TagWriter:
                 isrc = _track_isrc(album_meta, track_number)
                 if isrc:
                     tags.add(TSRC(encoding=3, text=isrc))
-            if encoded_by:
-                tags.add(TENC(encoding=3, text=encoded_by))
+            _apply_id3_encoder_and_comment(
+                tags, encoded_by=encoded_by, ripper_comment=ripper_comment
+            )
             tags.delall('USLT')
             uslt_text = (lyrics or '').strip() or (synced_lyrics or '').strip()
             if uslt_text:

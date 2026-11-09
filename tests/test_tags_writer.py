@@ -104,6 +104,39 @@ def test_apply_vorbis_writes_date_barcode_isrc() -> None:
     assert 'MUSICBRAINZ_DISCID' not in audio
 
 
+def test_apply_vorbis_encoder_and_ripper_comment() -> None:
+    audio: dict[str, list[str]] = {}
+    TagWriter()._apply_vorbis(
+        audio,
+        title='Song',
+        artists=['A'],
+        album='Album',
+        album_artists=['A'],
+        track_number=1,
+        total_tracks=1,
+        album_meta=AlbumMetadata(title='Album', artist='A'),
+        encoded_by='flac 1.4.3',
+        ripper_comment='ready2rip 0.4.38',
+    )
+    assert audio['ENCODER'] == ['flac 1.4.3']
+    assert audio['COMMENT'] == ['ready2rip 0.4.38']
+
+    TagWriter()._apply_vorbis(
+        audio,
+        title='Song',
+        artists=['A'],
+        album='Album',
+        album_artists=['A'],
+        track_number=1,
+        total_tracks=1,
+        album_meta=AlbumMetadata(title='Album', artist='A'),
+        encoded_by='LAME 3.100',
+        ripper_comment=None,
+    )
+    assert audio['ENCODER'] == ['LAME 3.100']
+    assert 'COMMENT' not in audio
+
+
 def test_date_barcode_isrc_helpers() -> None:
     album = AlbumMetadata(
         date='1997',
@@ -127,11 +160,7 @@ def test_apply_vorbis_image_mode_omits_track_and_isrc() -> None:
         artist='Band',
         date='2001',
         barcode='0123456789012',
-        tracks=[
-            TrackMetadata(
-                number=1, title='Song One', artist='Band', isrc='USRC17607839'
-            )
-        ],
+        tracks=[TrackMetadata(number=1, title='Song One', artist='Band', isrc='USRC17607839')],
     )
     TagWriter()._apply_vorbis(
         audio,

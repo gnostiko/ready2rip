@@ -28,7 +28,7 @@ and modern tagging.
 
 ## Typical workflow
 
-1. **Install / run** — AppImage is the recommended path (see [Install](#install)). [Gear Lever](https://flathub.org/apps/it.mijorus.gearlever) adds menu integration and update checks.
+1. **Install / run** — AppImage is the recommended path (see [Install](#install)). [Gear Lever](https://github.com/mijorus/gearlever) adds menu integration and update checks.
 2. **Insert an audio CD.** ready2rip detects the disc, reads the TOC, and shows tracks.
 3. **Drive setup** (first run, or when you change drives): calibrate **sample offset**. If AccurateRip or CTDB is enabled, ripping is blocked until the drive is calibrated.
 4. **Metadata** (optional): auto-lookup when a disc is detected, or open **Lookup → By disc ID** and pick a release. If the wrong album is matched, use **Lookup → MusicBrainz link…** and paste a `musicbrainz.org/release/…` URL or release UUID. Edit album/track fields if needed. Cover art can be fetched, chosen from disk, or cleared.
@@ -82,10 +82,11 @@ Defaults:
 
 | Option | Notes |
 |--------|-------|
-| **Encoder** | Primary: WAV, AIFF, or FLAC; optional Also encode: MP3, M4A, or Opus |
+| **Encoder** | Primary: WAV, AIFF, or FLAC; optional Also encode: LAME MP3, FDK AAC, QAAC, or Opus |
 | **FLAC compression** | 0 (fast) … 8 (smallest); default **5** with `--verify` |
 | **MP3 quality** | LAME V5–V0 (VBR, lowest→highest) or 128–320 kbps CBR |
 | **AAC quality** | FDK VBR 1–5 or 128–320 kbps CBR (`libfdk_aac` when available); lowest→highest |
+| **QAAC quality** | Opt-in Apple AAC via Wine: TVBR 82/91/100, CVBR 256 (default), CBR 256 — not bundled |
 | **Opus bitrate** | VBR kbps (typical 96–256); lowest→highest |
 
 Copy image forces a lossless/PCM container (FLAC, WAV, or AIFF; other formats fall back to FLAC).
@@ -119,10 +120,12 @@ When AccurateRip or CTDB is on, an uncalibrated drive cannot start a rip until D
 - **MusicBrainz / FreeDB** — sources for lookup (MusicBrainz ISRCs when present; FreeDB disc N/M inferred from title / EXTD markers such as `(disc 2)`)
 - **Disc gap-fill** — CD-TEXT titles/artists, MCN barcode, and subchannel ISRC when online metadata is blank
 - **Download artwork** — iTunes, Cover Art Archive
-- **Embed artwork** — lossy (MP3 / M4A / Opus) and/or lossless (FLAC / WAV / AIFF); 300–800 px; folder cover stays full-res
+- **Embed artwork** — separate lossy / lossless expanders with their own sizes (300–800 px); lossy embeds only (no loose `cover.jpg`); lossless also writes full-res folder cover
 - **ReplayGain** — track + album tags after the rip set is complete
 - **iTunes Sound Check** — iTunNORM on MP3 / M4A / AIFF / WAV (from track ReplayGain)
-- **Lyrics** — optional LRCLIB fetch after metadata; saved with lossless rips (tags + `.lrc`/`.txt` sidecars)
+- **Lyrics** — optional LRCLIB fetch after metadata; lossless save mode (embed tags, sidecar files, or both)
+- **Encoded by** — always written (codec tool + version: flac, LAME, ffmpeg/FDK, qaac, opusenc, …)
+- **Ripper tag** — optional; writes `ready2rip <version>` into the comment field
 
 ## Install
 
@@ -134,13 +137,12 @@ Release assets are published for **x86_64** and **aarch64** on
 | **AppImage** | `ready2rip-*-<arch>.AppImage` (+ `.zsync`) | Portable installs; GPG-signed; recommended default |
 | **Debian** | `ready2rip_*-1_amd64.deb` / `_arm64.deb` | Ubuntu / Debian using distro GTK and encoders |
 | **RPM** | `ready2rip-*-1.x86_64.rpm` / `.aarch64.rpm` | Fedora and related distributions |
-| **Flatpak** | `ready2rip-*-<arch>.flatpak` | Sandboxed install with bundled runtime and tools |
 
 ### AppImage (recommended)
 
 ```bash
-chmod +x ready2rip-0.4.37-x86_64.AppImage   # or …-aarch64.AppImage
-./ready2rip-0.4.37-x86_64.AppImage
+chmod +x ready2rip-0.4.38-x86_64.AppImage   # or …-aarch64.AppImage
+./ready2rip-0.4.38-x86_64.AppImage
 ```
 
 The AppImage needs a matching CPU architecture, a host **glibc** new enough for
@@ -149,15 +151,10 @@ the build (glibc is not bundled — see [Portability](#appimage-portability)),
 group (or equivalent), and a normal GPU/display stack (Mesa / Wayland / X11).
 
 For desktop icons, menus, and updates from GitHub, use
-**[Gear Lever](https://flathub.org/apps/it.mijorus.gearlever)**:
-
-```bash
-flatpak install flathub it.mijorus.gearlever
-```
-
-Open the AppImage in Gear Lever. ready2rip embeds update information at build
-time so Gear Lever can detect GitHub Releases when both the `.AppImage` and
-`.AppImage.zsync` assets are published.
+**[Gear Lever](https://github.com/mijorus/gearlever)**. Open the AppImage in
+Gear Lever; ready2rip embeds update information at build time so it can detect
+GitHub Releases when both the `.AppImage` and `.AppImage.zsync` assets are
+published.
 
 #### Verifying the AppImage signature
 
@@ -170,7 +167,7 @@ Release AppImages are GPG-signed. Import the project key from
 ### Debian / Ubuntu
 
 ```bash
-sudo apt install ./ready2rip_0.4.37-1_amd64.deb   # or _arm64.deb
+sudo apt install ./ready2rip_0.4.38-1_amd64.deb   # or _arm64.deb
 ```
 
 Depends on distro packages for GTK 4 / libadwaita, mutagen, Pillow, cdparanoia,
@@ -179,21 +176,11 @@ flac, lame, ffmpeg, and opus-tools.
 ### Fedora / RPM
 
 ```bash
-sudo dnf install ./ready2rip-0.4.37-1.x86_64.rpm   # or .aarch64.rpm
+sudo dnf install ./ready2rip-0.4.38-1.x86_64.rpm   # or .aarch64.rpm
 ```
 
 Same runtime idea as the `.deb`: system UI stack and encoders, ready2rip itself
 from the package.
-
-### Flatpak
-
-```bash
-flatpak install --user ./ready2rip-0.4.37-x86_64.flatpak
-flatpak run org.ready2rip.Ready2Rip
-```
-
-The bundle targets GNOME Platform 51, ships libcdio-paranoia / flac / lame, and
-uses the runtime’s codecs-extra stack (includes ffmpeg) for AAC and Opus.
 
 ## Dependencies
 
@@ -232,7 +219,9 @@ What the AppImage **tries to ship** (so you usually need zero encode packages):
 | Meson, Ninja, gcc | Install / packaging |
 
 Optional: **libfdk_aac** (in ffmpeg) for higher-quality AAC with VBR + afterburner;
-**libdiscid** for DiscID helpers via ctypes (pure-Python TOC IDs are used if missing).
+**Wine + qaac.exe + Apple AAC DLLs** for Also-encode **QAAC** (set `READY2RIP_QAAC` or
+install under `~/.wine/drive_c/qaac/`); **libdiscid** for DiscID helpers via ctypes
+(pure-Python TOC IDs are used if missing).
 
 ```bash
 # Fedora
@@ -264,11 +253,10 @@ sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-girepository-3.0 
 The script **warns** (does not fail) if `flac` / `lame` / `ffmpeg` / `opusenc`
 are missing. Check the build log for `warning: flac not on host` before publishing.
 
-Native packages and Flatpak:
+Native packages:
 
 ```bash
 ./packaging/build-deb-rpm.sh     # → dist/*.deb and dist/*.rpm
-./packaging/build-flatpak.sh     # → dist/ready2rip-VERSION-<arch>.flatpak
 ```
 
 ### AppImage portability
@@ -312,8 +300,7 @@ meson install -C build
 ready2rip/
   run                   # source-tree launcher
   appimage/             # AppRun + build-appimage.sh
-  packaging/            # deb/rpm (nfpm) + Flatpak helpers
-  flatpak/              # Flatpak manifest
+  packaging/            # deb/rpm (nfpm)
   data/                 # desktop, icons, AppStream, GSettings
   src/ready2rip/
   meson.build

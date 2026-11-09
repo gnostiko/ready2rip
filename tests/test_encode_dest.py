@@ -29,6 +29,12 @@ def test_encode_format_list_adds_lossy_companion() -> None:
     assert encode_format_list(
         'flac', also_encode=True, also_format='opus'
     ) == ['flac', 'opus']
+    assert encode_format_list(
+        'flac', also_encode=True, also_format='qaac'
+    ) == ['flac', 'qaac']
+    assert encode_format_list(
+        'flac', also_encode=True, also_format='aac'
+    ) == ['flac', 'aac']
 
 
 def test_encode_format_list_forces_lossless_primary() -> None:
@@ -70,6 +76,7 @@ def test_audio_dir_format_subdir_only_when_multi() -> None:
 
 def test_format_folder_name() -> None:
     assert format_folder_name('aac') == 'M4A'
+    assert format_folder_name('qaac') == 'M4A'
     assert format_folder_name('opus') == 'Opus'
     assert format_folder_name('aiff') == 'AIFF'
 
@@ -77,6 +84,7 @@ def test_format_folder_name() -> None:
 def test_is_lossy_format() -> None:
     assert is_lossy_format('mp3')
     assert is_lossy_format('AAC')
+    assert is_lossy_format('qaac')
     assert is_lossy_format('opus')
     assert not is_lossy_format('flac')
     assert not is_lossy_format('wav')
@@ -89,6 +97,9 @@ def test_should_embed_artwork_for_format() -> None:
     )
     assert should_embed_artwork_for_format(
         'aac', embed_lossy=True, embed_lossless=False
+    )
+    assert should_embed_artwork_for_format(
+        'qaac', embed_lossy=True, embed_lossless=False
     )
     assert not should_embed_artwork_for_format(
         'flac', embed_lossy=True, embed_lossless=False
