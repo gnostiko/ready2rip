@@ -99,7 +99,7 @@ from ready2rip.rip.secure import (
     wav_size_minimum,
 )
 from ready2rip.rip.wav_trim import trim_wav_to_expected
-from ready2rip.settings import (
+from ready2rip.settings_defs import (
     lyrics_mode_writes_sidecar,
     lyrics_mode_writes_tags,
 )

@@ -157,7 +157,7 @@ def test_apply_vorbis_writes_lyrics() -> None:
 
 
 def test_lyrics_save_mode_helpers() -> None:
-    from ready2rip.settings import (
+    from ready2rip.settings_defs import (
         lyrics_mode_writes_sidecar,
         lyrics_mode_writes_tags,
         normalize_lyrics_save_mode,

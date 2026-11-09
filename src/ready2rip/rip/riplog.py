@@ -20,7 +20,7 @@ from ready2rip.metadata.providers import AlbumMetadata
 from ready2rip.paths import sanitize_component, track_meta_for
 from ready2rip.rip.eac_logcrc import append_eac_checksum
 from ready2rip.rip.encode import encode_command_summary
-from ready2rip.settings import (
+from ready2rip.settings_defs import (
     rip_log_aac_quality,
     rip_log_mp3_quality,
     rip_log_qaac_quality,
