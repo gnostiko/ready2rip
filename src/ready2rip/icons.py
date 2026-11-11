@@ -158,12 +158,13 @@ def _app_icon_file(*, symbolic: bool = False) -> Path | None:
             path = root / rel
             if path.is_file():
                 return path
-    # AppImage root symlink (linuxdeploy places <id>.svg next to AppRun).
+    # AppImage root icon next to AppRun (PNG for DirIcon; SVG also shipped).
     appdir = os.environ.get('APPDIR')
     if appdir and not symbolic:
-        top = Path(appdir) / f'{config.APPLICATION_ID}.svg'
-        if top.is_file():
-            return top
+        for suffix in ('.png', '.svg'):
+            top = Path(appdir) / f'{config.APPLICATION_ID}{suffix}'
+            if top.is_file():
+                return top
     return None
 
 

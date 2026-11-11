@@ -597,6 +597,16 @@ sed -i 's/^Exec=.*/Exec=ready2rip/' \
 install -D -m644 \
   "${ROOT}/data/icons/hicolor/scalable/apps/${APP_ID}.svg" \
   "${APPDIR}/usr/share/icons/hicolor/scalable/apps/${APP_ID}.svg"
+# Raster PNG at AppDir root (Icon= name) so appimagetool can embed .DirIcon.
+# SVG alone is ignored for DirIcon — file managers need the PNG.
+ICON_PNG="${ROOT}/data/icons/hicolor/256x256/apps/${APP_ID}.png"
+if [ ! -f "$ICON_PNG" ]; then
+  echo "error: missing AppImage root icon PNG: ${ICON_PNG}" >&2
+  exit 1
+fi
+install -D -m644 "$ICON_PNG" \
+  "${APPDIR}/usr/share/icons/hicolor/256x256/apps/${APP_ID}.png"
+cp -f "$ICON_PNG" "${APPDIR}/${APP_ID}.png"
 cp -f "${ROOT}/data/icons/hicolor/scalable/apps/${APP_ID}.svg" \
   "${APPDIR}/${APP_ID}.svg"
 
@@ -675,7 +685,7 @@ run_linuxdeploy() {
     --executable="${APPDIR}/usr/bin/cdparanoia"
     --executable="${APPDIR}/usr/bin/flac"
     --desktop-file="${APPDIR}/usr/share/applications/${APP_ID}.desktop"
-    --icon-file="${APPDIR}/usr/share/icons/hicolor/scalable/apps/${APP_ID}.svg"
+    --icon-file="${APPDIR}/${APP_ID}.png"
   )
   if [ "$mode" = "with-gtk" ]; then
     args+=(--plugin gtk)
@@ -713,6 +723,7 @@ fi
 install -D -m755 "${ROOT}/appimage/AppRun.in" "${APPDIR}/AppRun"
 cp -f "${ROOT}/appimage/org.ready2rip.Ready2Rip.desktop" "${APPDIR}/${APP_ID}.desktop"
 sed -i 's/^Exec=.*/Exec=ready2rip/' "${APPDIR}/${APP_ID}.desktop"
+cp -f "${ROOT}/data/icons/hicolor/256x256/apps/${APP_ID}.png" "${APPDIR}/${APP_ID}.png"
 cp -f "${ROOT}/data/icons/hicolor/scalable/apps/${APP_ID}.svg" "${APPDIR}/${APP_ID}.svg"
 ensure_soname_links
 
@@ -825,6 +836,8 @@ fi
 echo "==> appimagetool (update info for Gear Lever)"
 rm -f "${DIST}/${OUT_NAME}" "${DIST}/${OUT_NAME}.zsync"
 install -D -m755 "${ROOT}/appimage/AppRun.in" "${APPDIR}/AppRun"
+# appimagetool embeds .DirIcon from <Icon=>.png at AppDir root (SVG is not used).
+cp -f "${ROOT}/data/icons/hicolor/256x256/apps/${APP_ID}.png" "${APPDIR}/${APP_ID}.png"
 # Avoid shipping extract leftovers
 rm -rf "${ROOT}/squashfs-root" 2>/dev/null || true
 

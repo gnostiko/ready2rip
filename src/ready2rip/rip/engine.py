@@ -1289,10 +1289,11 @@ class RipEngine:
         rip_log: RipLog | None,
         report: Callable | None = None,
     ) -> tuple[list[tuple[int, Path]], list[Path]]:
-        """Extract mixed-mode / CD-Extra data into each album folder.
+        """Extract mixed-mode / CD-Extra data into lossless album folder(s).
 
-        Returns ``(primary_pairs, all_written_paths)``. Raises if ripping
-        data is enabled and extract fails.
+        Lossy Also-encode directories are never given a ``.bin`` copy. Returns
+        ``(primary_pairs, all_written_paths)``. Raises if ripping data is
+        enabled and extract fails.
         """
         disc = job.disc_info
         if not job.rip_data_tracks or disc is None or not disc.data_tracks or not album_dirs:
@@ -4132,7 +4133,11 @@ def _job_per_track_overread_span(job: RipJob | None, track_no: int) -> tuple[int
 
 
 def _unique_album_dirs(outputs: list[Path], album_dir: Path | None) -> list[Path]:
-    """Album folders that should receive data-track .bin copies."""
+    """Lossless album folders that should receive data-track .bin files.
+
+    Lossy companion folders (MP3 / M4A / Opus) are omitted so ``.bin`` stays
+    with the primary lossless rip only.
+    """
     dirs: list[Path] = []
     seen: set[Path] = set()
     if album_dir is not None:
@@ -4140,7 +4145,8 @@ def _unique_album_dirs(outputs: list[Path], album_dir: Path | None) -> list[Path
         seen.add(album_dir)
     skip = {'.cue', '.log', '.jpg', '.jpeg', '.png', '.bin'}
     for path in outputs:
-        if path.suffix.lower() in skip:
+        suffix = path.suffix.lower()
+        if suffix in skip or not is_lossless_extension(suffix):
             continue
         parent = path.parent
         if parent in seen:

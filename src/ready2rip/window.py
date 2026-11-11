@@ -1165,7 +1165,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 '_data_tracks_row',
                 self.extras_group,
                 'Data tracks',
-                'Rip mixed-mode and CD-Extra data as raw .bin files',
+                'Rip mixed-mode / CD-Extra data as raw .bin with lossless output only',
                 settings.rip_data_tracks,
                 self._on_data_tracks_toggled,
             ),

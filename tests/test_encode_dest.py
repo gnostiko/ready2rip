@@ -113,3 +113,22 @@ def test_should_embed_artwork_for_format() -> None:
     assert not should_embed_artwork_for_format(
         'opus', embed_lossy=False, embed_lossless=True
     )
+
+
+def test_unique_album_dirs_skips_lossy_for_data_bins(tmp_path: Path) -> None:
+    from ready2rip.rip.engine import _unique_album_dirs
+
+    meta = tmp_path / 'Album'
+    flac_dir = meta / 'FLAC'
+    mp3_dir = meta / 'MP3'
+    flac_dir.mkdir(parents=True)
+    mp3_dir.mkdir(parents=True)
+    outputs = [
+        flac_dir / '01.flac',
+        mp3_dir / '01.mp3',
+        meta / 'cover.jpg',
+    ]
+    dirs = _unique_album_dirs(outputs, meta)
+    assert dirs[0] == meta
+    assert flac_dir in dirs
+    assert mp3_dir not in dirs

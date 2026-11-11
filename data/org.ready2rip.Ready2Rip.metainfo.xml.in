@@ -26,7 +26,16 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-11-08">
+    <release version="@APPLICATION_VERSION@" date="2026-11-11">
+      <description>
+        <p>
+          0.4.39: AppImage ships a root PNG so file managers get .DirIcon;
+          mixed-mode / CD-Extra .bin data tracks are saved with lossless
+          output only (not into Also-encode lossy folders).
+        </p>
+      </description>
+    </release>
+    <release version="0.4.38" date="2026-11-08">
       <description>
         <p>
           0.4.38: QAAC Also-encode; Encoded by always names the codec tool;
