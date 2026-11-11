@@ -141,8 +141,8 @@ Release assets are published for **x86_64** and **aarch64** on
 ### AppImage (recommended)
 
 ```bash
-chmod +x ready2rip-0.4.39-x86_64.AppImage   # or …-aarch64.AppImage
-./ready2rip-0.4.39-x86_64.AppImage
+chmod +x ready2rip-0.4.40-x86_64.AppImage   # or …-aarch64.AppImage
+./ready2rip-0.4.40-x86_64.AppImage
 ```
 
 The AppImage needs a matching CPU architecture, a host **glibc** new enough for
@@ -167,7 +167,7 @@ Release AppImages are GPG-signed. Import the project key from
 ### Debian / Ubuntu
 
 ```bash
-sudo apt install ./ready2rip_0.4.39-1_amd64.deb   # or _arm64.deb
+sudo apt install ./ready2rip_0.4.40-1_amd64.deb   # or _arm64.deb
 ```
 
 Depends on distro packages for GTK 4 / libadwaita, mutagen, Pillow, cdparanoia,
@@ -176,7 +176,7 @@ flac, lame, ffmpeg, and opus-tools.
 ### Fedora / RPM
 
 ```bash
-sudo dnf install ./ready2rip-0.4.39-1.x86_64.rpm   # or .aarch64.rpm
+sudo dnf install ./ready2rip-0.4.40-1.x86_64.rpm   # or .aarch64.rpm
 ```
 
 Same runtime idea as the `.deb`: system UI stack and encoders, ready2rip itself
@@ -269,7 +269,7 @@ What is **not** fully portable:
 
 | Constraint | Why |
 |------------|-----|
-| **glibc version** | Linux cannot safely ship its own glibc in an AppImage. The image needs a host glibc ≥ the newest symbol used by bundled libs. Prefer building releases on the oldest supported target (or a container of that vintage) for wider reach. |
+| **glibc version** | Linux cannot safely ship its own glibc in an AppImage. Release AppImages are built on **Ubuntu 22.04** (glibc 2.35) with a cached GNOME prefix for modern GTK 4 / libadwaita. Hosts older than that glibc floor will fail with `GLIBC_2.xx not found`. |
 | **GPU / display stack** | Mesa, libGL, Vulkan, Wayland/X11 client libs come from the host. |
 | **Architecture** | Separate AppImages for `x86_64` and `aarch64`. |
 

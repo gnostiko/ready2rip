@@ -8,9 +8,13 @@
 #   dist/ready2rip-VERSION-<arch>.AppImage
 #
 # Build-host requirements:
-#   python3, pip, meson, ninja, gcc, curl
+#   python3 (>=3.11), pip, meson, ninja, gcc, curl
 #   PyGObject + GTK 4 + libadwaita (bundled into the image)
 #   cdparanoia or cd-paranoia, flac, lame, ffmpeg (recommended; bundled)
+#
+# For AppImageHub / older distros, build on Ubuntu 22.04 (glibc 2.35) and set
+# GNOME_PREFIX to a prefix from appimage/build-gnome-prefix.sh (GLib/GTK/Adw
+# built on that same old base). Override the interpreter with PYTHON=python3.11.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -32,6 +36,17 @@ APPDIR="${ROOT}/build-appimage/AppDir"
 DIST="${ROOT}/dist"
 TOOLS="${ROOT}/.tools"
 OUT_NAME="${APP_NAME}-${VERSION}-${ARCH}.AppImage"
+PYTHON="${PYTHON:-python3}"
+GNOME_PREFIX="${GNOME_PREFIX:-}"
+
+if [ -n "$GNOME_PREFIX" ]; then
+  export PATH="${GNOME_PREFIX}/bin:${PATH}"
+  export PKG_CONFIG_PATH="${GNOME_PREFIX}/lib/pkgconfig:${GNOME_PREFIX}/lib/${MULTIARCH_LIB}/pkgconfig:${PKG_CONFIG_PATH:-}"
+  export LD_LIBRARY_PATH="${GNOME_PREFIX}/lib:${GNOME_PREFIX}/lib/${MULTIARCH_LIB}:${LD_LIBRARY_PATH:-}"
+  export GI_TYPELIB_PATH="${GNOME_PREFIX}/lib/girepository-1.0:${GNOME_PREFIX}/lib/${MULTIARCH_LIB}/girepository-1.0:${GI_TYPELIB_PATH:-}"
+  export XDG_DATA_DIRS="${GNOME_PREFIX}/share:${XDG_DATA_DIRS:-/usr/share}"
+  echo "==> using GNOME_PREFIX=${GNOME_PREFIX}"
+fi
 
 # GitHub Releases update info (AppImageUpdate / Gear Lever / appimageupdatetool).
 # Format: gh-releases-zsync|<owner>|<repo>|<tag>|<zsync asset name>
@@ -57,15 +72,19 @@ need() {
     exit 1
   fi
 }
-need python3
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+  echo "error: missing Python interpreter: ${PYTHON}" >&2
+  exit 1
+fi
 need meson
 need ninja
 need gcc
 need curl
-if ! command -v pip3 >/dev/null 2>&1 && ! command -v pip >/dev/null 2>&1; then
-  echo "error: missing pip" >&2
+if ! "$PYTHON" -m pip --version >/dev/null 2>&1; then
+  echo "error: ${PYTHON} has no pip module" >&2
   exit 1
 fi
+echo "    python: $("$PYTHON" -c 'import sys; print(sys.version.split()[0])') ($PYTHON)"
 if ! command -v zsyncmake >/dev/null 2>&1; then
   echo "warning: zsyncmake not found — install package 'zsync' for Gear Lever delta updates" >&2
   echo "         (update info is still embedded; manual Gear Lever GitHub URL works either way)" >&2
@@ -128,7 +147,7 @@ mkdir -p "${APPDIR}/usr/bin" \
 # Python deps
 # ---------------------------------------------------------------------------
 echo "==> pip install mutagen pillow"
-python3 -m pip install --upgrade --no-compile \
+"$PYTHON" -m pip install --upgrade --no-compile \
   --target="${APPDIR}/usr/lib/python3/site-packages" \
   "mutagen>=1.47" \
   "pillow>=10.0.0"
@@ -137,7 +156,7 @@ python3 -m pip install --upgrade --no-compile \
 # Bundle PyGObject (gi) from the build host
 # ---------------------------------------------------------------------------
 echo "==> bundling PyGObject (gi)"
-python3 - "$APPDIR" <<'PY'
+"$PYTHON" - "$APPDIR" <<'PY'
 import shutil
 import sys
 from pathlib import Path
@@ -176,10 +195,13 @@ PY
 echo "==> bundling GObject Introspection typelibs"
 TYPELIB_DIRS=()
 for d in \
+  ${GNOME_PREFIX:+"${GNOME_PREFIX}/lib/girepository-1.0"} \
+  ${GNOME_PREFIX:+"${GNOME_PREFIX}/lib/${MULTIARCH_LIB}/girepository-1.0"} \
   /usr/lib/girepository-1.0 \
   /usr/lib64/girepository-1.0 \
   "/usr/lib/${MULTIARCH_LIB}/girepository-1.0"
 do
+  [ -n "$d" ] || continue
   [ -d "$d" ] && TYPELIB_DIRS+=("$d")
 done
 if [ "${#TYPELIB_DIRS[@]}" -eq 0 ]; then
@@ -258,17 +280,27 @@ copy_lib() {
   return 0
 }
 
-# Resolve a soname via ldconfig, then common lib dirs (incl. Solus hwcaps).
+# Resolve a soname via GNOME_PREFIX, ldconfig, then common lib dirs.
 resolve_soname() {
   local soname="$1"
-  local path=""
+  local path="" cand
+  if [ -n "${GNOME_PREFIX:-}" ]; then
+    for cand in \
+      "${GNOME_PREFIX}/lib/${soname}" \
+      "${GNOME_PREFIX}/lib/${MULTIARCH_LIB}/${soname}"
+    do
+      if [ -e "$cand" ]; then
+        printf '%s\n' "$cand"
+        return 0
+      fi
+    done
+  fi
   # || true: awk early-exit SIGPIPEs ldconfig under pipefail
   path="$(ldconfig -p 2>/dev/null | awk -v n="$soname" '$1==n {print $NF; exit}' || true)"
   if [ -n "$path" ] && [ -f "$path" ]; then
     printf '%s\n' "$path"
     return 0
   fi
-  local cand
   for cand in \
     "/usr/lib/${soname}" \
     "/usr/lib64/${soname}" \
@@ -338,9 +370,9 @@ bundle_ldd_deps() {
 # Bundle host Python stdlib so the AppImage does not need host Python X.Y.
 bundle_python_stdlib() {
   local pyver platlib
-  pyver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  pyver="$("$PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
   # Fedora/RHEL use lib64; Debian/Ubuntu use lib. Match the interpreter.
-  platlib="$(python3 -c 'import sys; print(sys.platlibdir)')"
+  platlib="$("$PYTHON" -c 'import sys; print(sys.platlibdir)')"
   local src=""
   # Prefer a tree that actually contains the stdlib (empty /usr/lib/pythonX.Y
   # stubs exist on some Fedora layouts while real modules live under lib64).
@@ -363,7 +395,7 @@ bundle_python_stdlib() {
   rm -rf "$dest"
   mkdir -p "$dest"
   # Copy with exclusions to keep size reasonable (no tests / idle / bytecode).
-  python3 - "$src" "$dest" <<'PY'
+  "$PYTHON" - "$src" "$dest" <<'PY'
 import shutil
 import sys
 from pathlib import Path
@@ -474,9 +506,10 @@ install -D -m644 "$CA_SRC" "${APPDIR}/usr/lib/ssl/cert.pem"
 ln -sfn cert.pem "${APPDIR}/usr/lib/ssl/cert.pem.bundle" 2>/dev/null || true
 echo "    CA bundle from $CA_SRC → usr/lib/ssl/cert.pem"
 
-HOST_PYTHON="$(readlink -f "$(command -v python3)")"
-PY_VER="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+HOST_PYTHON="$(readlink -f "$(command -v "$PYTHON")")"
+PY_VER="$("$PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 copy_bin_with_libs "$HOST_PYTHON" "python3" || true
+copy_bin_with_libs "$HOST_PYTHON" "python${PY_VER}" || true
 # Keep versioned interpreter name (gi modules are ABI-tagged).
 if [ -x "/usr/bin/python${PY_VER}" ]; then
   copy_bin_with_libs "/usr/bin/python${PY_VER}" "python${PY_VER}" || true
@@ -486,8 +519,12 @@ if [ ! -e "${APPDIR}/usr/bin/python3" ] && [ -x "${APPDIR}/usr/bin/python${PY_VE
   ln -sfn "python${PY_VER}" "${APPDIR}/usr/bin/python3"
 fi
 
-# libpython is critical
-for lib in /usr/lib/libpython3*.so* /usr/lib64/libpython3*.so*; do
+# libpython is critical (Debian multiarch + Fedora lib64 + deadsnakes)
+for lib in \
+  /usr/lib/libpython3*.so* \
+  /usr/lib64/libpython3*.so* \
+  "/usr/lib/${MULTIARCH_LIB}"/libpython3*.so*
+do
   [ -f "$lib" ] || continue
   copy_lib "$lib" || true
 done
