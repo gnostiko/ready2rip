@@ -29,6 +29,14 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-11">
       <description>
         <p>
+          0.4.43: Use Pango.WrapMode for Gtk.Label wrap in the drive setup
+          dialog so AppImage GTK 4.14 does not TypeError on first-run smoke.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.42" date="2026-11-11">
+      <description>
+        <p>
           0.4.42: Tolerate libadwaita 1.5 in the AppImage GNOME prefix when
           settings ViewStack transitions (1.7+) are unavailable, so Ubuntu
           22.04 smoke tests and AppImageHub catalog checks pass.

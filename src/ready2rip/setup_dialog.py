@@ -106,7 +106,7 @@ class DriveSetupDialog(Adw.Dialog):
         self._prog_status.set_halign(Gtk.Align.CENTER)
         self._prog_status.set_justify(Gtk.Justification.CENTER)
         self._prog_status.set_wrap(True)
-        self._prog_status.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self._prog_status.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
         self._prog_status.set_max_width_chars(36)
         self._prog_status.set_ellipsize(Pango.EllipsizeMode.END)
         self._prog_status.set_selectable(False)
