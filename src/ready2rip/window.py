@@ -211,8 +211,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._track_title_labels: dict[int, Gtk.Label] = {}
         self._track_artist_labels: dict[int, Gtk.Label] = {}
         self._track_status_labels: dict[int, Gtk.Label] = {}
-        self._track_title_stacks: dict[int, Gtk.Stack] = {}
-        self._track_artist_stacks: dict[int, Gtk.Stack] = {}
+        self._track_title_fields: dict[int, Gtk.Widget] = {}
+        self._track_artist_fields: dict[int, Gtk.Widget] = {}
         self._tracks_editing = False
         self._track_edit_button: Gtk.Button | None = None
         self._track_artist_button: Gtk.Button | None = None
@@ -3542,8 +3542,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._track_title_labels.clear()
         self._track_artist_labels.clear()
         self._track_status_labels.clear()
-        self._track_title_stacks = {}
-        self._track_artist_stacks = {}
+        self._track_title_fields = {}
+        self._track_artist_fields = {}
         self._track_edit_button = None
         self._track_artist_button = None
         self._track_select_all = None
@@ -3612,6 +3612,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._set_track_select_sensitive(not self._ripping)
 
     @staticmethod
+    def _align_track_row_baseline(*widgets: Gtk.Widget) -> None:
+        """Keep checkbox, #, title, artist, and time on one text baseline."""
+        for widget in widgets:
+            widget.set_valign(Gtk.Align.BASELINE)
+
+    @staticmethod
     def _make_title_artist_grid(title: Gtk.Widget, artist: Gtk.Widget) -> Gtk.Grid:
         """Homogeneous 2-col grid: Title and Artist each take half."""
         grid = Gtk.Grid()
@@ -3619,9 +3625,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         grid.set_column_spacing(12)
         grid.set_hexpand(True)
         grid.set_halign(Gtk.Align.FILL)
+        grid.set_baseline_row(0)
         for child in (title, artist):
             child.set_hexpand(True)
             child.set_halign(Gtk.Align.FILL)
+            child.set_valign(Gtk.Align.BASELINE)
         grid.attach(title, 0, 0, 1, 1)
         grid.attach(artist, 1, 0, 1, 1)
         return grid
@@ -3638,9 +3646,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         for name in extra_classes:
             label.add_css_class(name)
         label.set_xalign(xalign)
+        label.set_valign(Gtk.Align.BASELINE)
         return label
 
-    def _make_track_field_stack(
+    def _make_track_field(
         self,
         *,
         number: int,
@@ -3649,36 +3658,47 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         placeholder: str,
         tooltip: str,
         css_class: str | None = None,
-    ) -> tuple[Gtk.Stack, Gtk.Label, Gtk.Entry]:
-        stack = Gtk.Stack()
-        stack.set_transition_type(Gtk.StackTransitionType.NONE)
+    ) -> tuple[Gtk.Box, Gtk.Label, Gtk.Entry]:
+        """Title/Artist cell: view label and edit entry share the row baseline.
+
+        A Box with show/hide is used instead of Gtk.Stack so the visible text
+        participates in baseline layout with the checkbox and track number.
+        """
+        field = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        field.set_hexpand(True)
+        field.set_halign(Gtk.Align.FILL)
+        field.set_valign(Gtk.Align.BASELINE)
+        field.set_baseline_position(Gtk.BaselinePosition.CENTER)
         if css_class:
-            stack.add_css_class(css_class)
+            field.add_css_class(css_class)
 
         display = value or empty_display
         label = Gtk.Label(label=display)
+        label.add_css_class('ready2rip-track-text')
         label.set_hexpand(True)
         label.set_halign(Gtk.Align.START)
         label.set_xalign(0.0)
         label.set_ellipsize(Pango.EllipsizeMode.END)
-        label.set_valign(Gtk.Align.CENTER)
+        label.set_valign(Gtk.Align.BASELINE)
         if not value:
             label.add_css_class('dim-label')
-        stack.add_named(label, 'view')
 
         entry = Gtk.Entry()
         entry.set_text(value)
         entry.set_placeholder_text(placeholder)
         entry.set_hexpand(True)
+        entry.set_valign(Gtk.Align.BASELINE)
         entry.add_css_class('ready2rip-track-entry')
         entry.set_tooltip_text(tooltip)
+        entry.set_visible(False)
         entry.connect(
             'changed',
             lambda *_a, n=number: self._on_track_field_changed(n),
         )
-        stack.add_named(entry, 'edit')
-        stack.set_visible_child_name('view')
-        return stack, label, entry
+
+        field.append(label)
+        field.append(entry)
+        return field, label, entry
 
     def _make_track_column_header(self) -> Gtk.ListBoxRow:
         """Column titles so Title / Artist line up with track cells."""
@@ -3690,15 +3710,17 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         box.add_css_class('ready2rip-track-row')
         box.set_hexpand(True)
+        box.set_baseline_position(Gtk.BaselinePosition.CENTER)
 
         lead = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         lead.add_css_class('ready2rip-track-lead')
+        lead.set_baseline_position(Gtk.BaselinePosition.CENTER)
         select_all = Gtk.CheckButton(active=True)
-        select_all.set_valign(Gtk.Align.CENTER)
         select_all.set_tooltip_text('Select or deselect all tracks for ripping')
         select_all.connect('toggled', self._on_select_all_toggled)
         self._track_select_all = select_all
         num_ph = self._track_caption('#', 'ready2rip-track-num', xalign=0.5)
+        self._align_track_row_baseline(select_all, num_ph, lead)
         lead.append(select_all)
         lead.append(num_ph)
         self._track_lead_size.add_widget(lead)
@@ -3708,7 +3730,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         title_h.set_halign(Gtk.Align.START)
         artist_h = self._track_caption('Artist', 'heading', 'ready2rip-track-artist')
         artist_h.set_halign(Gtk.Align.START)
-        box.append(self._make_title_artist_grid(title_h, artist_h))
+        fields = self._make_title_artist_grid(title_h, artist_h)
+        self._align_track_row_baseline(fields)
+        box.append(fields)
 
         dur_h = self._track_caption('Time', 'ready2rip-track-dur', xalign=1.0)
         self._track_dur_size.add_widget(dur_h)
@@ -3738,31 +3762,33 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         box.add_css_class('ready2rip-track-row')
         box.set_hexpand(True)
+        box.set_baseline_position(Gtk.BaselinePosition.CENTER)
 
         lead = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         lead.add_css_class('ready2rip-track-lead')
+        lead.set_baseline_position(Gtk.BaselinePosition.CENTER)
         check = Gtk.CheckButton(active=True)
-        check.set_valign(Gtk.Align.CENTER)
         check.set_tooltip_text(f'Include track {number:02d} in the rip')
         check.connect('toggled', self._on_track_check_toggled)
         num = Gtk.Label(label=f'{number:02d}')
+        num.add_css_class('ready2rip-track-text')
         num.add_css_class('ready2rip-track-num')
         num.add_css_class('dim-label')
-        num.set_valign(Gtk.Align.CENTER)
         num.set_xalign(0.5)
+        self._align_track_row_baseline(check, num, lead)
         lead.append(check)
         lead.append(num)
         self._track_lead_size.add_widget(lead)
         box.append(lead)
 
-        title_stack, title_label, title_entry = self._make_track_field_stack(
+        title_field, title_label, title_entry = self._make_track_field(
             number=number,
             value=title,
             empty_display=f'Track {number:02d}',
             placeholder=f'Track {number:02d} title',
             tooltip=f'Title for track {number:02d}',
         )
-        artist_stack, artist_label, artist_entry = self._make_track_field_stack(
+        artist_field, artist_label, artist_entry = self._make_track_field(
             number=number,
             value=artist,
             empty_display='—',
@@ -3773,20 +3799,26 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             ),
             css_class='ready2rip-track-artist',
         )
-        box.append(self._make_title_artist_grid(title_stack, artist_stack))
+        fields = self._make_title_artist_grid(title_field, artist_field)
+        self._align_track_row_baseline(fields)
+        box.append(fields)
 
         status = Gtk.Label(label='')
-        status.add_css_class('caption')
+        status.add_css_class('ready2rip-track-text')
         status.add_css_class('dim-label')
         status.set_ellipsize(Pango.EllipsizeMode.END)
         status.set_max_width_chars(12)
         status.set_xalign(1.0)
-        status.set_valign(Gtk.Align.CENTER)
+        status.set_valign(Gtk.Align.BASELINE)
         status.set_visible(False)
         box.append(status)
 
-        dur = self._track_caption(duration_label, 'ready2rip-track-dur', xalign=1.0)
-        dur.set_valign(Gtk.Align.CENTER)
+        # Same text metrics as Title/Artist values (not caption-sized headers).
+        dur = Gtk.Label(label=duration_label)
+        dur.add_css_class('ready2rip-track-text')
+        dur.add_css_class('ready2rip-track-dur')
+        dur.set_xalign(1.0)
+        dur.set_valign(Gtk.Align.BASELINE)
         dur.set_tooltip_text(f'Duration {duration_label}')
         self._track_dur_size.add_widget(dur)
         box.append(dur)
@@ -3799,8 +3831,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._track_title_labels[number] = title_label
         self._track_artist_labels[number] = artist_label
         self._track_status_labels[number] = status
-        self._track_title_stacks[number] = title_stack
-        self._track_artist_stacks[number] = artist_stack
+        self._track_title_fields[number] = title_field
+        self._track_artist_fields[number] = artist_field
         return row
 
     def _on_tracks_edit_toggled(self, *_args) -> None:
@@ -3822,14 +3854,17 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if self._track_artist_button is not None:
             self._track_artist_button.set_visible(editing)
 
-        child = 'edit' if editing else 'view'
         for num in self._track_title_entries:
-            ts = self._track_title_stacks.get(num)
-            as_ = self._track_artist_stacks.get(num)
-            if ts is not None:
-                ts.set_visible_child_name(child)
-            if as_ is not None:
-                as_.set_visible_child_name(child)
+            title_label = self._track_title_labels.get(num)
+            artist_label = self._track_artist_labels.get(num)
+            title_entry = self._track_title_entries.get(num)
+            artist_entry = self._track_artist_entries.get(num)
+            if title_label is not None and title_entry is not None:
+                title_label.set_visible(not editing)
+                title_entry.set_visible(editing)
+            if artist_label is not None and artist_entry is not None:
+                artist_label.set_visible(not editing)
+                artist_entry.set_visible(editing)
 
         if editing and self._track_title_entries:
             first = min(self._track_title_entries)

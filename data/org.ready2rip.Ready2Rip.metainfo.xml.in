@@ -26,7 +26,15 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-11-11">
+    <release version="@APPLICATION_VERSION@" date="2026-11-12">
+      <description>
+        <p>
+          0.4.44: Align track list checkbox, number, title, artist, and time
+          on one text baseline so row labels match the header columns.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.43" date="2026-11-11">
       <description>
         <p>
           0.4.43: Use Pango.WrapMode for Gtk.Label wrap in the drive setup

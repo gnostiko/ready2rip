@@ -121,6 +121,16 @@ button.ready2rip-cover-trash:active {{
 .ready2rip-track-lead {{
     min-width: 3.6em;
 }}
+/* Drop Adwaita check padding so the indicator shares the row text baseline. */
+.ready2rip-track-lead checkbutton {{
+    margin: 0;
+    padding: 0;
+    min-height: 0;
+    min-width: 0;
+}}
+.ready2rip-track-text {{
+    padding: 0;
+}}
 .ready2rip-track-num {{
     min-width: 2em;
     font-feature-settings: "tnum";
