@@ -16,6 +16,9 @@ JOBS="${JOBS:-$(nproc 2>/dev/null || echo 2)}"
 # Pin releases that provide Adw.Dialog / ToolbarView / AlertDialog / AboutDialog
 # while remaining reasonably buildable on jammy toolchains.
 GLIB_VER="${GLIB_VER:-2.78.6}"
+# GLib 2.78 does not install Gio/GLib typelibs itself — those come from
+# gobject-introspection built against this prefix (must match GLIB_VER).
+GI_VER="${GI_VER:-1.78.1}"
 GTK_VER="${GTK_VER:-4.14.5}"
 ADW_VER="${ADW_VER:-1.5.3}"
 
@@ -26,13 +29,29 @@ export LD_LIBRARY_PATH="${PREFIX}/lib:${PREFIX}/lib/$(uname -m)-linux-gnu:${LD_L
 export GI_TYPELIB_PATH="${PREFIX}/lib/girepository-1.0:${PREFIX}/lib/$(uname -m)-linux-gnu/girepository-1.0:${GI_TYPELIB_PATH:-}"
 export XDG_DATA_DIRS="${PREFIX}/share:${XDG_DATA_DIRS:-/usr/share}"
 
+gio_typelib_ok() {
+  local t
+  for t in \
+    "${PREFIX}/lib/girepository-1.0/Gio-2.0.typelib" \
+    "${PREFIX}/lib/$(uname -m)-linux-gnu/girepository-1.0/Gio-2.0.typelib"
+  do
+    if [ -f "$t" ] && grep -a -q 'DEFAULT_FLAGS' "$t"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 have_adw() {
   pkg-config --exists "libadwaita-1 >= ${ADW_VER}" 2>/dev/null
 }
 
-if have_adw; then
+if have_adw && gio_typelib_ok; then
   echo "==> GNOME prefix already OK at ${PREFIX} ($(pkg-config --modversion libadwaita-1))"
   exit 0
+fi
+if have_adw && ! gio_typelib_ok; then
+  echo "==> GNOME prefix has Adw but Gio typelib lacks DEFAULT_FLAGS — rebuilding GI stack"
 fi
 
 need_cmd() {
@@ -84,8 +103,16 @@ meson_install() {
   meson install -C "$builddir"
 }
 
+lib_present() {
+  # Prefer a real .so over pkg-config alone (pkg-config --exists can fail when
+  # a Requires: host .pc like pango is momentarily missing from PKG_CONFIG_PATH).
+  local pattern="$1"
+  compgen -G "${PREFIX}/lib/${pattern}" >/dev/null 2>&1 \
+    || compgen -G "${PREFIX}/lib/$(uname -m)-linux-gnu/${pattern}" >/dev/null 2>&1
+}
+
 # --- GLib ---
-if ! pkg-config --exists "glib-2.0 >= 2.76"; then
+if ! pkg-config --exists "glib-2.0 >= 2.76" 2>/dev/null && ! lib_present 'libglib-2.0.so*'; then
   fetch_tar \
     "https://download.gnome.org/sources/glib/${GLIB_VER%.*}/glib-${GLIB_VER}.tar.xz" \
     "${SRC}/glib-${GLIB_VER}"
@@ -95,8 +122,26 @@ if ! pkg-config --exists "glib-2.0 >= 2.76"; then
     -Dlibmount=enabled
 fi
 
+# --- gobject-introspection (provides Gio/GLib typelibs matching PREFIX glib) ---
+if ! gio_typelib_ok; then
+  fetch_tar \
+    "https://download.gnome.org/sources/gobject-introspection/${GI_VER%.*}/gobject-introspection-${GI_VER}.tar.xz" \
+    "${SRC}/gobject-introspection-${GI_VER}"
+  # Prefer PREFIX glib over jammy's 2.72 when scanning.
+  meson_install "gobject-introspection-${GI_VER}" "${SRC}/gobject-introspection-${GI_VER}" \
+    -Dbuild_introspection_data=true \
+    -Dgtk_doc=false \
+    -Ddoctool=disabled
+  if ! gio_typelib_ok; then
+    echo "error: gobject-introspection did not install Gio-2.0.typelib with DEFAULT_FLAGS" >&2
+    echo "       looked under ${PREFIX}/lib/girepository-1.0" >&2
+    ls -la "${PREFIX}/lib/girepository-1.0" 2>/dev/null || true
+    exit 1
+  fi
+fi
+
 # --- GTK 4 ---
-if ! pkg-config --exists "gtk4 >= 4.13.2"; then
+if ! pkg-config --exists "gtk4 >= 4.13.2" 2>/dev/null && ! lib_present 'libgtk-4.so*'; then
   fetch_tar \
     "https://download.gnome.org/sources/gtk/${GTK_VER%.*}/gtk-${GTK_VER}.tar.xz" \
     "${SRC}/gtk-${GTK_VER}"
@@ -113,7 +158,7 @@ if ! pkg-config --exists "gtk4 >= 4.13.2"; then
 fi
 
 # --- libadwaita ---
-if ! pkg-config --exists "libadwaita-1 >= ${ADW_VER}"; then
+if ! pkg-config --exists "libadwaita-1 >= ${ADW_VER}" 2>/dev/null && ! lib_present 'libadwaita-1.so*'; then
   fetch_tar \
     "https://download.gnome.org/sources/libadwaita/${ADW_VER%.*}/libadwaita-${ADW_VER}.tar.xz" \
     "${SRC}/libadwaita-${ADW_VER}"
@@ -129,3 +174,5 @@ echo "==> GNOME prefix ready: ${PREFIX}"
 pkg-config --modversion glib-2.0
 pkg-config --modversion gtk4
 pkg-config --modversion libadwaita-1
+gio_typelib="$(find "${PREFIX}/lib" -name 'Gio-2.0.typelib' | head -1)"
+echo "    Gio typelib: ${gio_typelib} (DEFAULT_FLAGS ok)"

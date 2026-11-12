@@ -168,15 +168,14 @@ jobs:
           meson --version
           ldd --version | head -1
 
-      - name: Cache GNOME prefix (GLib / GTK / libadwaita)
+      - name: Cache GNOME prefix (GLib / GI / GTK / libadwaita)
         uses: actions/cache@v4
         with:
           path: |
             build-appimage/gnome-prefix
             build-appimage/gnome-src
-          key: gnome-prefix-22.04-${{ matrix.arch }}-glib2.78.6-gtk4.14.5-adw1.5.3
-          restore-keys: |
-            gnome-prefix-22.04-${{ matrix.arch }}-
+          # v2: include gobject-introspection so Gio typelib has DEFAULT_FLAGS
+          key: gnome-prefix-22.04-${{ matrix.arch }}-v2-glib2.78.6-gi1.78.1-gtk4.14.5-adw1.5.3
 
       - name: Build GNOME prefix
         run: |
@@ -184,6 +183,11 @@ jobs:
           chmod +x appimage/build-gnome-prefix.sh
           GNOME_SRC="${PWD}/build-appimage/gnome-src" \
             ./appimage/build-gnome-prefix.sh "$GNOME_PREFIX"
+          # Fail early if cache/prefix still lacks a modern Gio typelib.
+          Gio_TL="$(find "$GNOME_PREFIX/lib" -name 'Gio-2.0.typelib' | head -1)"
+          test -n "$Gio_TL"
+          grep -a -q DEFAULT_FLAGS "$Gio_TL"
+          echo "Gio typelib OK: $Gio_TL"
 
       - name: Check tag matches meson version
         if: startsWith(github.ref, 'refs/tags/v')
@@ -230,6 +234,17 @@ jobs:
           export GI_TYPELIB_PATH="${GNOME_PREFIX}/lib/girepository-1.0:${GI_TYPELIB_PATH:-}"
           export XDG_DATA_DIRS="${GNOME_PREFIX}/share:${XDG_DATA_DIRS:-/usr/share}"
           ./appimage/build-appimage.sh
+
+      - name: Smoke-test AppImage (Xvfb, no network)
+        # Same glibc floor as AppImageHub (ubuntu-22.04 runners). Catches Gio
+        # typelib mismatches before publish /retest.
+        run: |
+          set -euo pipefail
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            xvfb xdotool x11-utils
+          chmod +x appimage/smoke-appimage.sh
+          img="$(ls -1 dist/ready2rip-*-"${{ matrix.arch }}".AppImage | head -1)"
+          ./appimage/smoke-appimage.sh "$img"
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4

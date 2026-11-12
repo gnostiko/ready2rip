@@ -29,6 +29,15 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-11">
       <description>
         <p>
+          0.4.41: Ship GLib/Gio typelibs from the AppImage GNOME prefix (so
+          Gio.ApplicationFlags.DEFAULT_FLAGS works) and smoke-test AppImages
+          under Xvfb on Ubuntu 22.04 before publish.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.40" date="2026-11-11">
+      <description>
+        <p>
           0.4.40: Build AppImages on Ubuntu 22.04 (glibc 2.35) with a modern
           GTK 4 / libadwaita prefix so they run on older LTS hosts and pass
           AppImageHub’s catalog tester; keeps 0.4.39 DirIcon and lossless-only

@@ -193,17 +193,25 @@ PY
 # Bundle GI typelibs required at runtime
 # ---------------------------------------------------------------------------
 echo "==> bundling GObject Introspection typelibs"
-TYPELIB_DIRS=()
+# When GNOME_PREFIX is set, GLib/Gio typelibs MUST come from that prefix so they
+# match the bundled libgio (jammy system Gio typelibs lack DEFAULT_FLAGS).
+PREFIX_TYPELIB_DIRS=()
+SYSTEM_TYPELIB_DIRS=()
 for d in \
   ${GNOME_PREFIX:+"${GNOME_PREFIX}/lib/girepository-1.0"} \
-  ${GNOME_PREFIX:+"${GNOME_PREFIX}/lib/${MULTIARCH_LIB}/girepository-1.0"} \
+  ${GNOME_PREFIX:+"${GNOME_PREFIX}/lib/${MULTIARCH_LIB}/girepository-1.0"}
+do
+  [ -n "$d" ] || continue
+  [ -d "$d" ] && PREFIX_TYPELIB_DIRS+=("$d")
+done
+for d in \
   /usr/lib/girepository-1.0 \
   /usr/lib64/girepository-1.0 \
   "/usr/lib/${MULTIARCH_LIB}/girepository-1.0"
 do
-  [ -n "$d" ] || continue
-  [ -d "$d" ] && TYPELIB_DIRS+=("$d")
+  [ -d "$d" ] && SYSTEM_TYPELIB_DIRS+=("$d")
 done
+TYPELIB_DIRS=("${PREFIX_TYPELIB_DIRS[@]}" "${SYSTEM_TYPELIB_DIRS[@]}")
 if [ "${#TYPELIB_DIRS[@]}" -eq 0 ]; then
   echo "error: no girepository-1.0 directory on build host" >&2
   exit 1
@@ -218,6 +226,10 @@ REQUIRED_TYPELIBS=(
   cairo-1.0 freetype2-2.0 fontconfig-2.0
   xlib-2.0
 )
+# Must match bundled libglib/libgio when using GNOME_PREFIX.
+PREFIX_REQUIRED_TYPELIBS=(
+  GLib-2.0 GObject-2.0 Gio-2.0 GModule-2.0
+)
 # Optional but useful on Wayland/X11 hosts
 OPTIONAL_TYPELIBS=(
   # PyGObject ≥3.52 uses GIRepository-3.0 (libgirepository-2.0).
@@ -229,20 +241,40 @@ OPTIONAL_TYPELIBS=(
 
 copy_typelib() {
   local name="$1" required="$2"
-  local found=""
-  for dir in "${TYPELIB_DIRS[@]}"; do
+  local search_dirs=("${TYPELIB_DIRS[@]}")
+  # Force prefix-only search for GLib stack when GNOME_PREFIX is active.
+  if [ -n "${GNOME_PREFIX:-}" ]; then
+    local t
+    for t in "${PREFIX_REQUIRED_TYPELIBS[@]}"; do
+      if [ "$t" = "$name" ]; then
+        search_dirs=("${PREFIX_TYPELIB_DIRS[@]}")
+        break
+      fi
+    done
+  fi
+  local found="" dir
+  for dir in "${search_dirs[@]}"; do
     if [ -f "${dir}/${name}.typelib" ]; then
       found="${dir}/${name}.typelib"
       break
     fi
   done
   if [ -n "$found" ]; then
+    echo "    ${name}.typelib ← ${found}"
     install -D -m644 "$found" \
       "${APPDIR}/usr/lib/girepository-1.0/${name}.typelib"
     return 0
   fi
   if [ "$required" = "1" ]; then
     echo "error: missing required typelib ${name}.typelib" >&2
+    if [ -n "${GNOME_PREFIX:-}" ]; then
+      for t in "${PREFIX_REQUIRED_TYPELIBS[@]}"; do
+        if [ "$t" = "$name" ]; then
+          echo "       (must come from GNOME_PREFIX — run appimage/build-gnome-prefix.sh)" >&2
+          break
+        fi
+      done
+    fi
     return 1
   fi
   echo "    optional typelib missing: ${name}"
@@ -261,6 +293,15 @@ if [ ! -f "${APPDIR}/usr/lib/girepository-1.0/GIRepository-3.0.typelib" ] \
   echo "error: missing GIRepository-3.0.typelib (install gir1.2-girepository-3.0)" >&2
   exit 1
 fi
+
+# AppImageHub / older hosts: Gio.ApplicationFlags.DEFAULT_FLAGS needs GLib ≥2.74 typelib.
+GIO_TL="${APPDIR}/usr/lib/girepository-1.0/Gio-2.0.typelib"
+if [ ! -f "$GIO_TL" ] || ! grep -a -q 'DEFAULT_FLAGS' "$GIO_TL"; then
+  echo "error: AppDir Gio-2.0.typelib lacks DEFAULT_FLAGS (got stale host typelib?)" >&2
+  echo "       path: ${GIO_TL}" >&2
+  exit 1
+fi
+echo "    OK: Gio-2.0.typelib contains DEFAULT_FLAGS"
 
 # ---------------------------------------------------------------------------
 # Helpers: copy shared libraries and binaries (via ldd)
@@ -762,6 +803,17 @@ cp -f "${ROOT}/appimage/org.ready2rip.Ready2Rip.desktop" "${APPDIR}/${APP_ID}.de
 sed -i 's/^Exec=.*/Exec=ready2rip/' "${APPDIR}/${APP_ID}.desktop"
 cp -f "${ROOT}/data/icons/hicolor/256x256/apps/${APP_ID}.png" "${APPDIR}/${APP_ID}.png"
 cp -f "${ROOT}/data/icons/hicolor/scalable/apps/${APP_ID}.svg" "${APPDIR}/${APP_ID}.svg"
+# Re-assert Gio typelib after linuxdeploy (must not regress to host jammy typelib).
+GIO_TL="${APPDIR}/usr/lib/girepository-1.0/Gio-2.0.typelib"
+if [ -n "${GNOME_PREFIX:-}" ]; then
+  for t in "${PREFIX_REQUIRED_TYPELIBS[@]}"; do
+    copy_typelib "$t" 1
+  done
+fi
+if [ ! -f "$GIO_TL" ] || ! grep -a -q 'DEFAULT_FLAGS' "$GIO_TL"; then
+  echo "error: after linuxdeploy, Gio-2.0.typelib lacks DEFAULT_FLAGS" >&2
+  exit 1
+fi
 ensure_soname_links
 
 # ---------------------------------------------------------------------------
