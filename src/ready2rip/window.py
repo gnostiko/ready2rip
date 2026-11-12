@@ -536,9 +536,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         stack = Adw.ViewStack()
         stack.set_vexpand(True)
         stack.set_hexpand(True)
-        # Match the app’s 200ms Adwaita ease used elsewhere (flash, setup, bars).
-        stack.set_enable_transitions(True)
-        stack.set_transition_duration(200)
+        # Crossfade between settings pages (Adw.ViewStack, libadwaita ≥ 1.7).
+        # AppImage GNOME prefix pins 1.5.x for glibc 2.35; skip when unavailable.
+        if hasattr(stack, 'set_enable_transitions'):
+            stack.set_enable_transitions(True)
+            stack.set_transition_duration(200)
 
         switcher = Adw.ViewSwitcher(stack=stack)
         switcher.set_policy(Adw.ViewSwitcherPolicy.WIDE)

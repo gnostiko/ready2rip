@@ -29,6 +29,15 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-11">
       <description>
         <p>
+          0.4.42: Tolerate libadwaita 1.5 in the AppImage GNOME prefix when
+          settings ViewStack transitions (1.7+) are unavailable, so Ubuntu
+          22.04 smoke tests and AppImageHub catalog checks pass.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.41" date="2026-11-11">
+      <description>
+        <p>
           0.4.41: Ship GLib/Gio typelibs from the AppImage GNOME prefix (so
           Gio.ApplicationFlags.DEFAULT_FLAGS works) and smoke-test AppImages
           under Xvfb on Ubuntu 22.04 before publish.
