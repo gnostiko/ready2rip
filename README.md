@@ -8,7 +8,6 @@ and modern tagging.
 
 <img width="1122" height="822" alt="ready2rip" src="https://github.com/user-attachments/assets/90a3db12-8bda-43b6-a82b-7e587c704efa" />
 
-
 ## What it does
 
 | Feature | Description |
@@ -22,6 +21,7 @@ and modern tagging.
 | ReplayGain | Track + album loudness tags |
 | Sound Check | iTunNORM on MP3 / M4A / AIFF / WAV for iPod / iTunes |
 | Artwork | Cover Art Archive and iTunes, with optional embed sizes |
+| Lyrics | Optional LRCLIB fetch; embed and/or sidecar for lossless |
 | Logs & CUE | Detailed rip log; multi-file or image CUE (INDEX 00 pregaps, CATALOG / ISRC, mixed-mode data) |
 | Drive setup | Sample offset calibration (required when AccurateRip or CTDB is on) |
 
@@ -32,7 +32,7 @@ and modern tagging.
 3. **Drive setup** (first run, or when you change drives): calibrate **sample offset**. If AccurateRip or CTDB is enabled, ripping is blocked until the drive is calibrated.
 4. **Metadata** (optional): auto-lookup when a disc is detected, or open **Lookup → By disc ID** and pick a release. If the wrong album is matched, use **Lookup → MusicBrainz link…** and paste a `musicbrainz.org/release/…` URL or release UUID. Edit album/track fields if needed. Cover art can be fetched, chosen from disk, or cleared.
 5. **Settings**: encoder, test & copy, CUE/log, Copy image, HTOA, and related options. Defaults already match a secure archival setup.
-6. Press **Rip CD**. Progress appears in the bottom banner (status line shows track detail). After Detect from the offset gate, a successful calibration resumes the rip automatically.
+6. Press **Rip**. Progress appears in the bottom banner (status line shows track detail). After Detect from the offset gate, a successful calibration resumes the rip automatically.
 7. Files land under your **output folder** using the album/track templates — audio, optional `cover`, `.log`, and `.cue`.
 
 ### What a secure rip does (under the hood)
@@ -50,9 +50,9 @@ ready2rip aims for secure archival ripping on Linux via cdparanoia / libcdio-par
 | Error logging | Parses cdparanoia progress into quality / fixups / skips / suspicious positions |
 | Burst fallback | Off by default. Optional insecure `-Z` recovery after secure retries fail — noted in the log |
 
-**Copy image** mode rips one continuous disc image (FLAC/WAV) instead of per-track files. AccurateRip and CTDB still run: the image is TOC-split into per-track PCM for verification (and CTDB submit when enabled). Enable **Write CUE sheet** for a matching image CUE — album tags on the image stay album-level; per-track ISRC lives in the CUE.
+**Copy image** mode rips one continuous disc image (FLAC / WAV / AIFF) instead of per-track files. AccurateRip and CTDB still run: the image is TOC-split into per-track PCM for verification (and CTDB submit when enabled). Enable **Write CUE sheet** for a matching image CUE — album tags on the image stay album-level; per-track ISRC lives in the CUE. Lossy primary formats are not used for the image (they fall back to FLAC).
 
-Per-track rips use a multi-file CUE with INDEX 00 pregaps appended to the previous track. Mixed-mode and CD-Extra data tracks are saved as raw `.bin` files (MODE1/2352 or MODE2/2352).
+Per-track rips use a multi-file CUE with INDEX 00 pregaps appended to the previous track. Mixed-mode and CD-Extra data tracks are saved as raw `.bin` files (MODE1/2352 or MODE2/2352) beside the lossless output (not into Also-encode lossy folders).
 
 ### Output layout
 
@@ -64,7 +64,7 @@ Defaults:
 | Track file | `{track:02d} - {title}` → `01 - Title.flac` |
 | Multi-disc | `Artist/(1999) - Album/CD1/…` and `…/CD2/…` with `CD1.cue` / `CD2.cue` beside the audio |
 
-`{disc_folder}` is empty on single-disc releases. Filenames always use per-disc track numbers (`01`, `02`, …).
+`{disc_folder}` is empty on single-disc releases. Filenames always use per-disc track numbers (`01`, `02`, …). `{dated_album}` is `(YYYY-MM-DD) - Album` when a date is known, otherwise the album title.
 
 ## Options
 
@@ -73,22 +73,24 @@ Defaults:
 | Option | Default / notes |
 |--------|-----------------|
 | **Optical device** | Usually `/dev/sr0` |
-| **Output folder** | `~/Music` |
-| **Album folder scheme** | Presets (default `Artist / (Date) - Album` with `{disc_folder}`) or Custom — hover a preset for the template; tokens include `{album_artist}`, `{dated_album}`, `{disc_folder}`, `{disc}`, `{totaldiscs}`, … |
-| **Track filename scheme** | Presets (default `01 - Title`) or Custom — VA preset adds `{artist}` |
+| **Output folder** | XDG Music (typically `~/Music`) when unset |
+| **Album folder scheme** | Presets (default `Artist / (Date) - Album` with `{disc_folder}`) or Custom — hover a preset for the template; tokens include `{album_artist}`, `{dated_album}`, `{disc_folder}`, `{disc}`, `{totaldiscs}`, `{label}`, … |
+| **Track filename scheme** | Presets (default `01 - Title`) or Custom — VA preset adds `{artist}`; tokens include `{track:02d}`, `{disc_track}`, `{title}`, … |
+| **Artist style** | How multiple artists appear in filenames (`semicolon`, `slash`, or `feat` in the title) |
 
-### Encoder
+### Encoding
 
 | Option | Notes |
 |--------|-------|
-| **Encoder** | Primary: WAV, AIFF, or FLAC; optional Also encode: LAME MP3, FDK AAC, QAAC, or Opus |
+| **Primary format** | Always lossless / PCM: WAV, AIFF, or FLAC (default **FLAC**) |
+| **Also encode** | Optional second pass: LAME MP3, FDK AAC, QAAC, or Opus into a format subfolder, the same album folder, or a custom root |
 | **FLAC compression** | 0 (fast) … 8 (smallest); default **5** with `--verify` |
-| **MP3 quality** | LAME V5–V0 (VBR, lowest→highest) or 128–320 kbps CBR |
-| **AAC quality** | FDK VBR 1–5 or 128–320 kbps CBR (`libfdk_aac` when available); lowest→highest |
+| **MP3 quality** | LAME V5–V0 (VBR, lowest→highest) or 128–320 kbps CBR (default **V0**) |
+| **AAC quality** | FDK VBR 1–5 or 128–320 kbps CBR (`libfdk_aac` when available; default **256 CBR**); lowest→highest |
 | **QAAC quality** | Opt-in Apple AAC via Wine: TVBR 82/91/100, CVBR 256 (default), CBR 256 — not bundled |
-| **Opus bitrate** | VBR kbps (typical 96–256); lowest→highest |
+| **Opus bitrate** | VBR kbps (typical 96–256; default **160**); lowest→highest |
 
-Copy image forces a lossless/PCM container (FLAC, WAV, or AIFF; other formats fall back to FLAC).
+Copy image forces a lossless/PCM container (FLAC, WAV, or AIFF; other formats fall back to FLAC). Also-encode companions are not produced in Copy image mode.
 
 ### Extraction
 
@@ -115,16 +117,16 @@ When AccurateRip or CTDB is on, an uncalibrated drive cannot start a rip until D
 
 ### Metadata & art
 
-- **Look up automatically** — query when a disc is detected
+- **Look up automatically** — query when a disc is detected (default on)
 - **MusicBrainz / FreeDB** — sources for lookup (MusicBrainz ISRCs when present; FreeDB disc N/M inferred from title / EXTD markers such as `(disc 2)`)
 - **Disc gap-fill** — CD-TEXT titles/artists, MCN barcode, and subchannel ISRC when online metadata is blank
-- **Download artwork** — iTunes, Cover Art Archive
-- **Embed artwork** — separate lossy / lossless expanders with their own sizes (300–800 px); lossy embeds only (no loose `cover.jpg`); lossless also writes full-res folder cover
-- **ReplayGain** — track + album tags after the rip set is complete
-- **iTunes Sound Check** — iTunNORM on MP3 / M4A / AIFF / WAV (from track ReplayGain)
-- **Lyrics** — optional LRCLIB fetch after metadata; lossless save mode (embed tags, sidecar files, or both)
+- **Download artwork** — iTunes, Cover Art Archive (default on)
+- **Embed artwork** — separate lossy / lossless options with their own sizes (300–800 px, default 600); lossy embeds only (no loose `cover.jpg`); lossless also writes full-res folder cover when embedding is on
+- **ReplayGain** — track + album tags after the rip set is complete (default on)
+- **iTunes Sound Check** — iTunNORM on MP3 / M4A / AIFF / WAV (from track ReplayGain; default on)
+- **Lyrics** — optional LRCLIB fetch after metadata (default off); lossless save mode (embed tags, sidecar files, or both — default both)
 - **Encoded by** — always written (codec tool + version: flac, LAME, ffmpeg/FDK, qaac, opusenc, …)
-- **Ripper tag** — optional; writes `ready2rip <version>` into the comment field
+- **Ripper tag** — default on; writes `ready2rip <version>` into the comment field
 
 ## Install
 
@@ -144,16 +146,59 @@ chmod +x ready2rip-0.4.44-x86_64.AppImage   # or …-aarch64.AppImage
 ./ready2rip-0.4.44-x86_64.AppImage
 ```
 
-The AppImage needs a matching CPU architecture, a host **glibc** new enough for
-the build (glibc is not bundled — see [Portability](#appimage-portability)),
-**FUSE** (`libfuse2` / `fuse`), an optical drive with your user in the `cdrom`
-group (or equivalent), and a normal GPU/display stack (Mesa / Wayland / X11).
+Requirements:
+
+| Need | Notes |
+|------|-------|
+| Matching CPU arch | Separate builds for `x86_64` and `aarch64` |
+| **glibc** ≥ build floor | Release images are built on Ubuntu 22.04 (glibc 2.35). glibc is **not** bundled — see [Portability](#appimage-portability) |
+| Optical drive access | Your user should be in the `cdrom` group (or equivalent) |
+| Working FUSE helper | `fuse3` / setuid `fusermount3` (see below). Prefer this over extract-and-run |
+| Graphics stack | Mesa / Vulkan / libGL, Wayland or X11 |
 
 For desktop icons, menus, and updates from GitHub, use
 **[Gear Lever](https://github.com/mijorus/gearlever)**. Open the AppImage in
 Gear Lever; ready2rip embeds update information at build time so it can detect
 GitHub Releases when both the `.AppImage` and `.AppImage.zsync` assets are
 published.
+
+#### FUSE on modern Ubuntu / Debian
+
+Current ready2rip AppImages use the AppImage **type2 runtime** with
+**libfuse 3 statically linked**. They do **not** load host `libfuse.so.2`, so
+installing `libfuse2` / `libfuse2t64` alone will not fix a mount failure.
+
+What they need from the host:
+
+1. The AppImage file must be executable (`chmod +x`), ideally under your home
+   directory (some `~/Downloads` mounts are `noexec`).
+2. Package **`fuse3`**, which provides setuid-root `/usr/bin/fusermount3`:
+
+   ```bash
+   sudo apt install fuse3
+   ls -l /usr/bin/fusermount3   # expect -rwsr-xr-x root root
+   ```
+
+3. On Ubuntu **25.10+** (including 26.04 / 26.10), AppArmor’s `fusermount3`
+   profile can still deny the mount with `Permission denied`. Confirm with:
+
+   ```bash
+   journalctl -k -g fusermount3 --since "5 min ago"
+   ```
+
+   Quick workarounds (pick one):
+
+   ```bash
+   # A) Run without mounting (always works; slower cold start)
+   ./ready2rip-0.4.44-x86_64.AppImage --appimage-extract-and-run
+
+   # B) Put only the fusermount3 profile into complain mode
+   sudo apt install apparmor-utils
+   sudo aa-complain fusermount3
+   ```
+
+If the AppImage window opens but the UI says the drive cannot be opened, that
+is separate from FUSE — fix `cdrom` group membership / device path in Settings.
 
 #### Verifying the AppImage signature
 
@@ -170,7 +215,7 @@ sudo apt install ./ready2rip_0.4.44-1_amd64.deb   # or _arm64.deb
 ```
 
 Depends on distro packages for GTK 4 / libadwaita, mutagen, Pillow, cdparanoia,
-flac, lame, ffmpeg, and opus-tools.
+flac, lame, ffmpeg, and opus-tools. No FUSE/AppImage runtime is involved.
 
 ### Fedora / RPM
 
@@ -192,7 +237,7 @@ Always required on the **host** (not shipped in the image):
 | Matching arch (`x86_64` or `aarch64`) | Native AppImage |
 | **glibc** new enough for the build | See [Portability](#appimage-portability); `GLIBC_2.xx not found` means the image is newer than your distro |
 | Optical drive + `cdrom` (or equivalent) | Read / eject the disc |
-| **FUSE** (`libfuse2` / `fuse`) | Mount the AppImage (preferred over `APPIMAGE_EXTRACT_AND_RUN=1`) |
+| **fuse3** (`fusermount3` setuid) | Mount the AppImage (preferred over `--appimage-extract-and-run`) |
 | Graphics stack (Mesa / Vulkan / libGL, Wayland or X11) | Display |
 
 What the AppImage **tries to ship** (so you usually need zero encode packages):
@@ -207,10 +252,10 @@ What the AppImage **tries to ship** (so you usually need zero encode packages):
 
 | Dependency | Role |
 |------------|------|
-| Python 3 + **PyGObject** (Gtk 4, Adw 1) | UI |
+| **Python ≥ 3.11** + **PyGObject** (Gtk 4, Adw 1) | UI |
 | **cdparanoia** or **cd-paranoia** | TOC + secure extract |
-| **mutagen** | Tags + ReplayGain write |
-| **Pillow** | Cover-art JPEG conversion |
+| **mutagen** ≥ 1.47 | Tags + ReplayGain write |
+| **Pillow** ≥ 10 | Cover-art JPEG conversion |
 | **flac** | FLAC encode |
 | **lame** | MP3 encode |
 | **ffmpeg** | AAC (M4A), AIFF, ReplayGain analysis (`ebur128`), Opus fallback |
@@ -228,15 +273,27 @@ sudo dnf install python3-gobject gtk4 libadwaita python3-mutagen python3-pillow 
   cdparanoia flac lame ffmpeg opus-tools
 
 # Debian / Ubuntu
-sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-girepository-3.0 \
+sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 \
   python3-mutagen python3-pil cdparanoia flac lame ffmpeg opus-tools
+```
+
+For lint / unit tests from a checkout:
+
+```bash
+pip install --user 'mutagen>=1.47' 'pillow>=10' ruff pytest
+ruff check src tests
+PYTHONPATH=src pytest -q
 ```
 
 ### Build host (AppImage packaging)
 
+Release CI builds on **Ubuntu 22.04** so the glibc floor stays at 2.35. A modern
+GTK 4 / libadwaita stack is compiled into a cached GNOME prefix
+(`appimage/build-gnome-prefix.sh`).
+
 | Required on build host | Why |
 |------------------------|-----|
-| `python3`, PyGObject, GTK 4, libadwaita | Bundled into the image |
+| `python3` ≥ 3.11, PyGObject, GTK 4, libadwaita | Bundled into the image |
 | `cdparanoia` / `cd-paranoia` | Bundled — build fails if missing |
 | `meson`, `ninja`, `gcc`, `curl`, `pip` | Packaging |
 | `flac`, `lame`, `ffmpeg`, `opusenc` | Install before building so they are copied into the image |
@@ -261,7 +318,7 @@ Native packages:
 ### AppImage portability
 
 Bundled and largely independent of the host: Python + stdlib + PyGObject, the
-ready2rip package, mutagen, Pillow, GTK 4 / Adwaita (best-effort), and
+ready2rip package, mutagen, Pillow, GTK 4 / Adwaita (from the GNOME prefix), and
 cdparanoia. Encoders are included only when the **build host** had them.
 
 What is **not** fully portable:
@@ -269,15 +326,17 @@ What is **not** fully portable:
 | Constraint | Why |
 |------------|-----|
 | **glibc version** | Linux cannot safely ship its own glibc in an AppImage. Release AppImages are built on **Ubuntu 22.04** (glibc 2.35) with a cached GNOME prefix for modern GTK 4 / libadwaita. Hosts older than that glibc floor will fail with `GLIBC_2.xx not found`. |
-| **GPU / display stack** | Mesa, libGL, Vulkan, Wayland/X11 client libs come from the host. |
-| **Architecture** | Separate AppImages for `x86_64` and `aarch64`. |
+| **FUSE helper / AppArmor** | Runtime mounts via host `fusermount3`; see [FUSE on modern Ubuntu / Debian](#fuse-on-modern-ubuntu--debian) |
+| **GPU / display stack** | Mesa, libGL, Vulkan, Wayland/X11 client libs come from the host |
+| **Architecture** | Separate AppImages for `x86_64` and `aarch64` |
 
 Check your system glibc with `ldd --version`. If the AppImage fails with
 `GLIBC_2.xx not found`, rebuild on an older base or run on a newer distro.
 
 ## Develop from source
 
-GSettings schemas compile into the user cache on first launch. From the repo:
+GSettings schemas compile into the user cache on first launch. From the repo
+(Python ≥ 3.11, system GTK 4 / libadwaita, and the packages above):
 
 ```bash
 ./run
@@ -301,7 +360,9 @@ ready2rip/
   appimage/             # AppRun + build-appimage.sh
   packaging/            # deb/rpm (nfpm)
   data/                 # desktop, icons, AppStream, GSettings
+  docs/screenshots/     # release / docs images
   src/ready2rip/
+  tests/
   meson.build
 ```
 
