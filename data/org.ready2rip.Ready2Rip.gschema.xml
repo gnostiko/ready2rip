@@ -47,7 +47,7 @@
     <key name="flac-compression" type="i">
       <range min="0" max="8"/>
       <default>5</default>
-      <summary>FLAC compression level (0–8; 5 is the default, 8 is smallest)</summary>
+      <summary>FLAC compression level (0–8; 5 is the Default, 8 is Smallest)</summary>
     </key>
 
     <key name="mp3-quality" type="s">
@@ -357,6 +357,23 @@
       <description>
         After extraction, write a detailed status log into the album folder
         (TOC, CRC, AccurateRip, burst mode, encoder settings).
+      </description>
+    </key>
+
+    <key name="existing-files" type="s">
+      <choices>
+        <choice value="overwrite"/>
+        <choice value="ask"/>
+        <choice value="skip"/>
+        <choice value="version"/>
+      </choices>
+      <default>'overwrite'</default>
+      <summary>When output files already exist</summary>
+      <description>
+        overwrite — replace existing audio and sidecar files (default).
+        ask — confirm before ripping when destinations already exist.
+        skip — leave existing files; only write missing outputs.
+        version — keep both by appending " (2)", " (3)", … to new filenames.
       </description>
     </key>
 

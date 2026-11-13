@@ -26,7 +26,17 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-11-12">
+    <release version="@APPLICATION_VERSION@" date="2026-11-13">
+      <description>
+        <p>
+          0.4.45: Add Existing files policy (Overwrite / Ask / Skip / Keep both),
+          delete large partial encodes on cancel, leave naming templates empty
+          until Custom is typed, capitalize primary encoder labels, and document
+          modern AppImage FUSE requirements.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.44" date="2026-11-12">
       <description>
         <p>
           0.4.44: Align track list checkbox, number, title, artist, and time

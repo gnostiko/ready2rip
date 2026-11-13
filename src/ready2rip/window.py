@@ -68,6 +68,7 @@ from ready2rip.settings import (
     ARTWORK_SIZES,
     DEFAULT_ARTWORK_MAX_SIZE,
     ENCODERS,
+    EXISTING_FILE_POLICIES,
     FLAC_LEVELS,
     LYRICS_SAVE_MODES,
     MP3_QUALITIES,
@@ -79,6 +80,7 @@ from ready2rip.settings import (
     normalize_also_encode_folder,
     normalize_also_encode_format,
     normalize_encode_format,
+    normalize_existing_files_policy,
     normalize_lyrics_save_mode,
     normalize_mp3_quality,
     normalize_qaac_quality,
@@ -1053,6 +1055,25 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._output_row.add_suffix(self._folder_browse_button(self._on_choose_output_folder))
         self._add_pref(self.files_group, self._output_row)
 
+        self._existing_files = [sid for sid, _label in EXISTING_FILE_POLICIES]
+        self._existing_files_row = Adw.ComboRow(title='Existing files')
+        self._existing_files_row.set_model(
+            Gtk.StringList.new([label for _sid, label in EXISTING_FILE_POLICIES])
+        )
+        self._existing_files_row.set_tooltip_text(
+            'Overwrite — replace files (default). '
+            'Ask — confirm when destinations already exist. '
+            'Skip existing — leave present files alone. '
+            'Keep both — write new files as Title (2).ext.'
+        )
+        self._select_combo(
+            self._existing_files_row,
+            self._existing_files,
+            normalize_existing_files_policy(settings.existing_files),
+        )
+        self._existing_files_row.connect('notify::selected', self._on_existing_files_changed)
+        self._add_pref(self.files_group, self._existing_files_row)
+
         self._folder_scheme_row = Adw.ComboRow(title='Album folder scheme')
         self._folder_template_row = Adw.EntryRow(title='Album folder template')
         self._folder_template_row.set_tooltip_text(FOLDER_TEMPLATE_HELP)
@@ -1378,6 +1399,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
         handlers = [
             (self._output_row, self._on_output_changed),
+            (self._existing_files_row, self._on_existing_files_changed),
             (self._device_row, self._on_device_path_changed),
             (self._folder_scheme_row, self._on_folder_scheme_changed),
             (self._folder_template_row, self._on_folder_template_changed),
@@ -1425,6 +1447,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             widget.handler_block_by_func(handler)
         try:
             self._output_row.set_text(settings.output_directory or default_out)
+            self._select_combo(
+                self._existing_files_row,
+                self._existing_files,
+                normalize_existing_files_policy(settings.existing_files),
+            )
             self._device_row.set_text(settings.device or '/dev/sr0')
             self._load_naming_scheme_state(
                 FOLDER_SCHEMES,
@@ -1767,16 +1794,21 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         custom_attr: str,
         default_template: str,
     ) -> None:
-        """Select the matching preset (or Custom). Presets show a read-only preview."""
-        text = (template or '').strip() or default_template
+        """Select the matching preset (or Custom).
+
+        Preset rows leave the template entry empty (hover the scheme for the
+        path). Custom shows only what the user has typed.
+        """
+        stored = (template or '').strip()
+        text = stored or default_template
         idx = scheme_index(schemes, text)
         combo.set_selected(idx)
         if schemes[idx].id == 'custom':
-            setattr(self, custom_attr, text)
-            entry.set_text(text)
+            # Non-preset stored value — restore into the editable field.
+            setattr(self, custom_attr, stored)
+            entry.set_text(stored)
         else:
-            # Preview the active preset; field stays insensitive until Custom.
-            entry.set_text(schemes[idx].template or '')
+            entry.set_text('')
         self._sync_naming_scheme_row_tooltip(combo, schemes)
 
     @staticmethod
@@ -1799,19 +1831,17 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         entry_handler,
         help_text: str,
     ) -> None:
-        """Dim template entry unless Custom; show preset template as preview."""
+        """Dim template entry unless Custom; keep presets blank until typed."""
         idx = combo.get_selected()
         custom = 0 <= idx < len(schemes) and schemes[idx].id == 'custom'
         entry.set_sensitive(custom)
         entry.set_tooltip_text(help_text if custom else 'Select Custom… to edit')
-        if not custom and 0 <= idx < len(schemes):
-            preview = schemes[idx].template or ''
-            if entry.get_text() != preview:
-                self._with_handler_blocked(
-                    entry,
-                    entry_handler,
-                    lambda: entry.set_text(preview),
-                )
+        if not custom and entry.get_text():
+            self._with_handler_blocked(
+                entry,
+                entry_handler,
+                lambda: entry.set_text(''),
+            )
         self._sync_naming_scheme_row_tooltip(combo, schemes)
 
     def _sync_naming_scheme_ui(self) -> None:
@@ -1867,14 +1897,13 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         scheme = schemes[idx]
 
         if scheme.id == 'custom':
-            # Show the remembered Custom text (often empty until the user types).
+            # Empty until the user types (or a prior Custom value is restored).
             remembered = (getattr(self, custom_attr) or '').strip()
             self._with_handler_blocked(entry, entry_handler, lambda: entry.set_text(remembered))
             self.store.update(**{store_key: remembered or default_template})
         else:
-            # Preset: save its template; preview it read-only in the entry.
-            preview = scheme.template or ''
-            self._with_handler_blocked(entry, entry_handler, lambda: entry.set_text(preview))
+            # Preset: save its template; leave the entry blank (tooltip has path).
+            self._with_handler_blocked(entry, entry_handler, lambda: entry.set_text(''))
             self.store.update(**{store_key: scheme.template})
 
         # Re-assert selection so the dropdown shows the chosen preset.
@@ -1949,6 +1978,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         idx = row.get_selected()
         if 0 <= idx < len(ARTIST_STYLES):
             self.store.update(artist_style=ARTIST_STYLES[idx][0])
+
+    def _on_existing_files_changed(self, row: Adw.ComboRow, *_args) -> None:
+        idx = row.get_selected()
+        if 0 <= idx < len(self._existing_files):
+            self.store.update(existing_files=self._existing_files[idx])
 
     def _on_encoder_changed(self, row: Adw.ComboRow, *_args) -> None:
         idx = row.get_selected()
@@ -2474,8 +2508,48 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             copy_image=settings.copy_image,
             artwork_max_size=settings.artwork_max_size,
             artwork_max_size_lossless=settings.artwork_max_size_lossless,
+            existing_files=normalize_existing_files_policy(settings.existing_files),
         )
 
+        policy = normalize_existing_files_policy(job.existing_files)
+        if policy == 'ask':
+            planner = RipEngine()
+            conflicts = RipEngine.conflicting_paths(planner.planned_audio_paths(job))
+            if conflicts:
+                self._confirm_overwrite_then_rip(job, conflicts)
+                return
+
+        self._begin_rip_job(job)
+
+    def _confirm_overwrite_then_rip(self, job: RipJob, conflicts: list[Path]) -> None:
+        """Ask before replacing existing outputs (Existing files → Ask)."""
+        n = len(conflicts)
+        sample = ', '.join(p.name for p in conflicts[:3])
+        extra = f' and {n - 3} more' if n > 3 else ''
+        dialog = Adw.AlertDialog(
+            heading='Replace existing files?',
+            body=(
+                f'{n} output file{"s" if n != 1 else ""} already exist'
+                f'{f" ({sample}{extra})" if sample else ""}. '
+                f'Overwrite them, or cancel and change Existing files in Settings.'
+            ),
+        )
+        dialog.add_response('cancel', 'Cancel')
+        dialog.add_response('overwrite', 'Overwrite')
+        dialog.set_response_appearance('overwrite', Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response('cancel')
+        dialog.set_close_response('cancel')
+
+        def on_response(_dlg: Adw.AlertDialog, response: str) -> None:
+            if response != 'overwrite':
+                return
+            job.existing_files = 'overwrite'
+            self._begin_rip_job(job)
+
+        dialog.connect('response', on_response)
+        dialog.present(self)
+
+    def _begin_rip_job(self, job: RipJob) -> None:
         self._ripping = True
         self._rip_engine = RipEngine()
         self._set_ripping_ui(True)

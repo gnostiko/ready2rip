@@ -28,9 +28,12 @@ from ready2rip.settings_defs import (
     ARTWORK_SIZE_IDS,
     ARTWORK_SIZES,
     DEFAULT_ARTWORK_MAX_SIZE,
+    DEFAULT_EXISTING_FILES_POLICY,
     DEFAULT_LYRICS_SAVE_MODE,
     ENCODER_IDS,
     ENCODERS,
+    EXISTING_FILE_POLICIES,
+    EXISTING_FILE_POLICY_IDS,
     FLAC_LEVELS,
     LYRICS_SAVE_MODE_IDS,
     LYRICS_SAVE_MODES,
@@ -48,6 +51,7 @@ from ready2rip.settings_defs import (
     normalize_also_encode_folder,
     normalize_also_encode_format,
     normalize_artwork_max_size,
+    normalize_existing_files_policy,
     normalize_lyrics_save_mode,
     normalize_mp3_quality,
     normalize_qaac_quality,
@@ -72,9 +76,12 @@ __all__ = [
     'ARTWORK_SIZES',
     'ARTWORK_SIZE_IDS',
     'DEFAULT_ARTWORK_MAX_SIZE',
+    'DEFAULT_EXISTING_FILES_POLICY',
     'DEFAULT_LYRICS_SAVE_MODE',
     'ENCODERS',
     'ENCODER_IDS',
+    'EXISTING_FILE_POLICIES',
+    'EXISTING_FILE_POLICY_IDS',
     'FLAC_LEVELS',
     'LYRICS_SAVE_MODES',
     'LYRICS_SAVE_MODE_IDS',
@@ -98,6 +105,7 @@ __all__ = [
     'normalize_also_encode_format',
     'normalize_artwork_max_size',
     'normalize_encode_format',
+    'normalize_existing_files_policy',
     'normalize_lyrics_save_mode',
     'normalize_mp3_quality',
     'normalize_qaac_quality',
@@ -283,6 +291,8 @@ class AppSettings:
     rip_data_tracks: bool = True
     # Continuous disc image instead of per-track files (CUE is separate).
     copy_image: bool = False
+    # overwrite | ask | skip | version — what to do when outputs already exist.
+    existing_files: str = DEFAULT_EXISTING_FILES_POLICY
     auto_rip: bool = False
     auto_eject: bool = False
 
@@ -459,6 +469,9 @@ class SettingsStore:
                 rip_htoa=_get_bool(s, 'rip-htoa', True),
                 rip_data_tracks=_get_bool(s, 'rip-data-tracks', True),
                 copy_image=_get_bool(s, 'copy-image', False),
+                existing_files=normalize_existing_files_policy(
+                    _get_string(s, 'existing-files', DEFAULT_EXISTING_FILES_POLICY)
+                ),
                 auto_rip=_get_bool(s, 'auto-rip', False),
                 auto_eject=_get_bool(s, 'auto-eject', False),
             )
@@ -561,6 +574,7 @@ class SettingsStore:
             'rip_htoa': ('rip-htoa', 'bool'),
             'rip_data_tracks': ('rip-data-tracks', 'bool'),
             'copy_image': ('copy-image', 'bool'),
+            'existing_files': ('existing-files', 'string'),
             'auto_rip': ('auto-rip', 'bool'),
             'auto_eject': ('auto-eject', 'bool'),
         }
@@ -604,6 +618,9 @@ class SettingsStore:
                 elif attr == 'lyrics_save_mode':
                     value = normalize_lyrics_save_mode(str(value))
                     current = replace(current, lyrics_save_mode=value)
+                elif attr == 'existing_files':
+                    value = normalize_existing_files_policy(str(value))
+                    current = replace(current, existing_files=value)
                 s.set_string(gkey, str(value))
             elif kind == 'int':
                 s.set_int(gkey, int(value))

@@ -132,3 +132,47 @@ def test_unique_album_dirs_skips_lossy_for_data_bins(tmp_path: Path) -> None:
     assert dirs[0] == meta
     assert flac_dir in dirs
     assert mp3_dir not in dirs
+
+
+def test_existing_files_policy_skip_and_version(tmp_path: Path) -> None:
+    from ready2rip.rip.engine import RipEngine, _EncodeDest
+
+    existing = tmp_path / '01 - Title.flac'
+    existing.write_bytes(b'x')
+    fresh = tmp_path / '02 - Other.flac'
+    dests = [
+        _EncodeDest(
+            format='flac',
+            base_dir=tmp_path,
+            album_dir=tmp_path,
+            out_path=existing,
+            meta_dir=tmp_path,
+            primary=True,
+        ),
+        _EncodeDest(
+            format='flac',
+            base_dir=tmp_path,
+            album_dir=tmp_path,
+            out_path=fresh,
+            meta_dir=tmp_path,
+            primary=True,
+        ),
+    ]
+    skipped = RipEngine._apply_existing_files_policy(dests, 'skip')
+    assert [d.out_path for d in skipped] == [fresh]
+
+    versioned = RipEngine._apply_existing_files_policy(dests, 'version')
+    assert versioned[0].out_path == tmp_path / '01 - Title (2).flac'
+    assert versioned[1].out_path == fresh
+
+    overwritten = RipEngine._apply_existing_files_policy(dests, 'overwrite')
+    assert [d.out_path for d in overwritten] == [existing, fresh]
+
+
+def test_conflicting_paths(tmp_path: Path) -> None:
+    from ready2rip.rip.engine import RipEngine
+
+    a = tmp_path / 'a.flac'
+    b = tmp_path / 'b.flac'
+    a.write_bytes(b'1')
+    assert RipEngine.conflicting_paths([a, b]) == [a]

@@ -294,6 +294,23 @@ def _path_safe_artist(value: str, style: str) -> str:
     return value.replace('/', '／')
 
 
+def unique_output_path(path: Path) -> Path:
+    """Return *path*, or ``stem (N).ext`` when that file already exists."""
+    if not path.exists():
+        return path
+    parent = path.parent
+    stem = path.stem
+    suffix = path.suffix
+    n = 2
+    while True:
+        candidate = parent / f'{stem} ({n}){suffix}'
+        if not candidate.exists():
+            return candidate
+        n += 1
+        if n > 10_000:
+            return parent / f'{stem} ({n}){suffix}'
+
+
 def build_output_paths(
     *,
     base_dir: Path,

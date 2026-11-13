@@ -5,9 +5,9 @@ from __future__ import annotations
 
 # Primary rip formats — lossless / PCM only.
 ENCODERS = (
-    ('wav', 'WAV (uncompressed)'),
-    ('aiff', 'AIFF (uncompressed)'),
-    ('flac', 'FLAC (lossless)'),
+    ('wav', 'WAV (Uncompressed)'),
+    ('aiff', 'AIFF (Uncompressed)'),
+    ('flac', 'FLAC (Lossless)'),
 )
 
 ENCODER_IDS = frozenset(e[0] for e in ENCODERS)
@@ -81,7 +81,7 @@ FLAC_LEVELS = (
     (5, '5 (Default)'),
     (6, '6'),
     (7, '7'),
-    (8, '8 (smallest)'),
+    (8, '8 (Smallest)'),
 )
 
 # LAME presets: VBR (-V n) and CBR (-b n) — lowest quality → highest.
@@ -223,6 +223,24 @@ def rip_log_qaac_quality(quality: str) -> str:
 
 def opus_bitrate_label(bitrate: int) -> str:
     return f'{int(bitrate)} kbps VBR'
+
+
+# When an output path already exists (re-rip / same templates).
+EXISTING_FILE_POLICIES = (
+    ('overwrite', 'Overwrite'),
+    ('ask', 'Ask'),
+    ('skip', 'Skip existing'),
+    ('version', 'Keep both'),
+)
+EXISTING_FILE_POLICY_IDS = frozenset(p[0] for p in EXISTING_FILE_POLICIES)
+DEFAULT_EXISTING_FILES_POLICY = 'overwrite'
+
+
+def normalize_existing_files_policy(value: str | None) -> str:
+    raw = (value or '').strip().lower()
+    if raw in EXISTING_FILE_POLICY_IDS:
+        return raw
+    return DEFAULT_EXISTING_FILES_POLICY
 
 
 # Embed sizes (≤800 px). Lossy and lossless each have their own setting.

@@ -74,6 +74,7 @@ Defaults:
 |--------|-----------------|
 | **Optical device** | Usually `/dev/sr0` |
 | **Output folder** | XDG Music (typically `~/Music`) when unset |
+| **Existing files** | **Overwrite** (default), **Ask** before replacing, **Skip existing**, or **Keep both** (`Title (2).ext`) |
 | **Album folder scheme** | Presets (default `Artist / (Date) - Album` with `{disc_folder}`) or Custom — hover a preset for the template; tokens include `{album_artist}`, `{dated_album}`, `{disc_folder}`, `{disc}`, `{totaldiscs}`, `{label}`, … |
 | **Track filename scheme** | Presets (default `01 - Title`) or Custom — VA preset adds `{artist}`; tokens include `{track:02d}`, `{disc_track}`, `{title}`, … |
 | **Artist style** | How multiple artists appear in filenames (`semicolon`, `slash`, or `feat` in the title) |
@@ -84,7 +85,7 @@ Defaults:
 |--------|-------|
 | **Primary format** | Always lossless / PCM: WAV, AIFF, or FLAC (default **FLAC**) |
 | **Also encode** | Optional second pass: LAME MP3, FDK AAC, QAAC, or Opus into a format subfolder, the same album folder, or a custom root |
-| **FLAC compression** | 0 (fast) … 8 (smallest); default **5** with `--verify` |
+| **FLAC compression** | 0 (Fastest) … 8 (Smallest); default **5 (Default)** with `--verify` |
 | **MP3 quality** | LAME V5–V0 (VBR, lowest→highest) or 128–320 kbps CBR (default **V0**) |
 | **AAC quality** | FDK VBR 1–5 or 128–320 kbps CBR (`libfdk_aac` when available; default **256 CBR**); lowest→highest |
 | **QAAC quality** | Opt-in Apple AAC via Wine: TVBR 82/91/100, CVBR 256 (default), CBR 256 — not bundled |
@@ -142,8 +143,8 @@ Release assets are published for **x86_64** and **aarch64** on
 ### AppImage (recommended)
 
 ```bash
-chmod +x ready2rip-0.4.44-x86_64.AppImage   # or …-aarch64.AppImage
-./ready2rip-0.4.44-x86_64.AppImage
+chmod +x ready2rip-0.4.45-x86_64.AppImage   # or …-aarch64.AppImage
+./ready2rip-0.4.45-x86_64.AppImage
 ```
 
 Requirements:
@@ -190,7 +191,7 @@ What they need from the host:
 
    ```bash
    # A) Run without mounting (always works; slower cold start)
-   ./ready2rip-0.4.44-x86_64.AppImage --appimage-extract-and-run
+   ./ready2rip-0.4.45-x86_64.AppImage --appimage-extract-and-run
 
    # B) Put only the fusermount3 profile into complain mode
    sudo apt install apparmor-utils
@@ -211,7 +212,7 @@ Release AppImages are GPG-signed. Import the project key from
 ### Debian / Ubuntu
 
 ```bash
-sudo apt install ./ready2rip_0.4.44-1_amd64.deb   # or _arm64.deb
+sudo apt install ./ready2rip_0.4.45-1_amd64.deb   # or _arm64.deb
 ```
 
 Depends on distro packages for GTK 4 / libadwaita, mutagen, Pillow, cdparanoia,
@@ -220,7 +221,7 @@ flac, lame, ffmpeg, and opus-tools. No FUSE/AppImage runtime is involved.
 ### Fedora / RPM
 
 ```bash
-sudo dnf install ./ready2rip-0.4.44-1.x86_64.rpm   # or .aarch64.rpm
+sudo dnf install ./ready2rip-0.4.45-1.x86_64.rpm   # or .aarch64.rpm
 ```
 
 Same runtime idea as the `.deb`: system UI stack and encoders, ready2rip itself

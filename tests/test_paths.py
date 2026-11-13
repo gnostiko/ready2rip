@@ -17,7 +17,9 @@ from ready2rip.paths import (
     scheme_index,
     scheme_tooltip,
     template_values,
+    unique_output_path,
 )
+from ready2rip.settings_defs import normalize_existing_files_policy
 
 
 def _album() -> AlbumMetadata:
@@ -195,3 +197,23 @@ def test_artist_style_feat_and_slash_in_paths() -> None:
     )
     assert album_dir == Path('/tmp/music/Main/Collab')
     assert path.name == '01 - Song feat. Guest & Other.flac'
+
+
+def test_unique_output_path_versions(tmp_path: Path) -> None:
+    target = tmp_path / '01 - Title.flac'
+    assert unique_output_path(target) == target
+    target.write_bytes(b'a')
+    second = unique_output_path(target)
+    assert second == tmp_path / '01 - Title (2).flac'
+    second.write_bytes(b'b')
+    third = unique_output_path(target)
+    assert third == tmp_path / '01 - Title (3).flac'
+
+
+def test_normalize_existing_files_policy() -> None:
+    assert normalize_existing_files_policy('overwrite') == 'overwrite'
+    assert normalize_existing_files_policy('ASK') == 'ask'
+    assert normalize_existing_files_policy('skip') == 'skip'
+    assert normalize_existing_files_policy('version') == 'version'
+    assert normalize_existing_files_policy('nope') == 'overwrite'
+    assert normalize_existing_files_policy(None) == 'overwrite'

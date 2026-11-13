@@ -9,7 +9,7 @@ import time
 from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 from pathlib import Path
 
@@ -45,6 +45,11 @@ from ready2rip.paths import (
     DEFAULT_FILENAME_TEMPLATE,
     build_output_paths,
     track_meta_for,
+    unique_output_path,
+)
+from ready2rip.settings_defs import (
+    DEFAULT_EXISTING_FILES_POLICY,
+    normalize_existing_files_policy,
 )
 from ready2rip.replaygain import apply_replaygain
 from ready2rip.rip.ctdb_quality import ctdb_submit_quality
@@ -223,6 +228,8 @@ class RipJob:
     # Copy Image: one continuous image (instead of per-track files).
     # Pair with write_cue_file for a matching image CUE sheet.
     copy_image: bool = False
+    # overwrite | ask | skip | version — ask is resolved in the UI before run.
+    existing_files: str = DEFAULT_EXISTING_FILES_POLICY
     # Longest edge for embeds when preparing from folder art.
     artwork_max_size: int = 600  # lossy embed edge; match settings default
     artwork_max_size_lossless: int = 600
@@ -363,13 +370,13 @@ class RipEngine:
                     proc.terminate()
                 except OSError:
                     pass
-        # Drop incomplete encode outputs; the encode worker exits via terminate.
+        # Best-effort: drop in-flight encode outputs. finish_pending(abandon)
+        # also cleans up after the worker exits.
         pending = self._encode_pending
         if pending is not None:
             for dest in pending.dests:
                 try:
-                    if dest.out_path.is_file() and dest.out_path.stat().st_size < 1024:
-                        dest.out_path.unlink(missing_ok=True)
+                    dest.out_path.unlink(missing_ok=True)
                 except OSError:
                     pass
 
@@ -1496,7 +1503,65 @@ class RipEngine:
                     primary=i == 0,
                 )
             )
-        return dests
+        return self._apply_existing_files_policy(dests, job.existing_files)
+
+    @staticmethod
+    def _apply_existing_files_policy(
+        dests: list[_EncodeDest],
+        policy: str | None,
+    ) -> list[_EncodeDest]:
+        """Filter or rename destinations when output files already exist.
+
+        ``ask`` is resolved in the UI to ``overwrite`` (or cancel) before run.
+        """
+        mode = normalize_existing_files_policy(policy)
+        if mode in ('overwrite', 'ask'):
+            return dests
+        resolved: list[_EncodeDest] = []
+        for dest in dests:
+            if not dest.out_path.exists():
+                resolved.append(dest)
+                continue
+            if mode == 'skip':
+                continue
+            if mode == 'version':
+                resolved.append(replace(dest, out_path=unique_output_path(dest.out_path)))
+        return resolved
+
+    def planned_audio_paths(self, job: RipJob) -> list[Path]:
+        """Templated audio destinations (overwrite paths) for conflict checks."""
+        probe = replace(job, existing_files='overwrite')
+        paths: list[Path] = []
+        seen: set[Path] = set()
+        if probe.copy_image:
+            for dest in self._destinations_for_track(probe, 1):
+                key = dest.out_path
+                try:
+                    key = dest.out_path.resolve()
+                except OSError:
+                    pass
+                if key in seen:
+                    continue
+                seen.add(key)
+                paths.append(dest.out_path)
+            return paths
+        for track_no in probe.track_numbers:
+            for dest in self._destinations_for_track(probe, int(track_no)):
+                key = dest.out_path
+                try:
+                    key = dest.out_path.resolve()
+                except OSError:
+                    pass
+                if key in seen:
+                    continue
+                seen.add(key)
+                paths.append(dest.out_path)
+        return paths
+
+    @staticmethod
+    def conflicting_paths(paths: list[Path]) -> list[Path]:
+        """Return existing files from *paths* (stable order)."""
+        return [p for p in paths if p.exists()]
 
     def _ensure_destination_dirs(self, dests: list[_EncodeDest]) -> None:
         """Create every destination album folder (and its base) up front."""
@@ -1654,16 +1719,33 @@ class RipEngine:
                 pending = None
                 self._encode_pending = None
                 if abandon or self._cancelled:
+                    written: list[Path] | None = None
                     try:
-                        job_pending.future.result(timeout=120)
+                        written = job_pending.future.result(timeout=120)
                     except Exception:
-                        pass
+                        written = None
+                    if written:
+                        # Encode finished — keep outputs (later-track failure or
+                        # cancel after a completed encode both leave a useful rip).
+                        primary_out: Path | None = None
+                        for dest, out_path in zip(job_pending.dests, written, strict=True):
+                            outputs.append(out_path)
+                            if dest.primary:
+                                track_output_pairs.append((job_pending.track_no, out_path))
+                                if primary_out is None:
+                                    primary_out = out_path
+                                    album_dir = dest.meta_dir
+                        self._unlink_quiet(job_pending.test_wav, job_pending.copy_wav)
+                        if job_pending.log_entry is not None and primary_out is not None:
+                            job_pending.log_entry.output_path = primary_out
+                            job_pending.log_entry.filename = primary_out.name
+                            if job_pending.log_entry.status != 'finished with errors':
+                                job_pending.log_entry.status = 'OK'
+                        return album_dir
+                    # Incomplete / failed encode — remove any partial outputs.
                     for dest in job_pending.dests:
                         try:
-                            if dest.out_path.is_file():
-                                # Incomplete encode after cancel — drop it.
-                                if dest.out_path.stat().st_size < 1024:
-                                    dest.out_path.unlink(missing_ok=True)
+                            dest.out_path.unlink(missing_ok=True)
                         except OSError:
                             pass
                     self._unlink_quiet(job_pending.test_wav, job_pending.copy_wav)
@@ -1752,6 +1834,26 @@ class RipEngine:
                 test_wav = tmp_path / f'track{track_no:02d}_test.wav'
                 copy_wav = tmp_path / f'track{track_no:02d}_copy.wav'
                 expected = expected_sizes.get(track_no)
+
+                # Skip-existing: avoid extract when every destination is present.
+                early_dests = self._destinations_for_track(job, track_no)
+                if (
+                    normalize_existing_files_policy(job.existing_files) == 'skip'
+                    and not early_dests
+                ):
+                    finish_pending()
+                    notes.append(f'Skipped track {track_no} (output already exists)')
+                    if log_entry is not None:
+                        log_entry.status = 'skipped (exists)'
+                    report(
+                        track_no,
+                        RipState.DONE,
+                        index=idx,
+                        sub=1.0,
+                        message=f'Skipped track {track_no} (exists)',
+                        total_units=total_units,
+                    )
+                    continue
 
                 # Extract overlaps the previous track's encode.
                 extracted = self._extract_track_secure(
@@ -1849,6 +1951,22 @@ class RipEngine:
                     return album_dir
 
                 dests = self._destinations_for_track(job, track_no)
+                if not dests:
+                    # Skip-existing: every destination already present.
+                    notes.append(f'Skipped track {track_no} (output already exists)')
+                    if log_entry is not None:
+                        log_entry.status = 'skipped (exists)'
+                    self._unlink_quiet(extracted.test_wav, extracted.copy_wav)
+                    report(
+                        track_no,
+                        RipState.DONE,
+                        index=idx,
+                        sub=1.0,
+                        message=f'Skipped track {track_no} (exists)',
+                        total_units=total_units,
+                    )
+                    continue
+
                 self._ensure_destination_dirs(dests)
                 n_targets = max(1, len(dests))
                 report(
