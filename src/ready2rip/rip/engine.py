@@ -47,10 +47,6 @@ from ready2rip.paths import (
     track_meta_for,
     unique_output_path,
 )
-from ready2rip.settings_defs import (
-    DEFAULT_EXISTING_FILES_POLICY,
-    normalize_existing_files_policy,
-)
 from ready2rip.replaygain import apply_replaygain
 from ready2rip.rip.ctdb_quality import ctdb_submit_quality
 from ready2rip.rip.cue import (
@@ -105,8 +101,10 @@ from ready2rip.rip.secure import (
 )
 from ready2rip.rip.wav_trim import trim_wav_to_expected
 from ready2rip.settings_defs import (
+    DEFAULT_EXISTING_FILES_POLICY,
     lyrics_mode_writes_sidecar,
     lyrics_mode_writes_tags,
+    normalize_existing_files_policy,
 )
 from ready2rip.tags.artists import DEFAULT_ARTIST_STYLE
 from ready2rip.tags.writer import TagWriter, ripper_tag_value
