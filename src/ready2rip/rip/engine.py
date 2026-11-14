@@ -33,7 +33,6 @@ from ready2rip.disc.htoa import (
 )
 from ready2rip.disc.overread import (
     OverreadCapability,
-    offset_silence_risk,
     overread_span,
     per_track_overread_read_span,
     probe_overread,
@@ -434,14 +433,6 @@ class RipEngine:
         self._probe_job_overread(job, on_progress)
 
         layout_notes = self._detect_disc_layout(job, on_progress)
-
-        silence_err = _offset_silence_error(
-            job,
-            tracks,
-            copy_image=bool(job.copy_image),
-        )
-        if silence_err:
-            return RipResult(success=False, error=silence_err, notes=list(layout_notes))
 
         if job.copy_image:
             return self._run_copy_image(job, base, fmt, on_progress, layout_notes=layout_notes)
@@ -4453,33 +4444,6 @@ def _unique_album_dirs(outputs: list[Path], album_dir: Path | None) -> list[Path
         seen.add(parent)
         dirs.append(parent)
     return dirs
-
-
-def _offset_silence_error(
-    job: RipJob,
-    tracks: list[int],
-    *,
-    copy_image: bool = False,
-) -> str | None:
-    """Fail closed when a non-zero offset would silence-pad disc edges."""
-    disc = job.disc_info
-    if disc is None or not disc.tracks:
-        return None
-    first_no = int(disc.tracks[0].number)
-    last_no = int(disc.tracks[-1].number)
-    if copy_image:
-        includes_start = True
-        includes_end = True
-    else:
-        selected = {int(n) for n in tracks}
-        includes_start = first_no in selected
-        includes_end = last_no in selected
-    return offset_silence_risk(
-        int(job.sample_offset),
-        job.overread,
-        includes_disc_start=includes_start,
-        includes_disc_end=includes_end,
-    )
 
 
 def _archival_fail_reasons(

@@ -29,6 +29,15 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-14">
       <description>
         <p>
+          0.4.47: Stop aborting rips when the drive cannot overread lead-in /
+          lead-out; restore 0.4.45 behavior (use overread when available,
+          otherwise silence-fill edges and continue).
+        </p>
+      </description>
+    </release>
+    <release version="0.4.46" date="2026-11-14">
+      <description>
+        <p>
           0.4.46: Add WavPack and ALAC primary lossless encodes, optional Burst
           mode (-Z) for fast rips, archival fail-closed checks (AccurateRip /
           CTDB mismatch, unexpected burst recovery, offset silence risk, HTOA
