@@ -33,12 +33,13 @@ DEFAULT_ALBUM_FOLDER_TEMPLATE = '{album_artist}/{dated_album}/{disc_folder}'
 
 # Tokens shown in settings tooltips / docs.
 FOLDER_TEMPLATE_HELP = (
-    '{album_artist} {album} {dated_album} {date} {year} {genre} {label} '
-    '{disc} {totaldiscs} {disc_folder}'
+    'Available tokens: {album_artist} {album} {dated_album} {date} {year} '
+    '{genre} {label} {disc} {totaldiscs} {disc_folder}'
 )
 FILENAME_TEMPLATE_HELP = (
-    '{track:02d} {disc_track} {disc_prefix} {title} {artist} {album_artist} '
-    '{album} {year} {date} {genre} {disc} {totaldiscs} {track_total}'
+    'Available tokens: {track:02d} {disc_track} {disc_prefix} {title} '
+    '{artist} {album_artist} {album} {year} {date} {genre} {disc} '
+    '{totaldiscs} {track_total}'
 )
 
 
@@ -83,7 +84,7 @@ FOLDER_SCHEMES: tuple[NamingScheme, ...] = (
         'custom',
         'Custom…',
         '',
-        'Write your own folder template with the tokens below.',
+        'Edit the folder template with the tokens listed below.',
     ),
 )
 
@@ -104,7 +105,7 @@ FILENAME_SCHEMES: tuple[NamingScheme, ...] = (
         'custom',
         'Custom…',
         '',
-        'Write your own filename template with the tokens below.',
+        'Edit the filename template with the tokens listed below.',
     ),
 )
 

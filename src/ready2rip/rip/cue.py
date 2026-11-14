@@ -346,9 +346,11 @@ def cue_file_type_for_extension(ext: str) -> str:
         return 'FLAC'
     if e in ('aiff', 'aif'):
         return 'AIFF'
+    if e in ('wv', 'wavpack'):
+        return 'WAVPACK'
     if e == 'mp3':
         return 'MP3'
-    # AAC/M4A and other lossy containers have no standard CUE FILE type.
+    # ALAC/AAC M4A and other containers have no standard CUE FILE type.
     return 'WAVE'
 
 

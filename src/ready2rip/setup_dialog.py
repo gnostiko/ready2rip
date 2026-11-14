@@ -76,8 +76,8 @@ class DriveSetupDialog(Adw.Dialog):
         intro.append(self._heading('Detect sample offset'))
         intro.append(
             self._body(
-                'Insert a commercial audio CD. ready2rip measures the '
-                'AccurateRip sample offset for this drive.'
+                'Insert a commercial audio CD. ready2rip will measure the '
+                "AccurateRip sample offset for this drive."
             )
         )
 

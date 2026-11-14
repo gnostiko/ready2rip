@@ -8,12 +8,15 @@ from pathlib import Path
 from ready2rip.rip.encode import (
     aac_encode_argv,
     aiff_encode_argv,
+    alac_encode_argv,
     encode_command_summary,
     encoder_tag_for_format,
     flac_encode_argv,
     prefer_fdk_aac,
     qaac_encode_argv,
     resolve_qaac_command,
+    wavpack_encode_argv,
+    wavpack_ffmpeg_argv,
 )
 
 
@@ -65,6 +68,35 @@ def test_aiff_encode_argv_is_pcm_be() -> None:
 
 def test_aiff_summary() -> None:
     assert 'aiff' in encode_command_summary('aiff').lower()
+
+
+def test_wavpack_encode_argv_high() -> None:
+    cmd = wavpack_encode_argv(Path('in.wav'), Path('out.wv'), 'high')
+    assert cmd[0] == 'wavpack'
+    assert '-h' in cmd
+    assert '-y' in cmd
+    assert cmd[cmd.index('-o') + 1] == 'out.wv'
+    assert 'in.wav' in cmd
+
+
+def test_wavpack_ffmpeg_argv() -> None:
+    cmd = wavpack_ffmpeg_argv(Path('in.wav'), Path('out.wv'), 'extra')
+    assert cmd[0] == 'ffmpeg'
+    assert 'wavpack' in cmd
+    assert cmd[cmd.index('-compression_level') + 1] == '8'
+    assert cmd[-1] == 'out.wv'
+
+
+def test_alac_encode_argv() -> None:
+    cmd = alac_encode_argv(Path('in.wav'), Path('out.m4a'))
+    assert cmd[0] == 'ffmpeg'
+    assert 'alac' in cmd
+    assert cmd[-1] == 'out.m4a'
+
+
+def test_wavpack_and_alac_summaries() -> None:
+    assert 'wavpack' in encode_command_summary('wavpack', wavpack_compression='high').lower()
+    assert 'alac' in encode_command_summary('alac').lower()
 
 
 def test_qaac_encode_argv_cvbr_default_mode() -> None:

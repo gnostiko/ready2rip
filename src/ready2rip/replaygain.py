@@ -7,6 +7,7 @@ import logging
 import re
 import shutil
 import subprocess
+from collections import defaultdict
 from pathlib import Path
 
 from ready2rip.rip.soundcheck import supports_sound_check
@@ -14,7 +15,7 @@ from ready2rip.tags.writer import ReplayGainValues, TagWriter
 
 log = logging.getLogger(__name__)
 
-# ReplayGain 2.0 / EBU R128 reference level
+# ReplayGain 2.0 / EBU R128 measurement with RG2 reference (-18 LUFS).
 _REF_LUFS = -18.0
 
 _I_RE = re.compile(r'I:\s*([+-]?\d+(?:\.\d+)?)\s*LUFS')
@@ -26,6 +27,7 @@ _MAX_ALBUM_CONCAT_INPUTS = 40
 
 _AUDIO_SUFFIXES = frozenset({
     '.flac',
+    '.wv',
     '.mp3',
     '.m4a',
     '.mp4',
@@ -36,6 +38,10 @@ _AUDIO_SUFFIXES = frozenset({
     '.aiff',
     '.aif',
 })
+
+# Prefer lossless/PCM for album loudness when Also-encode companions are present.
+# ``.m4a`` is omitted here (ALAC vs AAC); see ``album_reference_paths``.
+_PRIMARY_ALBUM_SUFFIXES = frozenset({'.flac', '.wav', '.aiff', '.aif', '.wv'})
 
 
 def analyze_file(path: Path) -> ReplayGainValues | None:
@@ -85,6 +91,37 @@ def analyze_album(paths: list[Path]) -> ReplayGainValues | None:
     return _values_from_ffmpeg(cmd, label=f'album ({len(paths)} files)')
 
 
+def album_reference_paths(paths: list[Path]) -> list[Path]:
+    """Paths used for album gain (lossless/PCM when present).
+
+    Avoids double-counting Also-encode companions (e.g. FLAC + MP3) in one
+    album measurement.
+    """
+    if not paths:
+        return []
+    primary = [p for p in paths if p.suffix.lower() in _PRIMARY_ALBUM_SUFFIXES]
+    if primary:
+        return primary
+    # ALAC lives in ``.m4a``; skip the Also-encode ``M4A/`` companion folder.
+    alac = [
+        p
+        for p in paths
+        if p.suffix.lower() == '.m4a' and p.parent.name != 'M4A'
+    ]
+    if alac:
+        return alac
+    # No lossless set — use the largest single-extension group (first-seen tie-break).
+    by_suffix: dict[str, list[Path]] = defaultdict(list)
+    order: list[str] = []
+    for path in paths:
+        suf = path.suffix.lower()
+        if suf not in by_suffix:
+            order.append(suf)
+        by_suffix[suf].append(path)
+    best_suf = max(order, key=lambda s: len(by_suffix[s]))
+    return list(by_suffix[best_suf])
+
+
 def apply_replaygain(
     files: list[Path],
     *,
@@ -93,12 +130,13 @@ def apply_replaygain(
 ) -> list[str]:
     """Analyze each file once; write ReplayGain and/or iTunes Sound Check.
 
-    Track gain uses per-file ``ebur128=peak=true``. Album gain is a single
-    R128 measurement over the concatenated album when possible; otherwise the
-    mean of track gains (with a log note).
+    Track gain uses per-file ``ebur128=peak=true``. Album gain is measured on
+    the primary (lossless/PCM) set when Also-encode companions are present, then
+    shared across formats. Album peak for companions is the max true peak among
+    that format's tracks.
 
-    Sound Check (iTunNORM) uses album gain/peak when available, else track,
-    and only on iPod-compatible formats (MP3 / M4A / AIFF / WAV).
+    Sound Check (iTunNORM) uses **track** gain/peak on iPod-compatible formats
+    (MP3 / M4A / AIFF / WAV).
     """
     if not files:
         return []
@@ -127,25 +165,43 @@ def apply_replaygain(
         notes.append('Loudness tags: no tracks analyzed')
         return notes
 
-    album_paths = [p for p, _v in analyzed]
-    album_vals = analyze_album(album_paths)
+    all_paths = [p for p, _v in analyzed]
+    ref_paths = album_reference_paths(all_paths)
+    ref_set = set(ref_paths)
+    ref_analyzed = [(p, v) for p, v in analyzed if p in ref_set]
+    if not ref_analyzed:
+        ref_analyzed = analyzed
+        ref_paths = all_paths
+        ref_set = set(ref_paths)
+
+    album_vals = analyze_album(ref_paths)
     if album_vals is not None:
         album_gain = album_vals.track_gain_db
-        album_peak = album_vals.track_peak
-        album_method = 'whole-album ebur128'
+        ref_album_peak = album_vals.track_peak
+        album_method = f'whole-album ebur128 on {len(ref_paths)} primary file(s)'
     else:
-        album_gain = sum(v.track_gain_db for _p, v in analyzed) / len(analyzed)
-        album_peak = max(v.track_peak for _p, v in analyzed)
-        album_method = 'mean of track gains (fallback)'
+        album_gain = sum(v.track_gain_db for _p, v in ref_analyzed) / len(ref_analyzed)
+        ref_album_peak = max(v.track_peak for _p, v in ref_analyzed)
+        album_method = (
+            f'mean of {len(ref_analyzed)} primary track gain(s) (fallback)'
+        )
+
+    peaks_by_suffix: dict[str, float] = defaultdict(float)
+    for path, values in analyzed:
+        suf = path.suffix.lower()
+        peaks_by_suffix[suf] = max(peaks_by_suffix[suf], values.track_peak)
 
     sc_written = 0
     for path, values in analyzed:
         values.album_gain_db = album_gain
-        values.album_peak = album_peak
+        suf = path.suffix.lower()
+        if path in ref_set:
+            values.album_peak = ref_album_peak
+        else:
+            values.album_peak = peaks_by_suffix.get(suf, values.track_peak)
         if write_rg_tags:
             writer.write_replaygain(path, values)
         if write_sound_check and supports_sound_check(path.suffix):
-            # Per-track Sound Check (matches typical iTunes / iPod behavior).
             if writer.write_sound_check(
                 path,
                 gain_db=values.track_gain_db,
@@ -157,7 +213,7 @@ def apply_replaygain(
         notes.append(
             f'ReplayGain track + album (ffmpeg ebur128 true peak, {album_method}) on '
             f'{len(analyzed)} file(s) '
-            f'(album gain {album_gain:+.2f} dB, album peak {album_peak:.6f})'
+            f'(album gain {album_gain:+.2f} dB, album peak {ref_album_peak:.6f})'
         )
     if write_sound_check:
         notes.append(

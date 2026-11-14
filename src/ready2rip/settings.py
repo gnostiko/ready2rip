@@ -42,6 +42,8 @@ from ready2rip.settings_defs import (
     OPUS_BITRATES,
     QAAC_QUALITIES,
     QAAC_QUALITY_IDS,
+    WAVPACK_LEVELS,
+    WAVPACK_LEVEL_IDS,
     aac_quality_from_bitrate,
     lame_args_for_mp3_quality,
     lyrics_mode_writes_sidecar,
@@ -55,10 +57,12 @@ from ready2rip.settings_defs import (
     normalize_lyrics_save_mode,
     normalize_mp3_quality,
     normalize_qaac_quality,
+    normalize_wavpack_level,
     opus_bitrate_label,
     rip_log_aac_quality,
     rip_log_mp3_quality,
     rip_log_qaac_quality,
+    rip_log_wavpack_level,
 )
 from ready2rip.tags.artists import (
     DEFAULT_ARTIST_STYLE,
@@ -90,6 +94,8 @@ __all__ = [
     'OPUS_BITRATES',
     'QAAC_QUALITIES',
     'QAAC_QUALITY_IDS',
+    'WAVPACK_LEVELS',
+    'WAVPACK_LEVEL_IDS',
     'SCHEMA_ID',
     'AppSettings',
     'SettingsStore',
@@ -109,10 +115,12 @@ __all__ = [
     'normalize_lyrics_save_mode',
     'normalize_mp3_quality',
     'normalize_qaac_quality',
+    'normalize_wavpack_level',
     'opus_bitrate_label',
     'rip_log_aac_quality',
     'rip_log_mp3_quality',
     'rip_log_qaac_quality',
+    'rip_log_wavpack_level',
 ]
 
 log = logging.getLogger(__name__)
@@ -230,6 +238,7 @@ class AppSettings:
     output_directory: str = ''  # empty → default_output_directory() (Music)
     encode_format: str = 'flac'
     flac_compression: int = 5
+    wavpack_compression: str = 'high'
     # LAME preset id: v0–v5 or cbr128/192/256/320.
     mp3_quality: str = 'v0'
     aac_quality: str = 'cbr256'
@@ -281,6 +290,8 @@ class AppSettings:
     drive_sample_offset: int = 0
     drive_offset_configured: bool = False
     drive_offset_device: str = ''
+    # Full-disc -Z extract (no secure paranoia / test & copy).
+    burst_mode: bool = False
     burst_fallback: bool = False
     write_rip_log: bool = True
     # Multi-file .cue sheet for secure/accurate rips.
@@ -412,6 +423,9 @@ class SettingsStore:
                 output_directory=s.get_string('output-directory') or '',
                 encode_format=normalize_encode_format(_get_string(s, 'encode-format', 'flac')),
                 flac_compression=s.get_int('flac-compression'),
+                wavpack_compression=normalize_wavpack_level(
+                    _get_string(s, 'wavpack-compression', 'high')
+                ),
                 mp3_quality=_load_mp3_quality(s),
                 aac_quality=(aq := _load_aac_quality(s)),
                 aac_bitrate=(
@@ -462,6 +476,7 @@ class SettingsStore:
                 drive_sample_offset=s.get_int('drive-sample-offset'),
                 drive_offset_configured=s.get_boolean('drive-offset-configured'),
                 drive_offset_device=s.get_string('drive-offset-device'),
+                burst_mode=_get_bool(s, 'burst-mode', False),
                 burst_fallback=s.get_boolean('burst-fallback'),
                 write_rip_log=s.get_boolean('write-rip-log'),
                 write_cue_file=_get_bool(s, 'write-cue-file', True),
@@ -533,6 +548,7 @@ class SettingsStore:
             'output_directory': ('output-directory', 'string'),
             'encode_format': ('encode-format', 'string'),
             'flac_compression': ('flac-compression', 'int'),
+            'wavpack_compression': ('wavpack-compression', 'string'),
             'mp3_quality': ('mp3-quality', 'string'),
             'aac_quality': ('aac-quality', 'string'),
             'aac_bitrate': ('aac-bitrate', 'int'),
@@ -567,6 +583,7 @@ class SettingsStore:
             'drive_sample_offset': ('drive-sample-offset', 'int'),
             'drive_offset_configured': ('drive-offset-configured', 'bool'),
             'drive_offset_device': ('drive-offset-device', 'string'),
+            'burst_mode': ('burst-mode', 'bool'),
             'burst_fallback': ('burst-fallback', 'bool'),
             'write_rip_log': ('write-rip-log', 'bool'),
             'write_cue_file': ('write-cue-file', 'bool'),
@@ -590,6 +607,9 @@ class SettingsStore:
                 if attr == 'mp3_quality':
                     value = normalize_mp3_quality(str(value))
                     current = replace(current, mp3_quality=value)
+                elif attr == 'wavpack_compression':
+                    value = normalize_wavpack_level(str(value))
+                    current = replace(current, wavpack_compression=value)
                 elif attr == 'aac_quality':
                     value = normalize_aac_quality(str(value))
                     current = replace(current, aac_quality=value)

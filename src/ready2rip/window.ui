@@ -58,7 +58,7 @@
               <object class="GtkMenuButton" id="lookup_button">
                 <property name="icon-name">system-search-symbolic</property>
                 <property name="sensitive">false</property>
-                <property name="tooltip-text" translatable="yes">Look up metadata by disc ID, gnudb, or MusicBrainz link</property>
+                <property name="tooltip-text" translatable="yes">Look up metadata by disc ID, gnudb, or a MusicBrainz link</property>
                 <style>
                   <class name="flat"/>
                 </style>
@@ -208,7 +208,7 @@
                                                                     <child>
                                                                       <object class="GtkButton" id="choose_art_button">
                                                                         <property name="icon-name">folder-symbolic</property>
-                                                                        <property name="tooltip-text" translatable="yes">Choose image from file</property>
+                                                                        <property name="tooltip-text" translatable="yes">Choose an image file</property>
                                                                         <style>
                                                                           <class name="circular"/>
                                                                           <class name="osd"/>

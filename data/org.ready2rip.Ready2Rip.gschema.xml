@@ -35,12 +35,14 @@
         <choice value="wav"/>
         <choice value="aiff"/>
         <choice value="flac"/>
+        <choice value="wavpack"/>
+        <choice value="alac"/>
       </choices>
       <default>'flac'</default>
       <summary>Primary encoder / output format (lossless only)</summary>
       <description>
-        The first rip is always lossless (FLAC, WAV, or AIFF). Use Also encode
-        lossy for LAME MP3 / FDK AAC / QAAC / Opus companions.
+        The first rip is always lossless (FLAC, WAV, AIFF, WavPack, or ALAC).
+        Use Also encode lossy for LAME MP3 / FDK AAC / QAAC / Opus companions.
       </description>
     </key>
 
@@ -48,6 +50,23 @@
       <range min="0" max="8"/>
       <default>5</default>
       <summary>FLAC compression level (0–8; 5 is the Default, 8 is Smallest)</summary>
+    </key>
+
+    <key name="wavpack-compression" type="s">
+      <choices>
+        <choice value="fast"/>
+        <choice value="normal"/>
+        <choice value="high"/>
+        <choice value="veryhigh"/>
+        <choice value="extra"/>
+      </choices>
+      <default>'high'</default>
+      <summary>WavPack compression preset</summary>
+      <description>
+        Fast / Normal / High / Very high / High+extra. Uses the wavpack CLI
+        when installed; otherwise ffmpeg -c:a wavpack with a matching
+        compression_level.
+      </description>
     </key>
 
     <key name="mp3-quality" type="s">
@@ -152,7 +171,7 @@
 
     <key name="embed-artwork-lossless" type="b">
       <default>false</default>
-      <summary>Embed album artwork in lossless encodes (FLAC, WAV, AIFF)</summary>
+      <summary>Embed album artwork in lossless encodes (FLAC, WAV, AIFF, WavPack, ALAC)</summary>
     </key>
 
     <key name="fetch-artwork" type="b">
@@ -185,8 +204,8 @@
       <default>600</default>
       <summary>Lossless embed artwork edge length (pixels)</summary>
       <description>
-        Longest edge for covers embedded into FLAC / WAV / AIFF (300–800).
-        Folder cover.jpg stays full resolution. Default is 600.
+        Longest edge for covers embedded into FLAC / WAV / AIFF / WavPack /
+        ALAC (300–800). Folder cover.jpg stays full resolution. Default is 600.
       </description>
     </key>
 
@@ -200,8 +219,8 @@
       <summary>Write iTunes Sound Check (iTunNORM) on iPod-compatible formats</summary>
       <description>
         Converts ReplayGain loudness to iTunNORM for MP3, M4A, AIFF, and WAV.
-        FLAC and Opus are skipped. Requires loudness analysis (same pass as
-        ReplayGain when that option is also on).
+        FLAC, WavPack, and Opus are skipped. Requires loudness analysis (same
+        pass as ReplayGain when that option is also on).
       </description>
     </key>
 
@@ -228,7 +247,7 @@
       <summary>Save lyrics with lossless rips when available</summary>
       <description>
         When enabled, writes lyrics for lossless tracks according to
-        lyrics-save-mode. Lossy Also-encode companions are skipped.
+        lyrics-save-mode. Lossy Also encode companions are skipped.
       </description>
     </key>
 
@@ -340,6 +359,17 @@
       <summary>Device path used when the offset was calibrated</summary>
     </key>
 
+    <key name="burst-mode" type="b">
+      <default>false</default>
+      <summary>Burst rip mode (paranoia disabled)</summary>
+      <description>
+        Off by default. When enabled, every track (or disc image) is extracted
+        once with cdparanoia -Z (no secure paranoia, no test &amp; copy). Much
+        faster than secure mode; not archival-grade. AccurateRip / CTDB may
+        still verify if those options are on.
+      </description>
+    </key>
+
     <key name="burst-fallback" type="b">
       <default>false</default>
       <summary>Burst mode fallback for scratched discs</summary>
@@ -348,6 +378,7 @@
         test &amp; copy retries are exhausted, that track (or image) may be
         recovered once with paranoia disabled (burst mode, -Z). Burst audio
         is not CRC-verified and should only be used for damaged discs.
+        Ignored when Burst mode is on (the whole rip already uses -Z).
       </description>
     </key>
 
@@ -381,7 +412,7 @@
       <default>true</default>
       <summary>Write CUE sheet</summary>
       <description>
-        After a secure rip, write a .cue sheet into the album folder.
+        Write a .cue sheet into the album folder after ripping.
         Per-track rips get a multi-file CUE with INDEX 00 pregaps appended to
         the previous track; Copy Image mode gets a single-file image CUE.
         Mixed-mode / CD-Extra data tracks are listed as MODE1/2352 or MODE2/2352
@@ -395,7 +426,7 @@
       <description>
         Extract every track twice (test then copy), compare CRC32 values, and
         only accept a match after up to three secure retries. Unmatched tracks
-        fail the rip unless Burst Fallback is enabled.
+        fail the rip unless Burst fallback is enabled.
       </description>
     </key>
 
@@ -424,12 +455,12 @@
 
     <key name="copy-image" type="b">
       <default>false</default>
-      <summary>Copy Image</summary>
+      <summary>Copy image</summary>
       <description>
         When enabled, rip one continuous image file for the disc instead of
-        separate per-track files. Enable Write .cue file for a matching image
-        CUE sheet. FLAC or WAV is used for the image (lossy formats fall back
-        to FLAC).
+        separate per-track files. Enable Write CUE sheet for a matching image
+        CUE. Lossless formats are used for the image (lossy primary formats
+        fall back to FLAC).
       </description>
     </key>
 

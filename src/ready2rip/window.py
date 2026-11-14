@@ -74,6 +74,7 @@ from ready2rip.settings import (
     MP3_QUALITIES,
     OPUS_BITRATES,
     QAAC_QUALITIES,
+    WAVPACK_LEVELS,
     SettingsStore,
     default_output_directory,
     normalize_aac_quality,
@@ -84,6 +85,7 @@ from ready2rip.settings import (
     normalize_lyrics_save_mode,
     normalize_mp3_quality,
     normalize_qaac_quality,
+    normalize_wavpack_level,
     opus_bitrate_label,
 )
 from ready2rip.setup_dialog import DriveSetupDialog
@@ -292,12 +294,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         )
         self.extras_group = Adw.PreferencesGroup(
             title='Extras',
-            description='Image layout, hidden audio, logs, and cue sheets',
+            description='Disc image, hidden audio, logs, and CUE sheets',
         )
         self.automation_group = Adw.PreferencesGroup(title='Automation')
         self.encoding_group = Adw.PreferencesGroup(
             title='Encoding',
-            description='Primary format and optional lossy companion',
+            description='Primary lossless format and optional lossy companion',
         )
         self.files_group = Adw.PreferencesGroup(
             title='Files',
@@ -314,15 +316,19 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         )
         self.artwork_group = Adw.PreferencesGroup(
             title='Artwork',
-            description='Download covers and embed into audio files',
+            description='Download covers and embed them into audio files',
         )
         self.tags_group = Adw.PreferencesGroup(
             title='Tags',
-            description=('Loudness, lyrics, ripper comment; Encoded by always names the codec'),
+            description=(
+                'Loudness, lyrics, and ripper comment. '
+                'Encoded by always names the codec'
+            ),
         )
         self.disc_group = Adw.PreferencesGroup(title='Disc')
         self.drive_group = Adw.PreferencesGroup(title='Drive')
         self._flac_levels = [level for level, _label in FLAC_LEVELS]
+        self._wavpack_levels = [level for level, _label in WAVPACK_LEVELS]
         self._mp3_qualities = [qid for qid, _label in MP3_QUALITIES]
         self._aac_qualities = [qid for qid, _label in AAC_QUALITIES]
         self._qaac_qualities = [qid for qid, _label in QAAC_QUALITIES]
@@ -803,7 +809,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             if bits:
                 self.cover_embed_label.set_text('Embed ' + ' · '.join(bits))
                 self.cover_embed_label.set_tooltip_text(
-                    'Embedded cover size — ' + ' / '.join(tip_bits)
+                    'Embedded cover size: ' + ' / '.join(tip_bits)
                 )
                 show_embed = True
         if not show_embed:
@@ -816,7 +822,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         """Detect row on the Drive page; Sample offset nests inside the expander."""
         settings = self.store.get()
         self._setup_row = Adw.ExpanderRow(title='Detect sample offset')
-        self._setup_row.set_tooltip_text('Measure the AccurateRip sample offset for this drive')
+        self._setup_row.set_tooltip_text(
+            "Measure this drive's AccurateRip sample offset"
+        )
 
         # Status checkmark when calibrated (GNOME: symbolic + success).
         self._setup_ok_icon = Gtk.Image()
@@ -881,7 +889,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         else:
             row.set_title('Detect sample offset')
             row.set_subtitle('')
-            row.set_tooltip_text('Measure the AccurateRip sample offset for this drive')
+            row.set_tooltip_text("Measure this drive's AccurateRip sample offset")
             self._setup_ok_icon.set_visible(False)
             btn.set_icon_name('')
             btn.set_label('Detect')
@@ -974,14 +982,16 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _build_drive_settings(self, settings) -> None:
         self._device_row = Adw.EntryRow(title='Device')
         self._device_row.set_text(settings.device or '/dev/sr0')
-        self._device_row.set_tooltip_text('Optical device, for example /dev/sr0')
+        self._device_row.set_tooltip_text('Optical drive path (for example /dev/sr0)')
         self._device_row.connect('changed', self._on_device_path_changed)
         self._add_pref(self.device_group, self._device_row)
         self._build_calibration_row()
 
     def _build_encoding_settings(self, settings, ids: list[str]) -> None:
         self._encoder_row = Adw.ComboRow(title='Format')
-        self._encoder_row.set_tooltip_text('Primary rip is always lossless (FLAC, WAV, or AIFF)')
+        self._encoder_row.set_tooltip_text(
+            'Primary format is always lossless (FLAC, WAV, AIFF, WavPack, or ALAC)'
+        )
         self._encoder_row.set_model(Gtk.StringList.new([label for _id, label in ENCODERS]))
         self._select_combo(self._encoder_row, ids, settings.encode_format)
         self._encoder_row.connect('notify::selected', self._on_encoder_changed)
@@ -993,13 +1003,15 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
         self._also_encode_row = self._make_feature_expander(
             title='Also encode lossy',
-            tooltip='Encode a second lossy format from the same verified rip',
+            tooltip='Encode a second lossy copy from the same verified rip',
             enabled=bool(settings.also_encode),
             handler=self._on_also_encode_toggled,
         )
 
         self._also_format_row = Adw.ComboRow(title='Format')
-        self._also_format_row.set_tooltip_text('Lossy companion (LAME MP3, FDK AAC, QAAC, or Opus)')
+        self._also_format_row.set_tooltip_text(
+            'Lossy companion: LAME MP3, FDK AAC, QAAC, or Opus'
+        )
         self._also_format_row.set_model(Gtk.StringList.new([label for _id, label in ALSO_ENCODERS]))
         self._select_combo(
             self._also_format_row,
@@ -1018,9 +1030,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             Gtk.StringList.new([label for _id, label in ALSO_FOLDER_LAYOUTS])
         )
         self._also_folder_row.set_tooltip_text(
-            'Subfolder by format → Album/FLAC and Album/MP3; '
-            'Same album folder → both extensions together; '
-            'Custom folder → pick a second output root'
+            'Subfolder by format — Album/FLAC and Album/MP3. '
+            'Same album folder — both files together. '
+            'Custom folder — choose a second output root'
         )
         self._select_combo(
             self._also_folder_row,
@@ -1036,7 +1048,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if also_dir_default:
             self._also_directory_row.set_text(also_dir_default)
         self._also_directory_row.set_tooltip_text(
-            'Root folder for the secondary encode when Folder is Custom'
+            'Output root for the lossy encode when Folder is Custom folder'
         )
         self._also_directory_row.connect('changed', self._on_also_directory_changed)
         self._also_directory_row.add_suffix(
@@ -1061,10 +1073,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             Gtk.StringList.new([label for _sid, label in EXISTING_FILE_POLICIES])
         )
         self._existing_files_row.set_tooltip_text(
-            'Overwrite — replace files (default). '
+            'Overwrite — replace existing files (default). '
             'Ask — confirm when destinations already exist. '
-            'Skip existing — leave present files alone. '
-            'Keep both — write new files as Title (2).ext.'
+            'Skip existing — leave present files unchanged. '
+            'Keep both — write new files as Title (2).ext'
         )
         self._select_combo(
             self._existing_files_row,
@@ -1119,9 +1131,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             normalize_artist_style(settings.artist_style),
         )
         self._artist_style_row.set_tooltip_text(
-            'How multiple artists appear in filenames. Tags use native '
-            'multi-value artist fields; feat. puts guests on the title '
-            '(Track feat. Guest & Other) and keeps the primary artist.'
+            'How multiple artists appear in filenames. Tags keep native '
+            'multi-value artist fields. feat. moves guests onto the title '
+            '(Track feat. Guest & Other) and keeps the primary artist'
         )
         self._artist_style_row.connect('notify::selected', self._on_artist_style_changed)
         self._add_pref(self.naming_group, self._artist_style_row)
@@ -1132,7 +1144,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 '_test_copy_row',
                 self.verify_group,
                 'Test and copy',
-                'Rip twice and require matching CRCs',
+                'Extract each track twice and require matching CRCs',
                 settings.test_and_copy,
                 self._on_test_copy_toggled,
             ),
@@ -1140,7 +1152,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 '_ar_row',
                 self.verify_group,
                 'AccurateRip',
-                'Verify against the AccurateRip database',
+                'Verify tracks against the AccurateRip database',
                 settings.verify_accuraterip,
                 self._on_ar_toggled,
             ),
@@ -1148,7 +1160,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 '_ctdb_row',
                 self.verify_group,
                 'CTDB',
-                'Verify against the CUETools Database',
+                'Verify tracks against the CUETools Database',
                 settings.verify_ctdb,
                 self._on_ctdb_toggled,
             ),
@@ -1156,15 +1168,23 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 '_submit_ctdb_row',
                 self.verify_group,
                 'Submit to CTDB',
-                'Confirm matches, or submit new parity for secure high-quality rips',
+                'Confirm matches or submit new parity from secure, high-quality rips',
                 settings.submit_ctdb,
                 self._on_submit_ctdb_toggled,
+            ),
+            (
+                '_burst_mode_row',
+                self.verify_group,
+                'Burst mode',
+                'Fast single-pass extract with paranoia off (-Z). Not archival-grade',
+                settings.burst_mode,
+                self._on_burst_mode_toggled,
             ),
             (
                 '_burst_row',
                 self.verify_group,
                 'Burst fallback',
-                'Allow insecure -Z recovery after secure retries fail',
+                'Allow one insecure -Z recovery after secure retries fail',
                 settings.burst_fallback,
                 self._on_burst_toggled,
             ),
@@ -1172,7 +1192,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 '_copy_image_row',
                 self.extras_group,
                 'Copy image',
-                'One continuous image file instead of per-track files',
+                'Write one continuous disc image instead of per-track files',
                 settings.copy_image,
                 self._on_copy_image_toggled,
             ),
@@ -1180,7 +1200,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 '_htoa_row',
                 self.extras_group,
                 'Hidden track (HTOA)',
-                'Save non-silent audio before track 1',
+                'Save non-silent audio before track 1 as track 00',
                 settings.rip_htoa,
                 self._on_htoa_toggled,
             ),
@@ -1188,7 +1208,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 '_data_tracks_row',
                 self.extras_group,
                 'Data tracks',
-                'Rip mixed-mode / CD-Extra data as raw .bin with lossless output only',
+                'Rip mixed-mode / CD-Extra data as raw .bin (lossless rips only)',
                 settings.rip_data_tracks,
                 self._on_data_tracks_toggled,
             ),
@@ -1204,7 +1224,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 '_cue_row',
                 self.extras_group,
                 'Write CUE sheet',
-                'Create a .cue file for the rip',
+                'Write a .cue sheet next to the ripped files',
                 settings.write_cue_file,
                 self._on_cue_toggled,
             ),
@@ -1220,7 +1240,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 '_auto_eject_row',
                 self.automation_group,
                 'Auto-eject',
-                'Open the tray after a successful rip',
+                'Eject the disc after a successful rip',
                 settings.auto_eject,
                 self._on_auto_eject_toggled,
             ),
@@ -1231,6 +1251,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             )
             setattr(self, attr, row)
             self._add_pref(group, row)
+        self._sync_burst_mode_sensitivity(bool(settings.burst_mode))
 
     def _build_embed_size_expander(
         self,
@@ -1263,19 +1284,19 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
         self._auto_lookup_row = self._make_feature_expander(
             title='Look up automatically',
-            tooltip='Fetch metadata when a disc is detected',
+            tooltip='Fetch album and track metadata when a disc is detected',
             enabled=settings.auto_lookup_metadata,
             handler=self._on_auto_lookup_toggled,
         )
         self._mb_row = self._make_switch_row(
             title='MusicBrainz',
-            tooltip='Preferred album and track metadata',
+            tooltip='Preferred source for album and track metadata',
             active=settings.use_musicbrainz,
             handler=self._on_mb_toggled,
         )
         self._freedb_row = self._make_switch_row(
             title='gnudb',
-            tooltip='FreeDB-compatible disc lookup',
+            tooltip='FreeDB-compatible disc lookup (fallback)',
             active=settings.use_freedb,
             handler=self._on_freedb_toggled,
         )
@@ -1286,19 +1307,19 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
         self._fetch_art_row = self._make_feature_expander(
             title='Download artwork',
-            tooltip='Fetch the highest-quality cover available',
+            tooltip='Download the best available cover art for the release',
             enabled=settings.fetch_artwork,
             handler=self._on_fetch_art_toggled,
         )
         self._art_caa_row = self._make_switch_row(
             title='Cover Art Archive',
-            tooltip='MusicBrainz release artwork',
+            tooltip='Artwork from the MusicBrainz Cover Art Archive',
             active=settings.artwork_source_caa,
             handler=self._on_art_caa_toggled,
         )
         self._art_itunes_row = self._make_switch_row(
             title='iTunes',
-            tooltip='Apple Music store artwork',
+            tooltip='Artwork from the Apple Music / iTunes store',
             active=settings.artwork_source_itunes,
             handler=self._on_art_itunes_toggled,
         )
@@ -1310,19 +1331,25 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._art_size_values = [px for px, _label in ARTWORK_SIZES]
         self._embed_lossy_row, self._art_size_lossy_row = self._build_embed_size_expander(
             title='Embed in lossy',
-            tooltip='Embed into MP3 / M4A / Opus (no loose cover.jpg beside lossy files)',
+            tooltip=(
+                'Embed cover art into MP3 / M4A / Opus '
+                '(no loose cover.jpg beside lossy files)'
+            ),
             enabled=settings.embed_artwork,
             size=settings.artwork_max_size,
-            size_tooltip='Longest edge for lossy embeds (300–800). Default 600.',
+            size_tooltip='Longest edge for lossy embeds (300–800 px). Default 600.',
             on_toggle=self._on_embed_lossy_toggled,
             on_size=self._on_art_size_lossy_changed,
         )
         self._embed_lossless_row, self._art_size_lossless_row = self._build_embed_size_expander(
             title='Embed in lossless',
-            tooltip='Embed into FLAC / WAV / AIFF; folder cover.jpg stays full resolution',
+            tooltip=(
+                'Embed cover art into FLAC / WAV / AIFF / WavPack / ALAC. '
+                'Folder cover.jpg stays full resolution'
+            ),
             enabled=settings.embed_artwork_lossless,
             size=settings.artwork_max_size_lossless,
-            size_tooltip='Longest edge for lossless embeds (300–800). Default 600.',
+            size_tooltip='Longest edge for lossless embeds (300–800 px). Default 600.',
             on_toggle=self._on_embed_lossless_toggled,
             on_size=self._on_art_size_lossless_changed,
         )
@@ -1333,7 +1360,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             (
                 '_rg_row',
                 'ReplayGain',
-                'Write track and album loudness tags',
+                'Write track and album ReplayGain loudness tags',
                 settings.apply_replaygain,
                 self._on_rg_toggled,
             ),
@@ -1341,14 +1368,14 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 '_sound_check_row',
                 'iTunes Sound Check',
                 'Write iTunNORM for Sound Check on MP3, M4A, AIFF, and WAV '
-                '(skipped for FLAC and Opus)',
+                '(skipped for FLAC, WavPack, and Opus)',
                 settings.write_sound_check,
                 self._on_sound_check_toggled,
             ),
             (
                 '_ripper_tag_row',
                 'Ripper tag',
-                'Write ready2rip and its version into the comment tag; '
+                'Write ready2rip and its version into the comment tag. '
                 'Encoded by always records the codec tool and version',
                 settings.add_ripper_tag,
                 self._on_ripper_tag_toggled,
@@ -1356,8 +1383,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             (
                 '_fetch_lyrics_row',
                 'Fetch lyrics',
-                'Look up lyrics on LRCLIB after metadata (artist, title, album, '
-                'duration). Off by default.',
+                'Look up lyrics on LRCLIB after metadata '
+                '(artist, title, album, and duration)',
                 settings.fetch_lyrics,
                 self._on_fetch_lyrics_toggled,
             ),
@@ -1371,7 +1398,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._lyrics_save_modes = [mid for mid, _label in LYRICS_SAVE_MODES]
         self._embed_lyrics_row = self._make_feature_expander(
             title='Save lyrics (lossless)',
-            tooltip=('Write lyrics with lossless rips only. Lossy Also-encode files are skipped.'),
+            tooltip=(
+                'Write lyrics with lossless rips only. '
+                'Lossy Also encode companions are skipped'
+            ),
             enabled=settings.embed_lyrics,
             handler=self._on_embed_lyrics_toggled,
         )
@@ -1385,7 +1415,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             normalize_lyrics_save_mode(settings.lyrics_save_mode),
         )
         self._lyrics_mode_row.set_tooltip_text(
-            'Embed in tags, write .lrc/.txt sidecars next to each track, or both'
+            'Embed in tags, write .lrc/.txt sidecars beside each track, or both'
         )
         self._lyrics_mode_row.connect('notify::selected', self._on_lyrics_mode_changed)
         self._embed_lyrics_row.add_row(self._lyrics_mode_row)
@@ -1421,6 +1451,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             (self._ar_row, self._on_ar_toggled),
             (self._ctdb_row, self._on_ctdb_toggled),
             (self._submit_ctdb_row, self._on_submit_ctdb_toggled),
+            (self._burst_mode_row, self._on_burst_mode_toggled),
             (self._burst_row, self._on_burst_toggled),
             (self._log_row, self._on_log_toggled),
             (self._cue_row, self._on_cue_toggled),
@@ -1504,7 +1535,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._ar_row.set_active(settings.verify_accuraterip)
             self._ctdb_row.set_active(settings.verify_ctdb)
             self._submit_ctdb_row.set_active(settings.submit_ctdb)
+            self._burst_mode_row.set_active(settings.burst_mode)
             self._burst_row.set_active(settings.burst_fallback)
+            self._sync_burst_mode_sensitivity(settings.burst_mode)
             self._log_row.set_active(settings.write_rip_log)
             self._cue_row.set_active(settings.write_cue_file)
             self._auto_rip_row.set_active(settings.auto_rip)
@@ -1561,6 +1594,17 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             except ValueError:
                 selected = self._flac_levels.index(5) if 5 in self._flac_levels else 0
             return labels, selected
+        if fmt == 'wavpack':
+            labels = [label for _level, label in WAVPACK_LEVELS]
+            try:
+                selected = self._wavpack_levels.index(
+                    normalize_wavpack_level(settings.wavpack_compression)
+                )
+            except ValueError:
+                selected = (
+                    self._wavpack_levels.index('high') if 'high' in self._wavpack_levels else 0
+                )
+            return labels, selected
         if fmt == 'mp3':
             labels = [label for _qid, label in MP3_QUALITIES]
             try:
@@ -1603,10 +1647,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         kind_attr: str,
         handler,
     ) -> None:
-        if fmt in ('', 'wav', 'aiff'):
-            # Stay in-layout (no height jump); Quality is N/A for PCM formats.
+        if fmt in ('', 'wav', 'aiff', 'alac'):
+            # Stay in-layout (no height jump); Quality is N/A for PCM / ALAC.
             row.set_sensitive(False)
-            row.set_subtitle('Not used for this format')
+            row.set_subtitle('Not applicable')
             setattr(self, kind_attr, None)
             return
         row.set_sensitive(True)
@@ -1647,7 +1691,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         # Keep the custom-folder row in layout; dim it unless Folder is Custom.
         self._also_directory_row.set_sensitive(show_also_dir)
         self._also_directory_row.set_tooltip_text(
-            'Root folder for the secondary encode'
+            'Output root for the lossy encode'
             if show_also_dir
             else 'Available when Folder is Custom folder'
         )
@@ -1662,13 +1706,17 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._also_quality_row.set_sensitive(True)
             self._also_folder_row.set_sensitive(True)
         if also_fmt == 'qaac' and not qaac_available():
-            self._also_format_row.set_subtitle('Needs Wine + qaac.exe + Apple AAC codecs')
+            self._also_format_row.set_subtitle(
+                'Requires Wine, qaac.exe, and Apple AAC codecs'
+            )
         else:
             self._also_format_row.set_subtitle('')
 
     def _apply_quality_selection(self, fmt: str, index: int) -> None:
         if fmt == 'flac' and 0 <= index < len(self._flac_levels):
             self.store.update(flac_compression=self._flac_levels[index])
+        elif fmt == 'wavpack' and 0 <= index < len(self._wavpack_levels):
+            self.store.update(wavpack_compression=self._wavpack_levels[index])
         elif fmt == 'mp3' and 0 <= index < len(self._mp3_qualities):
             self.store.update(mp3_quality=self._mp3_qualities[index])
         elif fmt == 'aac' and 0 <= index < len(self._aac_qualities):
@@ -1835,7 +1883,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         idx = combo.get_selected()
         custom = 0 <= idx < len(schemes) and schemes[idx].id == 'custom'
         entry.set_sensitive(custom)
-        entry.set_tooltip_text(help_text if custom else 'Select Custom… to edit')
+        entry.set_tooltip_text(
+            help_text if custom else 'Choose Custom… to edit this template'
+        )
         if not custom and entry.get_text():
             self._with_handler_blocked(
                 entry,
@@ -2108,7 +2158,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _on_copy_image_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(copy_image=row.get_active())
         if row.get_active():
-            self._toast('Copy image on — rip will write one continuous disc image')
+            self._toast('Copy image on — rip writes one continuous disc image')
 
     def _on_rg_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(apply_replaygain=row.get_active())
@@ -2146,6 +2196,21 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _on_submit_ctdb_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(submit_ctdb=row.get_active())
 
+    def _on_burst_mode_toggled(self, row: Adw.SwitchRow, *_args) -> None:
+        enabled = bool(row.get_active())
+        self.store.update(burst_mode=enabled)
+        self._sync_burst_mode_sensitivity(enabled)
+        if enabled:
+            self._toast(
+                'Burst mode on — fast extract, not archival-grade',
+                timeout=4,
+            )
+
+    def _sync_burst_mode_sensitivity(self, burst_mode: bool) -> None:
+        # Secure-only controls are unused while the whole rip is -Z.
+        self._test_copy_row.set_sensitive(not burst_mode)
+        self._burst_row.set_sensitive(not burst_mode)
+
     def _on_burst_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(burst_fallback=row.get_active())
 
@@ -2155,7 +2220,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _on_cue_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(write_cue_file=row.get_active())
         if row.get_active():
-            self._toast('Write .cue on — CUE sheet after secure rips')
+            self._toast('Write CUE on — sheet saved with the rip')
 
     def _on_auto_rip_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(auto_rip=row.get_active())
@@ -2373,8 +2438,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
         settings = self.store.get()
         if needs_drive_setup(self.store):
-            if settings.verify_accuraterip or settings.verify_ctdb:
-                # Hard gate: AR/CTDB checksums need a measured drive offset.
+            if (
+                settings.verify_accuraterip
+                or settings.verify_ctdb
+                or settings.submit_ctdb
+            ):
+                # Hard gate: AR/CTDB verify and CTDB submit need a measured offset.
                 self._require_offset_calibration()
                 return
             # Verification off — offset 0 is fine for an unverified rip.
@@ -2391,6 +2460,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             targets.append('AccurateRip')
         if settings.verify_ctdb:
             targets.append('CTDB')
+        if settings.submit_ctdb and 'CTDB' not in targets:
+            targets.append('CTDB submit')
         which = ' and '.join(targets) if targets else 'verification'
         dialog = Adw.AlertDialog(
             heading='Sample offset required',
@@ -2459,6 +2530,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             output_directory=settings.resolved_output_directory(),
             encode_format=normalize_encode_format(settings.encode_format),
             flac_compression=settings.flac_compression,
+            wavpack_compression=normalize_wavpack_level(settings.wavpack_compression),
             mp3_quality=settings.mp3_quality,
             aac_quality=settings.aac_quality,
             aac_bitrate=settings.aac_bitrate,
@@ -2499,10 +2571,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             offset_configured=bool(settings.drive_offset_configured),
             disc_info=self._disc,
             disc_track_count=self._disc.track_count,
+            burst_mode=settings.burst_mode,
             burst_fallback=settings.burst_fallback,
             write_rip_log=settings.write_rip_log,
             write_cue_file=settings.write_cue_file,
-            test_and_copy=settings.test_and_copy,
+            test_and_copy=settings.test_and_copy and not settings.burst_mode,
             rip_htoa=settings.rip_htoa,
             rip_data_tracks=settings.rip_data_tracks,
             copy_image=settings.copy_image,
@@ -2848,11 +2921,18 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if result.ctdb:
             matches = sum(1 for r in result.ctdb if r.confidence == CtdbConfidence.MATCH)
             ar_bits.append(f'CTDB {matches}/{len(result.ctdb)}')
+        intentional_burst = bool(self.store.get().burst_mode)
         if result.burst_tracks:
             n_burst = len(result.burst_tracks)
-            ar_bits.append(
-                f'WARNING: insecure burst (-Z) on {n_burst} track{"s" if n_burst != 1 else ""}'
-            )
+            if intentional_burst:
+                ar_bits.append(
+                    f'burst mode (-Z) · {n_burst} track{"s" if n_burst != 1 else ""}'
+                )
+            else:
+                ar_bits.append(
+                    f'WARNING: insecure burst (-Z) on '
+                    f'{n_burst} track{"s" if n_burst != 1 else ""}'
+                )
         if result.log_path is not None:
             ar_bits.append('log saved')
         detail = f'{n} file{"s" if n != 1 else ""} saved to {dest}'
@@ -2868,12 +2948,19 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         GLib.timeout_add(560, self._release_banner)
         if result.burst_tracks:
             n_burst = len(result.burst_tracks)
-            self._toast(
-                f'Rip complete · {n} file(s) · WARNING: insecure burst on '
-                f'{n_burst} track{"s" if n_burst != 1 else ""} '
-                f'(not archival-grade)',
-                timeout=5,
-            )
+            if intentional_burst:
+                self._toast(
+                    f'Rip complete · {n} file(s) · burst mode '
+                    f'({n_burst} track{"s" if n_burst != 1 else ""})',
+                    timeout=4,
+                )
+            else:
+                self._toast(
+                    f'Rip complete · {n} file(s) · WARNING: insecure burst on '
+                    f'{n_burst} track{"s" if n_burst != 1 else ""} '
+                    f'(not archival-grade)',
+                    timeout=5,
+                )
         else:
             self._toast(f'Rip complete · {n} file(s)', timeout=4)
         # Show per-track AR/CTDB outcome in the track list subtitles when available.
@@ -3434,7 +3521,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 if not needs_drive_setup(self.store):
                     self._start_rip_after_offset_check()
                 else:
-                    self._toast('Calibrate the sample offset to start ripping')
+                    self._toast('Calibrate the sample offset before ripping')
 
         dialog.connect('closed', on_closed)
         dialog.present(self)
@@ -3461,7 +3548,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
         artist_row = Adw.EntryRow(title='Album artist')
         artist_row.set_tooltip_text(
-            'Multiple artists: separate with a semicolon (e.g. Artist One; Artist Two)'
+            'Separate multiple artists with a semicolon '
+            '(for example Artist One; Artist Two)'
         )
         artist_row.connect('changed', self._on_album_field_changed)
         self.album_edit_group.add(artist_row)
@@ -3469,7 +3557,10 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._album_artist_row = artist_row
 
         date_row = Adw.EntryRow(title='Date')
-        date_row.set_tooltip_text('Release date as YYYY, YYYY-MM, or YYYY-MM-DD (e.g. 1997-03-01)')
+        date_row.set_tooltip_text(
+            'Release date as YYYY, YYYY-MM, or YYYY-MM-DD '
+            '(for example 1997-03-01)'
+        )
         date_row.connect('changed', self._on_album_field_changed)
         self.album_edit_group.add(date_row)
         self._album_field_rows.append(date_row)
@@ -3477,8 +3568,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
         genre_row = Adw.EntryRow(title='Genre')
         genre_row.set_tooltip_text(
-            'Album genre (e.g. rock, jazz). Top MusicBrainz genre, '
-            'or gnudb / CD-Text when MB has none.'
+            'Album genre (for example Rock or Jazz). Prefers MusicBrainz; '
+            'falls back to gnudb or CD-Text'
         )
         genre_row.connect('changed', self._on_album_field_changed)
         self.album_edit_group.add(genre_row)
@@ -3487,7 +3578,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
         disc_row = Adw.EntryRow(title='Disc')
         disc_row.set_text('1/1')
-        disc_row.set_tooltip_text('Disc as N/M (e.g. 1/1 or 2/3) — DISCNUMBER / TPOS')
+        disc_row.set_tooltip_text(
+            'Disc number as N/M (for example 1/1 or 2/3)'
+        )
         disc_row.connect('changed', self._on_album_field_changed)
         self.album_edit_group.add(disc_row)
         self._album_field_rows.append(disc_row)
@@ -3638,7 +3731,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         btn_edit = Gtk.Button(label='Edit')
         btn_edit.add_css_class('flat')
-        btn_edit.set_tooltip_text('Edit titles and artists')
+        btn_edit.set_tooltip_text('Edit track titles and artists')
         btn_edit.connect('clicked', self._on_tracks_edit_toggled)
         btn_artist = Gtk.Button(label='Album artist')
         btn_artist.add_css_class('flat')
@@ -3869,7 +3962,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             placeholder='Artist One; Artist Two',
             tooltip=(
                 f'Artist for track {number:02d}. '
-                'Multiple artists: separate with a semicolon (e.g. A; B)'
+                'Separate multiple artists with a semicolon '
+                '(for example A; B)'
             ),
             css_class='ready2rip-track-artist',
         )

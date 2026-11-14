@@ -26,7 +26,19 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-11-13">
+    <release version="@APPLICATION_VERSION@" date="2026-11-14">
+      <description>
+        <p>
+          0.4.46: Add WavPack and ALAC primary lossless encodes, optional Burst
+          mode (-Z) for fast rips, archival fail-closed checks (AccurateRip /
+          CTDB mismatch, unexpected burst recovery, offset silence risk, HTOA
+          hard-fail), ReplayGain album gain from the lossless primary and
+          correct Opus R128 tags, secure offset confirm after calibration, and
+          polished Settings hints.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.45" date="2026-11-13">
       <description>
         <p>
           0.4.45: Add Existing files policy (Overwrite / Ask / Skip / Keep both),

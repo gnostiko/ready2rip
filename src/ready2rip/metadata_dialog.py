@@ -43,7 +43,7 @@ class MetadataPickerDialog(Adw.Dialog):
         clamp = Adw.Clamp(maximum_size=500, tightening_threshold=400)
         group = Adw.PreferencesGroup(
             title='Matches',
-            description='Select the release that matches your disc',
+            description='Choose the release that matches this disc',
             margin_top=12,
             margin_bottom=12,
             margin_start=12,

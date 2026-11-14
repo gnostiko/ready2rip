@@ -56,6 +56,62 @@ class ReplayGainValues:
     album_peak: float | None = None
 
 
+# Opus R128_* uses −23 LUFS; RG2 values are relative to −18 LUFS.
+_RG2_TO_R128_OFFSET_DB = 5.0
+
+_LEGACY_RG_KEYS = (
+    'REPLAYGAIN_TRACK_GAIN',
+    'REPLAYGAIN_TRACK_PEAK',
+    'REPLAYGAIN_TRACK_RANGE',
+    'REPLAYGAIN_ALBUM_GAIN',
+    'REPLAYGAIN_ALBUM_PEAK',
+    'REPLAYGAIN_ALBUM_RANGE',
+    'REPLAYGAIN_REFERENCE_LOUDNESS',
+    'R128_TRACK_GAIN',
+    'R128_ALBUM_GAIN',
+)
+
+
+def rg2_db_to_r128_q78(gain_db: float) -> int:
+    """Convert RG2 gain (dB @ −18 LUFS) to Opus ``R128_*`` Q7.8 integer (@ −23)."""
+    r128_db = float(gain_db) - _RG2_TO_R128_OFFSET_DB
+    raw = int(round(r128_db * 256.0))
+    return max(-32768, min(32767, raw))
+
+
+def _scrub_vorbis_rg_keys(audio) -> None:
+    """Drop known ReplayGain / R128 comment keys (any case) before rewrite."""
+    keys = list(audio.keys())
+    wanted = {k.lower() for k in _LEGACY_RG_KEYS}
+    for key in keys:
+        if key.lower() in wanted:
+            del audio[key]
+
+
+def _scrub_id3_rg_txxx(tags) -> None:
+    """Remove TXXX frames whose description is a known RG / R128 key."""
+    wanted = {k.lower() for k in _LEGACY_RG_KEYS}
+    for frame in list(tags.getall('TXXX')):
+        desc = (getattr(frame, 'desc', None) or '').strip().lower()
+        if desc in wanted:
+            tags.delall(f'TXXX:{frame.desc}')
+
+
+def _scrub_mp4_rg_keys(audio) -> None:
+    """Remove iTunes freeform ReplayGain / R128 atoms."""
+    prefix = '----:com.apple.iTunes:'
+    for key in _LEGACY_RG_KEYS:
+        atom = f'{prefix}{key}'
+        if atom in audio:
+            del audio[atom]
+        # Case variants.
+        for existing in list(audio.keys()):
+            if not isinstance(existing, str):
+                continue
+            if existing.lower() == atom.lower():
+                del audio[existing]
+
+
 class TagWriter:
     """Write the trimmed tag set, ReplayGain, and embedded pictures."""
 
@@ -129,6 +185,8 @@ class TagWriter:
 
         if suffix == '.flac':
             self._tag_flac(path, **kw)
+        elif suffix == '.wv':
+            self._tag_wavpack(path, **kw)
         elif suffix == '.mp3':
             self._tag_mp3(path, **kw)
         elif suffix in {'.m4a', '.mp4', '.aac'}:
@@ -148,6 +206,19 @@ class TagWriter:
             from mutagen.flac import FLAC
 
             audio = FLAC(path)
+            _scrub_vorbis_rg_keys(audio)
+            audio['REPLAYGAIN_TRACK_GAIN'] = [f'{values.track_gain_db:.2f} dB']
+            audio['REPLAYGAIN_TRACK_PEAK'] = [f'{values.track_peak:.6f}']
+            if values.album_gain_db is not None:
+                audio['REPLAYGAIN_ALBUM_GAIN'] = [f'{values.album_gain_db:.2f} dB']
+            if values.album_peak is not None:
+                audio['REPLAYGAIN_ALBUM_PEAK'] = [f'{values.album_peak:.6f}']
+            audio.save()
+        elif suffix == '.wv':
+            from mutagen.wavpack import WavPack
+
+            audio = WavPack(path)
+            _scrub_vorbis_rg_keys(audio)
             audio['REPLAYGAIN_TRACK_GAIN'] = [f'{values.track_gain_db:.2f} dB']
             audio['REPLAYGAIN_TRACK_PEAK'] = [f'{values.track_peak:.6f}']
             if values.album_gain_db is not None:
@@ -163,8 +234,7 @@ class TagWriter:
             if audio.tags is None:
                 audio.add_tags()
             assert audio.tags is not None
-            audio.tags.delall('TXXX:REPLAYGAIN_TRACK_GAIN')
-            audio.tags.delall('TXXX:REPLAYGAIN_TRACK_PEAK')
+            _scrub_id3_rg_txxx(audio.tags)
             audio.tags.add(
                 TXXX(
                     encoding=3,
@@ -180,7 +250,6 @@ class TagWriter:
                 )
             )
             if values.album_gain_db is not None:
-                audio.tags.delall('TXXX:REPLAYGAIN_ALBUM_GAIN')
                 audio.tags.add(
                     TXXX(
                         encoding=3,
@@ -189,7 +258,6 @@ class TagWriter:
                     )
                 )
             if values.album_peak is not None:
-                audio.tags.delall('TXXX:REPLAYGAIN_ALBUM_PEAK')
                 audio.tags.add(
                     TXXX(
                         encoding=3,
@@ -202,6 +270,7 @@ class TagWriter:
             from mutagen.mp4 import MP4
 
             audio = MP4(path)
+            _scrub_mp4_rg_keys(audio)
             audio['----:com.apple.iTunes:REPLAYGAIN_TRACK_GAIN'] = [
                 f'{values.track_gain_db:.2f} dB'.encode()
             ]
@@ -217,15 +286,21 @@ class TagWriter:
                     f'{values.album_peak:.6f}'.encode()
                 ]
             audio.save()
-        elif suffix in {'.opus', '.ogg'}:
+        elif suffix == '.opus':
+            # RFC 7845: R128_* @ −23 LUFS (Q7.8); do not keep REPLAYGAIN_*.
             from mutagen.oggopus import OggOpus
 
-            try:
-                audio = OggOpus(path)
-            except Exception:
-                from mutagen.oggvorbis import OggVorbis
+            audio = OggOpus(path)
+            _scrub_vorbis_rg_keys(audio)
+            audio['R128_TRACK_GAIN'] = [str(rg2_db_to_r128_q78(values.track_gain_db))]
+            if values.album_gain_db is not None:
+                audio['R128_ALBUM_GAIN'] = [str(rg2_db_to_r128_q78(values.album_gain_db))]
+            audio.save()
+        elif suffix in {'.ogg'}:
+            from mutagen.oggvorbis import OggVorbis
 
-                audio = OggVorbis(path)
+            audio = OggVorbis(path)
+            _scrub_vorbis_rg_keys(audio)
             audio['REPLAYGAIN_TRACK_GAIN'] = [f'{values.track_gain_db:.2f} dB']
             audio['REPLAYGAIN_TRACK_PEAK'] = [f'{values.track_peak:.6f}']
             if values.album_gain_db is not None:
@@ -293,6 +368,16 @@ class TagWriter:
                 pic.width = width
                 pic.height = height
             audio.add_picture(pic)
+            audio.save()
+        elif suffix == '.wv':
+            from mutagen.apev2 import APEBinaryValue
+            from mutagen.wavpack import WavPack
+
+            audio = WavPack(path)
+            # APEv2 cover: ``filename\\0`` + image bytes.
+            ext = 'png' if mime == 'image/png' else 'jpg'
+            payload = f'cover.{ext}'.encode('utf-8') + b'\x00' + image_bytes
+            audio['Cover Art (front)'] = APEBinaryValue(payload)
             audio.save()
         elif suffix == '.mp3':
             from mutagen.id3 import APIC, ID3
@@ -379,14 +464,13 @@ class TagWriter:
         audio = self._open_id3_container(path, container=container)
         tags = audio.tags
         assert tags is not None
+        _scrub_id3_rg_txxx(tags)
         for desc, text in (
             ('REPLAYGAIN_TRACK_GAIN', f'{values.track_gain_db:.2f} dB'),
             ('REPLAYGAIN_TRACK_PEAK', f'{values.track_peak:.6f}'),
         ):
-            tags.delall(f'TXXX:{desc}')
             tags.add(TXXX(encoding=3, desc=desc, text=[text]))
         if values.album_gain_db is not None:
-            tags.delall('TXXX:REPLAYGAIN_ALBUM_GAIN')
             tags.add(
                 TXXX(
                     encoding=3,
@@ -395,7 +479,6 @@ class TagWriter:
                 )
             )
         if values.album_peak is not None:
-            tags.delall('TXXX:REPLAYGAIN_ALBUM_PEAK')
             tags.add(
                 TXXX(
                     encoding=3,
@@ -470,6 +553,14 @@ class TagWriter:
         from mutagen.flac import FLAC
 
         audio = FLAC(path)
+        self._apply_vorbis(audio, **kw)
+        audio.save()
+
+    def _tag_wavpack(self, path: Path, **kw) -> None:
+        """WavPack APEv2 tags (same field names as Vorbis comments)."""
+        from mutagen.wavpack import WavPack
+
+        audio = WavPack(path)
         self._apply_vorbis(audio, **kw)
         audio.save()
 

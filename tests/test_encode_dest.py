@@ -50,6 +50,8 @@ def test_encode_format_list_forces_lossless_primary() -> None:
 def test_normalize_encode_format() -> None:
     assert normalize_encode_format('flac') == 'flac'
     assert normalize_encode_format('WAV') == 'wav'
+    assert normalize_encode_format('wavpack') == 'wavpack'
+    assert normalize_encode_format('alac') == 'alac'
     assert normalize_encode_format('mp3') == 'flac'
     assert normalize_encode_format('opus') == 'flac'
 
@@ -79,6 +81,8 @@ def test_format_folder_name() -> None:
     assert format_folder_name('qaac') == 'M4A'
     assert format_folder_name('opus') == 'Opus'
     assert format_folder_name('aiff') == 'AIFF'
+    assert format_folder_name('wavpack') == 'WavPack'
+    assert format_folder_name('alac') == 'ALAC'
 
 
 def test_is_lossy_format() -> None:
@@ -89,6 +93,8 @@ def test_is_lossy_format() -> None:
     assert not is_lossy_format('flac')
     assert not is_lossy_format('wav')
     assert not is_lossy_format('aiff')
+    assert not is_lossy_format('wavpack')
+    assert not is_lossy_format('alac')
 
 
 def test_should_embed_artwork_for_format() -> None:

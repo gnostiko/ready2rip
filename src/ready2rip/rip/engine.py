@@ -33,6 +33,7 @@ from ready2rip.disc.htoa import (
 )
 from ready2rip.disc.overread import (
     OverreadCapability,
+    offset_silence_risk,
     overread_span,
     per_track_overread_read_span,
     probe_overread,
@@ -59,6 +60,7 @@ from ready2rip.rip.cue import (
 from ready2rip.rip.encode import (
     aac_encode_argv,
     aiff_encode_argv,
+    alac_encode_argv,
     encoder_tag_for_format,
     flac_encode_argv,
     mp3_encode_argv,
@@ -66,10 +68,13 @@ from ready2rip.rip.encode import (
     opus_ffmpeg_argv,
     qaac_available,
     qaac_encode_argv,
+    wavpack_encode_argv,
+    wavpack_ffmpeg_argv,
 )
 from ready2rip.rip.encode_dest import (
     audio_dir_for_format,
     encode_format_list,
+    format_folder_name,
     is_lossless_extension,
     is_lossless_format,
     is_lossy_format,
@@ -154,8 +159,9 @@ class RipJob:
     device: str
     track_numbers: list[int]
     output_directory: Path
-    encode_format: str = 'flac'  # flac | wav | aiff (+ lossy via also-encode)
+    encode_format: str = 'flac'  # flac | wav | aiff | wavpack | alac (+ lossy via also-encode)
     flac_compression: int = 5
+    wavpack_compression: str = 'high'  # fast | normal | high | veryhigh | extra
     mp3_quality: str = 'v0'  # LAME v0–v5 or cbr128/192/256/320
     aac_quality: str = 'cbr256'  # FDK VBR 1–5 or cbr128/192/256/320
     aac_bitrate: int = 256  # legacy; prefer aac_quality
@@ -196,7 +202,10 @@ class RipJob:
     disc_info: DiscInfo | None = None
     # Total tracks on the disc (for AR first/last sample skip), not just selected.
     disc_track_count: int = 0
+    # Full-rip -Z (paranoia off). Skips secure passes and test & copy.
+    burst_mode: bool = False
     # Optional insecure -Z recovery after secure failure (off by default).
+    # Ignored when burst_mode is True.
     burst_fallback: bool = False
     # Expected minimum WAV size as a fraction of ideal CDDA size (near complete).
     min_wav_size_ratio: float = SECURE_MIN_WAV_RATIO
@@ -211,6 +220,7 @@ class RipJob:
     embed_lyrics: bool = True
     lyrics_save_mode: str = 'both'
     # Double-rip each track and require matching CRCs (test & copy).
+    # Ignored when burst_mode is True (single -Z pass).
     test_and_copy: bool = True
     # Extra secure test+copy cycles after a CRC mismatch.
     # After retries still fail, that track is recovered once in burst mode
@@ -343,6 +353,8 @@ class RipEngine:
 
     EXTENSIONS = {
         'flac': '.flac',
+        'wavpack': '.wv',
+        'alac': '.m4a',
         'mp3': '.mp3',
         'aac': '.m4a',
         'qaac': '.m4a',
@@ -400,8 +412,8 @@ class RipEngine:
             fmt = 'flac'
         base = Path(job.output_directory).expanduser().resolve()
 
-        # CD images + CUE need a lossless/container format (WAV/FLAC).
-        if job.copy_image and fmt not in ('flac', 'wav', 'aiff'):
+        # CD images + CUE need a lossless/container format.
+        if job.copy_image and not is_lossless_format(fmt):
             log.info('Copy Image mode: using FLAC instead of %s', fmt)
             fmt = 'flac'
 
@@ -422,6 +434,14 @@ class RipEngine:
         self._probe_job_overread(job, on_progress)
 
         layout_notes = self._detect_disc_layout(job, on_progress)
+
+        silence_err = _offset_silence_error(
+            job,
+            tracks,
+            copy_image=bool(job.copy_image),
+        )
+        if silence_err:
+            return RipResult(success=False, error=silence_err, notes=list(layout_notes))
 
         if job.copy_image:
             return self._run_copy_image(job, base, fmt, on_progress, layout_notes=layout_notes)
@@ -653,6 +673,21 @@ class RipEngine:
                         htoa_ripped = True
                         if htoa_path is None:
                             htoa_path = htoa_paths[0]
+                        if any('burst' in n.lower() for n in htoa_notes):
+                            if 0 not in burst_tracks:
+                                burst_tracks.append(0)
+                    elif not htoa_ok and any(
+                        'silent' in n.lower() or 'SKIPPED' in n for n in htoa_notes
+                    ):
+                        # Digitally silent pregap — not an archival failure.
+                        pass
+                    elif not htoa_ok:
+                        raise RuntimeError(
+                            next(
+                                (n for n in htoa_notes if 'fail' in n.lower() or 'mismatch' in n.lower()),
+                                'HTOA extract failed',
+                            )
+                        )
                     unit_index += 1.0
 
                 # --- Regular tracks ---
@@ -747,6 +782,7 @@ class RipEngine:
                         if p.suffix.lower()
                         in {
                             '.flac',
+                            '.wv',
                             '.mp3',
                             '.m4a',
                             '.opus',
@@ -788,7 +824,8 @@ class RipEngine:
                             htoa_by_dir[hp.parent] = hp
                     wrote_cue = False
                     for (cue_album_dir, cue_ext), pairs in by_group.items():
-                        if not is_lossless_extension(cue_ext):
+                        # ALAC primary uses .m4a (AAC also-encode is never in pairs).
+                        if not is_lossless_extension(cue_ext) and cue_ext != '.m4a':
                             continue
                         try:
                             cue_path = self._write_track_cue(
@@ -873,7 +910,7 @@ class RipEngine:
                 drivename = ''
             album = job.album
             ctdb_quality = ctdb_submit_quality(
-                test_and_copy=job.test_and_copy,
+                test_and_copy=job.test_and_copy and not job.burst_mode,
                 burst_tracks=burst_tracks,
                 test_copy_mismatches=test_copy_mismatches,
                 track_entries=rip_log.tracks if rip_log is not None else None,
@@ -906,7 +943,18 @@ class RipEngine:
 
         ar_summary = _summarize_ar(ar_results)
         ctdb_summary = _summarize_ctdb(ctdb_results)
-        done_msg = f'Done — {len(outputs)} file(s)'
+        fail_reasons = _archival_fail_reasons(
+            job,
+            ar_results=ar_results,
+            ctdb_results=ctdb_results,
+            burst_tracks=burst_tracks,
+        )
+        archival_ok = not fail_reasons
+        done_msg = (
+            f'Done — {len(outputs)} file(s)'
+            if archival_ok
+            else f'Rip failed archival checks — {len(outputs)} file(s) kept'
+        )
         if htoa_ripped:
             done_msg = f'{done_msg} (incl. HTOA)'
         if data_output_pairs:
@@ -917,12 +965,21 @@ class RipEngine:
             done_msg = f'{done_msg} · {ctdb_summary}'
         if burst_tracks:
             tracks_txt = ', '.join(str(n) for n in burst_tracks)
-            done_msg = f'{done_msg} · WARNING: burst (-Z) on track(s) {tracks_txt}'
-            notes.append(
-                f'WARNING: Insecure burst extraction on track(s) {tracks_txt} '
-                '(not archival-grade for those tracks)'
-            )
-        if job.test_and_copy:
+            done_msg = f'{done_msg} · burst (-Z) on track(s) {tracks_txt}'
+            if job.burst_mode:
+                notes.append(
+                    f'Burst mode (-Z) on track(s) {tracks_txt} '
+                    '(paranoia disabled; not archival-grade)'
+                )
+            else:
+                notes.append(
+                    f'Insecure burst extraction on track(s) {tracks_txt} '
+                    '(not archival-grade; rip marked failed)'
+                )
+        for reason in fail_reasons:
+            if reason not in notes:
+                notes.append(reason)
+        if job.test_and_copy and not job.burst_mode:
             if test_copy_mismatches:
                 tracks_txt = ', '.join(str(n) for n in test_copy_mismatches)
                 done_msg = (
@@ -931,8 +988,9 @@ class RipEngine:
             else:
                 done_msg = f'{done_msg} · test & copy OK'
 
+        error = '; '.join(fail_reasons) if fail_reasons else None
         result = _finish_result(
-            success=True,
+            success=archival_ok,
             outputs=outputs,
             album_dir=album_dir,
             ar_results=ar_results,
@@ -944,6 +1002,7 @@ class RipEngine:
             htoa_ripped=htoa_ripped,
             test_copy_mismatches=test_copy_mismatches,
             log_dir=primary_audio_dir,
+            error=error,
         )
         if result.log_path is not None:
             done_msg = f'{done_msg} · log saved'
@@ -990,16 +1049,33 @@ class RipEngine:
                 length_sectors=htoa_info.length_sectors,
             )
 
+        htoa_mode = 'burst' if job.burst_mode else 'secure'
         try:
-            report(RipState.RIPPING, 0.05, f'Extracting HTOA ({htoa_info.duration_label})…')
+            report(
+                RipState.RIPPING,
+                0.05,
+                (
+                    f'Burst extracting HTOA ({htoa_info.duration_label})…'
+                    if job.burst_mode
+                    else f'Extracting HTOA ({htoa_info.duration_label})…'
+                ),
+            )
             extract_htoa(
                 job.device,
                 htoa_info,
                 test_wav,
-                mode='secure',
+                mode=htoa_mode,
                 sample_offset=job.sample_offset,
             )
+            if job.burst_mode:
+                notes.append('HTOA extracted in burst mode')
         except Exception as exc:
+            if job.burst_mode:
+                notes.append(f'HTOA extract failed: {exc}')
+                if log_entry is not None:
+                    log_entry.status = 'FAILED'
+                    log_entry.notes.append(str(exc))
+                return False, None, [], notes
             if job.burst_fallback:
                 try:
                     extract_htoa(
@@ -1041,9 +1117,9 @@ class RipEngine:
         test_crc = ''
         copy_crc = ''
         peak = None
-        mode = 'secure'
+        mode = 'burst' if job.burst_mode else 'secure'
 
-        if job.test_and_copy:
+        if job.test_and_copy and not job.burst_mode:
             test_crc = wav_pcm_crc(test_wav)
             self._unlink_quiet(test_wav)
             if defeat_cache:
@@ -1401,6 +1477,10 @@ class RipEngine:
     def _missing_encoder(self, fmt: str) -> str | None:
         if fmt == 'flac' and not shutil.which('flac'):
             return 'flac encoder not found'
+        if fmt == 'wavpack' and not shutil.which('wavpack') and not shutil.which('ffmpeg'):
+            return 'wavpack or ffmpeg required for WavPack'
+        if fmt == 'alac' and not shutil.which('ffmpeg'):
+            return 'ffmpeg required for ALAC'
         if fmt == 'mp3' and not shutil.which('lame'):
             return 'lame encoder not found'
         if fmt == 'aac' and not shutil.which('ffmpeg'):
@@ -1434,8 +1514,18 @@ class RipEngine:
         layout = (job.also_encode_folder or 'format_subdir').strip().lower()
         also_root = (job.also_encode_directory or '').strip()
         use_custom_also = len(formats) > 1 and layout == 'custom_folder' and also_root
-        # Format subfolders only when both encodes share the same album root.
-        multi = len(formats) > 1 and layout == 'format_subdir' and not use_custom_also
+        # Format subfolders when sharing a root — also when ALAC + AAC would
+        # both write ``.m4a`` into the same folder (same_folder clash).
+        ext_clash = False
+        if len(formats) > 1 and not use_custom_also:
+            p_ext = self.EXTENSIONS.get(formats[0], '')
+            s_ext = self.EXTENSIONS.get(formats[1], '')
+            ext_clash = bool(p_ext) and p_ext == s_ext
+        multi = (
+            len(formats) > 1
+            and not use_custom_also
+            and (layout == 'format_subdir' or ext_clash)
+        )
         primary_base = Path(job.output_directory).expanduser().resolve()
         dests: list[_EncodeDest] = []
         for i, enc_fmt in enumerate(formats):
@@ -1481,6 +1571,7 @@ class RipEngine:
                         '.wav',
                         '.aiff',
                         '.aif',
+                        '.wv',
                         '.mp3',
                         '.m4a',
                         '.opus',
@@ -1870,7 +1961,7 @@ class RipEngine:
                 if self._cancelled:
                     finish_pending(abandon=True)
                     return album_dir
-                if job.test_and_copy and not extracted.matched:
+                if job.test_and_copy and not job.burst_mode and not extracted.matched:
                     if track_no not in test_copy_mismatches:
                         test_copy_mismatches.append(track_no)
                     accept_burst = (
@@ -2034,7 +2125,26 @@ class RipEngine:
         report: TrackReportFn,
         notes: list[str],
     ) -> _TrackExtract:
-        """Secure test&copy. Both passes use paranoia only; CRC retry, then per-track burst."""
+        """Secure test&copy. Both passes use paranoia only; CRC retry, then per-track burst.
+
+        When *job.burst_mode* is on, skips secure passes and uses a single -Z extract.
+        """
+        if job.burst_mode:
+            notes.append(f'Track {track_no}: burst mode (-Z)')
+            recovered = self._extract_track_burst(
+                job=job,
+                track_no=track_no,
+                copy_wav=copy_wav,
+                expected=expected,
+                sectors=sectors,
+                idx=idx,
+                total_units=total_units,
+                report=report,
+            )
+            # Single intentional -Z pass — treat as accepted (no test & copy).
+            recovered.matched = True
+            return recovered
+
         max_retries = max(0, int(job.test_copy_max_retries))
         attempts = 1 + max_retries if job.test_and_copy else 1
 
@@ -2433,7 +2543,7 @@ class RipEngine:
         """Human-readable extraction mode for the archival log."""
         if not test_and_copy or not extracted.dual_pass:
             if extracted.mode == 'burst':
-                return 'burst (extract fallback, no test & copy)'
+                return 'burst (-Z, no test & copy)'
             return 'secure (single pass)'
         test_m = extracted.test_mode or 'secure'
         copy_m = extracted.copy_mode or extracted.mode or 'secure'
@@ -3033,38 +3143,55 @@ class RipEngine:
                     )
 
                 image_burst_recovered = False
-                report(RipState.RIPPING, 0.15, 'Extracting disc image…')
-                try:
-                    mode, img_stats = _img_span(test_wav, on_extract_progress=_img_extract_progress)
-                except Exception as first_exc:
-                    if not job.burst_fallback or self._cancelled:
-                        raise
-                    report(
-                        RipState.RIPPING,
-                        0.15,
-                        'Secure image extract failed — burst recovery…',
-                    )
+                if job.burst_mode:
+                    report(RipState.RIPPING, 0.15, 'Burst extracting disc image…')
                     mode, img_stats = _img_span(
                         test_wav,
                         force_mode='burst',
                         on_extract_progress=_img_extract_progress,
                     )
-                    image_burst_recovered = True
-                    notes.append(
-                        f'Secure image extract failed ({first_exc}); recovered in burst mode'
-                    )
+                    notes.append('Disc image extracted in burst mode (-Z)')
+                else:
+                    report(RipState.RIPPING, 0.15, 'Extracting disc image…')
+                    try:
+                        mode, img_stats = _img_span(
+                            test_wav, on_extract_progress=_img_extract_progress
+                        )
+                    except Exception as first_exc:
+                        if not job.burst_fallback or self._cancelled:
+                            raise
+                        report(
+                            RipState.RIPPING,
+                            0.15,
+                            'Secure image extract failed — burst recovery…',
+                        )
+                        mode, img_stats = _img_span(
+                            test_wav,
+                            force_mode='burst',
+                            on_extract_progress=_img_extract_progress,
+                        )
+                        image_burst_recovered = True
+                        notes.append(
+                            f'Secure image extract failed ({first_exc}); recovered in burst mode'
+                        )
                 report(RipState.RIPPING, 0.40, 'Disc image extracted…')
                 trim_wav_to_expected(test_wav, expected_bytes)
                 if mode == 'burst' or image_burst_recovered:
                     mode = 'burst'
-                    notes.append(
-                        'Disc image extracted in burst mode '
-                        '(secure mode failed; disc may be scratched)'
-                    )
+                    if not job.burst_mode:
+                        notes.append(
+                            'Disc image extracted in burst mode '
+                            '(secure mode failed; disc may be scratched)'
+                        )
 
                 use_wav = test_wav
-                # Burst-recovered first pass skips test&copy CRC theater.
-                if job.test_and_copy and not image_burst_recovered and not self._cancelled:
+                # Burst mode / burst-recovered first pass skips test&copy CRC theater.
+                if (
+                    job.test_and_copy
+                    and not job.burst_mode
+                    and not image_burst_recovered
+                    and not self._cancelled
+                ):
                     max_img_retries = max(0, int(job.test_copy_max_retries))
                     img_attempts = 1 + max_img_retries
                     img_matched = False
@@ -3251,13 +3378,18 @@ class RipEngine:
 
                 for line in img_stats.summary_lines(length_sectors=total_sectors):
                     notes.append(line)
-                if mode == 'burst':
+                if mode == 'burst' and not job.burst_mode:
                     notes.append('Burst fallback (-Z) used for disc image')
                 if rip_log is not None:
                     for line in img_stats.summary_lines(length_sectors=total_sectors):
                         rip_log.notes.append(f'Image: {line}')
                     if mode == 'burst':
-                        rip_log.notes.append('Image: secure paranoia failed — burst (-Z) used')
+                        if job.burst_mode:
+                            rip_log.notes.append('Image: burst mode (-Z)')
+                        else:
+                            rip_log.notes.append(
+                                'Image: secure paranoia failed — burst (-Z) used'
+                            )
 
                 if self._cancelled:
                     return RipResult(
@@ -3267,7 +3399,9 @@ class RipEngine:
                 ar_results: list[AccurateRipResult] = []
                 ctdb_results: list[CtdbResult] = []
                 burst_tracks: list[int] = [0] if mode == 'burst' else []
-                image_test_copy_ok = bool(job.test_and_copy and mode != 'burst')
+                image_test_copy_ok = bool(
+                    job.test_and_copy and not job.burst_mode and mode != 'burst'
+                )
 
                 ar_verifier: AccurateRipVerifier | None = None
                 ctdb_verifier: CtdbVerifier | None = None
@@ -3396,7 +3530,10 @@ class RipEngine:
                         p
                         for p in output_files
                         if p.parent == dest.album_dir
-                        and p.suffix.lower() in {'.flac', '.wav', '.aiff', '.aif'}
+                        and (
+                            is_lossless_extension(p.suffix)
+                            or (p.suffix.lower() == '.m4a' and dest.format == 'alac')
+                        )
                         and p.stem == basename
                     ]
                     if not encoded:
@@ -3452,6 +3589,7 @@ class RipEngine:
                         if p.suffix.lower()
                         in {
                             '.flac',
+                            '.wv',
                             '.mp3',
                             '.m4a',
                             '.opus',
@@ -3485,7 +3623,7 @@ class RipEngine:
                         drivename = ''
                     album = job.album
                     ctdb_quality = ctdb_submit_quality(
-                        test_and_copy=job.test_and_copy,
+                        test_and_copy=job.test_and_copy and not job.burst_mode,
                         burst_tracks=burst_tracks,
                         test_copy_mismatches=([] if image_test_copy_ok else [0]),
                         track_entries=(rip_log.tracks if rip_log is not None else None),
@@ -3543,13 +3681,27 @@ class RipEngine:
                 if ctdb_results:
                     ctdb_ok = sum(1 for r in ctdb_results if r.confidence == CtdbConfidence.MATCH)
                     done_label = f'{done_label} · CTDB {ctdb_ok}/{len(ctdb_results)}'
+                fail_reasons = _archival_fail_reasons(
+                    job,
+                    ar_results=ar_results,
+                    ctdb_results=ctdb_results,
+                    burst_tracks=burst_tracks,
+                )
+                for reason in fail_reasons:
+                    if reason not in notes:
+                        notes.append(reason)
+                archival_ok = not fail_reasons
                 report(
                     RipState.DONE,
                     1.0,
-                    f'Copy Image complete → {done_label}',
+                    (
+                        f'Copy Image complete → {done_label}'
+                        if archival_ok
+                        else f'Copy Image failed archival checks → {done_label}'
+                    ),
                 )
                 return RipResult(
-                    success=True,
+                    success=archival_ok,
                     output_files=output_files,
                     album_dir=primary_album,
                     notes=notes,
@@ -3559,6 +3711,7 @@ class RipEngine:
                     accuraterip=ar_results,
                     ctdb=ctdb_results,
                     burst_tracks=burst_tracks,
+                    error=('; '.join(fail_reasons) if fail_reasons else None),
                 )
         except Exception as exc:
             log.exception('Copy Image failed')
@@ -3736,6 +3889,23 @@ class RipEngine:
             self._run(
                 aiff_encode_argv(wav_path, out_path),
                 what='ffmpeg aiff',
+            )
+        elif fmt == 'wavpack':
+            level = job.wavpack_compression or 'high'
+            if shutil.which('wavpack'):
+                self._run(
+                    wavpack_encode_argv(wav_path, out_path, level),
+                    what='wavpack',
+                )
+            else:
+                self._run(
+                    wavpack_ffmpeg_argv(wav_path, out_path, level),
+                    what='ffmpeg wavpack',
+                )
+        elif fmt == 'alac':
+            self._run(
+                alac_encode_argv(wav_path, out_path),
+                what='ffmpeg alac',
             )
         else:
             raise RuntimeError(f'Unsupported encode format: {fmt}')
@@ -4152,6 +4322,13 @@ def _retag_title(path: Path, title: str, *, track_number: int = 0) -> None:
             audio['TITLE'] = [title]
             audio['TRACKNUMBER'] = [str(track_number)]
             audio.save()
+        elif suffix == '.wv':
+            from mutagen.wavpack import WavPack
+
+            audio = WavPack(path)
+            audio['TITLE'] = [title]
+            audio['TRACKNUMBER'] = [str(track_number)]
+            audio.save()
         elif suffix == '.mp3':
             from mutagen.id3 import ID3, TIT2, TRCK
             from mutagen.mp3 import MP3
@@ -4260,16 +4437,88 @@ def _unique_album_dirs(outputs: list[Path], album_dir: Path | None) -> list[Path
         dirs.append(album_dir)
         seen.add(album_dir)
     skip = {'.cue', '.log', '.jpg', '.jpeg', '.png', '.bin'}
+    # AAC/QAAC also-encode folders share ``.m4a`` with ALAC — skip by name.
+    lossy_folders = {format_folder_name(f) for f in ('mp3', 'aac', 'qaac', 'opus')}
     for path in outputs:
         suffix = path.suffix.lower()
-        if suffix in skip or not is_lossless_extension(suffix):
+        if suffix in skip:
             continue
         parent = path.parent
+        if parent.name in lossy_folders:
+            continue
+        if not is_lossless_extension(suffix) and suffix != '.m4a':
+            continue
         if parent in seen:
             continue
         seen.add(parent)
         dirs.append(parent)
     return dirs
+
+
+def _offset_silence_error(
+    job: RipJob,
+    tracks: list[int],
+    *,
+    copy_image: bool = False,
+) -> str | None:
+    """Fail closed when a non-zero offset would silence-pad disc edges."""
+    disc = job.disc_info
+    if disc is None or not disc.tracks:
+        return None
+    first_no = int(disc.tracks[0].number)
+    last_no = int(disc.tracks[-1].number)
+    if copy_image:
+        includes_start = True
+        includes_end = True
+    else:
+        selected = {int(n) for n in tracks}
+        includes_start = first_no in selected
+        includes_end = last_no in selected
+    return offset_silence_risk(
+        int(job.sample_offset),
+        job.overread,
+        includes_disc_start=includes_start,
+        includes_disc_end=includes_end,
+    )
+
+
+def _archival_fail_reasons(
+    job: RipJob,
+    *,
+    ar_results: list[AccurateRipResult],
+    ctdb_results: list[CtdbResult],
+    burst_tracks: list[int],
+) -> list[str]:
+    """Reasons a finished rip is not archival-grade (fail closed)."""
+    reasons: list[str] = []
+    # Intentional Burst mode already opted out of secure extract — do not
+    # fail solely because every track used -Z. Fallback burst still fails.
+    if burst_tracks and not job.burst_mode:
+        tracks_txt = ', '.join(str(n) for n in burst_tracks)
+        reasons.append(
+            f'Insecure burst (-Z) extraction on track(s) {tracks_txt}'
+        )
+    if job.verify_accuraterip and ar_results:
+        bad = [
+            r.track_number
+            for r in ar_results
+            if r.confidence == AccurateRipConfidence.MISMATCH
+        ]
+        if bad:
+            reasons.append(
+                f'AccurateRip mismatch on track(s) {", ".join(str(n) for n in bad)}'
+            )
+    if job.verify_ctdb and ctdb_results:
+        bad = [
+            r.track_number
+            for r in ctdb_results
+            if r.confidence == CtdbConfidence.MISMATCH
+        ]
+        if bad:
+            reasons.append(
+                f'CTDB mismatch on track(s) {", ".join(str(n) for n in bad)}'
+            )
+    return reasons
 
 
 def _finish_result(

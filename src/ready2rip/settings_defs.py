@@ -8,6 +8,8 @@ ENCODERS = (
     ('wav', 'WAV (Uncompressed)'),
     ('aiff', 'AIFF (Uncompressed)'),
     ('flac', 'FLAC (Lossless)'),
+    ('wavpack', 'WavPack (Lossless)'),
+    ('alac', 'ALAC (Lossless)'),
 )
 
 ENCODER_IDS = frozenset(e[0] for e in ENCODERS)
@@ -83,6 +85,32 @@ FLAC_LEVELS = (
     (7, '7'),
     (8, '8 (Smallest)'),
 )
+
+# WavPack encode presets (CLI flags / ffmpeg compression_level).
+WAVPACK_LEVELS = (
+    ('fast', 'Fast'),
+    ('normal', 'Normal'),
+    ('high', 'High (Default)'),
+    ('veryhigh', 'Very high'),
+    ('extra', 'High + extra'),
+)
+WAVPACK_LEVEL_IDS = frozenset(level for level, _label in WAVPACK_LEVELS)
+DEFAULT_WAVPACK_LEVEL = 'high'
+
+
+def normalize_wavpack_level(value: str | None) -> str:
+    raw = (value or '').strip().lower()
+    if raw in WAVPACK_LEVEL_IDS:
+        return raw
+    return DEFAULT_WAVPACK_LEVEL
+
+
+def rip_log_wavpack_level(level: str) -> str:
+    key = normalize_wavpack_level(level)
+    for lid, label in WAVPACK_LEVELS:
+        if lid == key:
+            return label
+    return key
 
 # LAME presets: VBR (-V n) and CBR (-b n) — lowest quality → highest.
 # (LAME V5 is the lowest VBR quality here; V0 is the highest.)

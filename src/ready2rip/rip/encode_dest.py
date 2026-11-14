@@ -9,14 +9,18 @@ _ALSO_ENCODER_IDS = frozenset({'mp3', 'aac', 'qaac', 'opus'})
 _FOLDER_LAYOUT_IDS = frozenset({'format_subdir', 'same_folder', 'custom_folder'})
 
 # Formats / extensions that may receive a .cue sheet (lossless / PCM only).
-LOSSLESS_FORMATS = frozenset({'flac', 'wav', 'aiff'})
-LOSSLESS_EXTENSIONS = frozenset({'.flac', '.wav', '.aiff', '.aif'})
+# ALAC uses ``.m4a`` (same as AAC); callers that only have a path should treat
+# ``.m4a`` carefully — prefer format ids via ``is_lossless_format``.
+LOSSLESS_FORMATS = frozenset({'flac', 'wav', 'aiff', 'wavpack', 'alac'})
+LOSSLESS_EXTENSIONS = frozenset({'.flac', '.wav', '.aiff', '.aif', '.wv'})
 LOSSY_FORMATS = frozenset({'mp3', 'aac', 'qaac', 'opus'})
 
 _FORMAT_FOLDER_NAMES = {
     'flac': 'FLAC',
     'wav': 'WAV',
     'aiff': 'AIFF',
+    'wavpack': 'WavPack',
+    'alac': 'ALAC',
     'mp3': 'MP3',
     'aac': 'M4A',
     'qaac': 'M4A',

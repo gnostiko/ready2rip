@@ -75,6 +75,7 @@ class RipLog:
         self.overread_label: str = 'No'
         self.encode_format: str = 'flac'
         self.flac_compression: int = 5
+        self.wavpack_compression: str = 'high'
         self.mp3_quality: str = 'v0'
         self.aac_quality: str = 'cbr256'
         self.aac_bitrate: int = 256
@@ -84,6 +85,7 @@ class RipLog:
         self.also_encode_format: str = 'mp3'
         self.also_encode_folder: str = 'format_subdir'
         self.also_encode_directory: str = ''
+        self.burst_mode: bool = False
         self.burst_fallback: bool = False
         self.verify_accuraterip: bool = True
         self.verify_ctdb: bool = True
@@ -124,6 +126,7 @@ class RipLog:
         self.overread_label = overread.log_label if overread is not None else 'No'
         self.encode_format = job.encode_format
         self.flac_compression = job.flac_compression
+        self.wavpack_compression = getattr(job, 'wavpack_compression', None) or 'high'
         self.mp3_quality = job.mp3_quality or 'v0'
         self.aac_quality = getattr(job, 'aac_quality', '') or (
             f'cbr{int(job.aac_bitrate)}' if getattr(job, 'aac_bitrate', 0) else 'cbr256'
@@ -135,6 +138,7 @@ class RipLog:
         self.also_encode_format = getattr(job, 'also_encode_format', None) or 'mp3'
         self.also_encode_folder = getattr(job, 'also_encode_folder', None) or 'format_subdir'
         self.also_encode_directory = getattr(job, 'also_encode_directory', None) or ''
+        self.burst_mode = bool(getattr(job, 'burst_mode', False))
         self.burst_fallback = job.burst_fallback
         self.verify_accuraterip = job.verify_accuraterip
         self.verify_ctdb = getattr(job, 'verify_ctdb', True)
@@ -211,8 +215,12 @@ class RipLog:
         final_modes = [(t.extract_mode or '').lower() for t in self.tracks if t.number > 0]
         any_burst = any('burst' in m for m in final_modes)
         all_burst = bool(final_modes) and all('burst' in m for m in final_modes)
-        if all_burst:
-            read_mode = 'Burst (paranoia disabled / -Z) — full-disc or per-track fallback'
+        if self.burst_mode or all_burst:
+            read_mode = (
+                'Burst mode (paranoia disabled / -Z)'
+                if self.burst_mode
+                else 'Burst (paranoia disabled / -Z) — full-disc or per-track fallback'
+            )
             read_cmd = 'cdparanoia -w -Z -e (-O offset when calibrated)'
         elif any_burst:
             read_mode = 'Secure with burst fallback (some tracks re-read with -Z)'
@@ -226,16 +234,19 @@ class RipLog:
             read_cmd = 'cdparanoia -w --never-skip=500 -X -o 8 (-O offset when calibrated)'
         lines.append(f'Read mode               : {read_mode}')
         lines.append(f'Read command            : {read_cmd}')
-        if self.test_and_copy:
+        if self.burst_mode:
+            lines.append('Test & copy             : No (burst mode)')
+        elif self.test_and_copy:
             lines.append(
                 f'Test & copy             : Yes '
                 f'(max {max(0, self.test_copy_max_retries)} CRC retry)'
             )
         else:
             lines.append('Test & copy             : No')
+        lines.append('Burst mode              : Yes' if self.burst_mode else 'Burst mode              : No')
         lines.append(
             'Burst fallback          : Yes'
-            if self.burst_fallback
+            if self.burst_fallback and not self.burst_mode
             else 'Burst fallback          : No'
         )
         lines.append(
@@ -296,6 +307,16 @@ class RipLog:
         if self.encode_format == 'flac':
             lines.append(f'FLAC compression level          : {self.flac_compression}')
             lines.append('Selected bitrate                : lossless')
+        elif self.encode_format == 'wavpack':
+            from ready2rip.settings_defs import rip_log_wavpack_level
+
+            lines.append(
+                f'WavPack compression             : '
+                f'{rip_log_wavpack_level(self.wavpack_compression)}'
+            )
+            lines.append('Selected bitrate                : lossless')
+        elif self.encode_format == 'alac':
+            lines.append('Selected bitrate                : lossless (ALAC)')
         elif self.encode_format == 'mp3':
             lines.append(
                 f'Selected bitrate                : {rip_log_mp3_quality(self.mp3_quality)}'
@@ -313,6 +334,7 @@ class RipLog:
             + encode_command_summary(
                 self.encode_format,
                 flac_compression=self.flac_compression,
+                wavpack_compression=self.wavpack_compression,
                 mp3_quality=self.mp3_quality,
                 aac_quality=self.aac_quality,
                 qaac_quality=self.qaac_quality,

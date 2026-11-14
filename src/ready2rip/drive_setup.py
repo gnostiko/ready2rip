@@ -15,13 +15,16 @@ from pathlib import Path
 
 from ready2rip.accuraterip import (
     POPULAR_OFFSETS,
+    AccurateRipConfidence,
     AccurateRipDatabase,
+    AccurateRipVerifier,
     compute_checksums_samples,
     disc_ids_from_info,
     fetch_database,
     load_cdda_wav_samples,
 )
 from ready2rip.disc.probe import DiscInfo, TrackInfo, probe_disc
+from ready2rip.rip.secure import secure_paranoia_flags
 from ready2rip.util import find_cdparanoia
 
 log = logging.getLogger(__name__)
@@ -262,19 +265,47 @@ def calibrate_drive_offset(
                 )
             if result is not None:
                 off, conf, _v1, _v2 = result
-                offset_msg = (
-                    f'Detected sample offset {off:+d} '
-                    f'(track {track.number}, confidence {conf})'
+                progress(
+                    f'Confirming offset {off:+d} with secure extract…',
+                    0.92,
                 )
-                progress('Match found', 1.0)
-                return CalibrationResult(
-                    success=True,
-                    offset=off,
-                    confidence=conf,
-                    track_number=track.number,
-                    disc_id=ids.disc_id_string,
-                    message=offset_msg,
+                if cancelled():
+                    return CalibrationResult(
+                        success=False,
+                        message='Detection cancelled.',
+                        disc_id=ids.disc_id_string,
+                        track_number=track.number,
+                    )
+                confirm_timeout = min(
+                    _EXTRACT_TIMEOUT_SEC, max(20, int(remaining() - 5))
                 )
+                if _confirm_offset_secure(
+                    cdparanoia=cdparanoia,
+                    device=device,
+                    track=track,
+                    info=info,
+                    offset=int(off),
+                    tmp_path=tmp_path,
+                    timeout=confirm_timeout,
+                ):
+                    offset_msg = (
+                        f'Detected sample offset {off:+d} '
+                        f'(track {track.number}, confidence {conf}; secure confirm OK)'
+                    )
+                    progress('Match confirmed', 1.0)
+                    return CalibrationResult(
+                        success=True,
+                        offset=off,
+                        confidence=conf,
+                        track_number=track.number,
+                        disc_id=ids.disc_id_string,
+                        message=offset_msg,
+                    )
+                progress(
+                    f'Secure confirm failed for offset {off:+d}; trying another track',
+                    0.84,
+                )
+                continue
             progress(
                 f'No match on track {track.number}; trying another',
                 0.82,
@@ -572,6 +603,68 @@ def _scan_with_native(
         v1 = int(parts[2], 16)
         v2 = int(parts[3], 16)
         return off, v1, v2
+
+
+def _confirm_offset_secure(
+    *,
+    cdparanoia: str,
+    device: str,
+    track: TrackInfo,
+    info: DiscInfo,
+    offset: int,
+    tmp_path: Path,
+    timeout: int,
+) -> bool:
+    """Re-extract with full paranoia + ``-O`` and require an AccurateRip MATCH.
+
+    Burst-based discovery is fast but can bit-error; a secure confirm avoids
+    saving a wrong offset from a lucky CRC collision on a bad extract.
+    """
+    wav_path = tmp_path / f'confirm{int(track.number)}.wav'
+    try:
+        wav_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    cmd = [
+        cdparanoia,
+        '-w',
+        '-d',
+        device,
+        *secure_paranoia_flags(),
+    ]
+    if int(offset):
+        cmd.extend(['-O', str(int(offset))])
+    cmd.extend([str(int(track.number)), str(wav_path)])
+    try:
+        subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=max(15, int(timeout)),
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        log.warning('Secure offset confirm extract failed: %s', exc)
+        return False
+    if not wav_path.is_file() or wav_path.stat().st_size < 1000:
+        return False
+    verifier = AccurateRipVerifier(sample_offset=0)
+    status = verifier.prepare(info)
+    if 'not in database' in status.lower() or 'could not compute' in status.lower():
+        log.warning('Secure offset confirm: %s', status)
+        return False
+    verifier.set_total_tracks(info.track_count)
+    result = verifier.verify_wav(wav_path, int(track.number))
+    ok = result.confidence == AccurateRipConfidence.MATCH
+    if not ok:
+        log.warning(
+            'Secure offset confirm AR %s for track %s offset %+d: %s',
+            result.confidence.name,
+            track.number,
+            offset,
+            result.message,
+        )
+    return ok
 
 
 def _ensure_native_helper() -> Path | None:

@@ -52,6 +52,37 @@ def offset_margin_sectors(sample_offset: int) -> int:
     return (off + _SAMPLES_PER_SECTOR - 1) // _SAMPLES_PER_SECTOR
 
 
+def offset_silence_risk(
+    sample_offset: int,
+    overread: OverreadCapability,
+    *,
+    includes_disc_start: bool,
+    includes_disc_end: bool,
+) -> str | None:
+    """Return an error when *sample_offset* would silence-fill TOC edges.
+
+    Non-zero ``-O`` needs real lead-in / lead-out samples. Without overread,
+    cdparanoia pads those edges with silence — bad for CTDB and incomplete
+    archival PCM even when AccurateRip's 5-sector skip hides some of it.
+    """
+    if int(sample_offset) == 0:
+        return None
+    missing: list[str] = []
+    if includes_disc_start and not overread.lead_in:
+        missing.append('lead-in')
+    if includes_disc_end and not overread.lead_out:
+        missing.append('lead-out')
+    if not missing:
+        return None
+    need = ' / '.join(missing)
+    return (
+        f'Sample offset {int(sample_offset):+d} needs drive overread into {need}, '
+        f'but this drive cannot — edge samples would be silence-filled. '
+        f'Use a drive that overreads, or set offset to 0 and turn off '
+        f'AccurateRip / CTDB verification.'
+    )
+
+
 def overread_span(
     start_sector: int,
     end_sector: int,

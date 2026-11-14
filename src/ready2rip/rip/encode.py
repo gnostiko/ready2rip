@@ -17,6 +17,8 @@ or forced resample flags. Compression uses stock quality presets only.
     (Opus packets are always 48 kHz internally; that is the codec, not a
     Ready2Rip pre-process.)
   * AIFF — ffmpeg ``pcm_s16be`` classic AIFF (bit-identical CDDA PCM).
+  * WavPack — ``wavpack`` CLI when available; else ffmpeg ``wavpack``.
+  * ALAC — ffmpeg ``alac`` in an ``.m4a`` container (bit-identical PCM).
 """
 
 from __future__ import annotations
@@ -27,6 +29,15 @@ import shutil
 import subprocess
 from functools import lru_cache
 from pathlib import Path
+
+# WavPack preset → (wavpack CLI flags, ffmpeg -compression_level).
+_WAVPACK_PRESETS: dict[str, tuple[list[str], int]] = {
+    'fast': (['-f'], 0),
+    'normal': ([], 1),
+    'high': (['-h'], 4),
+    'veryhigh': (['-hh'], 6),
+    'extra': (['-hx'], 8),
+}
 
 # Preset IDs mirrored from settings (keep encode helpers gi-free for CI).
 _AAC_QUALITY_IDS = frozenset(
@@ -361,10 +372,75 @@ def aiff_encode_argv(wav_path: Path, out_path: Path) -> list[str]:
     ]
 
 
+def _normalize_wavpack_level(value: str | None) -> str:
+    from ready2rip.settings_defs import normalize_wavpack_level
+
+    return normalize_wavpack_level(value)
+
+
+def wavpack_encode_argv(
+    wav_path: Path,
+    out_path: Path,
+    level: str = 'high',
+) -> list[str]:
+    """Lossless WavPack via ``wavpack`` CLI when present."""
+    preset = _normalize_wavpack_level(level)
+    flags, _ffmpeg_level = _WAVPACK_PRESETS.get(preset, _WAVPACK_PRESETS['high'])
+    return [
+        'wavpack',
+        *flags,
+        '-y',
+        str(wav_path),
+        '-o',
+        str(out_path),
+    ]
+
+
+def wavpack_ffmpeg_argv(
+    wav_path: Path,
+    out_path: Path,
+    level: str = 'high',
+) -> list[str]:
+    """ffmpeg ``wavpack`` fallback when the wavpack CLI is missing."""
+    preset = _normalize_wavpack_level(level)
+    _flags, compression = _WAVPACK_PRESETS.get(preset, _WAVPACK_PRESETS['high'])
+    return [
+        'ffmpeg',
+        '-y',
+        '-loglevel',
+        'error',
+        '-i',
+        str(wav_path),
+        '-c:a',
+        'wavpack',
+        '-compression_level',
+        str(compression),
+        str(out_path),
+    ]
+
+
+def alac_encode_argv(wav_path: Path, out_path: Path) -> list[str]:
+    """Apple Lossless in ``.m4a`` via ffmpeg — no resample/dither."""
+    return [
+        'ffmpeg',
+        '-y',
+        '-loglevel',
+        'error',
+        '-i',
+        str(wav_path),
+        '-c:a',
+        'alac',
+        '-movflags',
+        '+faststart',
+        str(out_path),
+    ]
+
+
 def encode_command_summary(
     fmt: str,
     *,
     flac_compression: int = 5,
+    wavpack_compression: str = 'high',
     mp3_quality: str = 'v0',
     aac_quality: str = 'cbr256',
     qaac_quality: str = 'cvbr256',
@@ -375,6 +451,21 @@ def encode_command_summary(
     if fmt == 'flac':
         level = max(0, min(8, int(flac_compression)))
         return f'flac -{level} --verify (lossless; PCM unaltered)'
+    if fmt == 'wavpack':
+        from ready2rip.settings_defs import normalize_wavpack_level, rip_log_wavpack_level
+
+        preset = normalize_wavpack_level(wavpack_compression)
+        flags, ff_level = _WAVPACK_PRESETS.get(preset, _WAVPACK_PRESETS['high'])
+        label = rip_log_wavpack_level(preset)
+        if shutil.which('wavpack'):
+            flag_txt = ' '.join(flags) if flags else '(default)'
+            return f'wavpack {flag_txt} ({label}; lossless; PCM unaltered)'
+        return (
+            f'ffmpeg -c:a wavpack -compression_level {ff_level} '
+            f'({label}; lossless; PCM unaltered)'
+        )
+    if fmt == 'alac':
+        return 'ffmpeg -c:a alac (Apple Lossless .m4a; PCM unaltered)'
     if fmt == 'mp3':
         from ready2rip.settings_defs import lame_args_for_mp3_quality, normalize_mp3_quality
 
@@ -453,6 +544,14 @@ def _flac_version_label() -> str:
 
 
 @lru_cache(maxsize=1)
+def _wavpack_version_label() -> str:
+    wavpack = shutil.which('wavpack')
+    if wavpack:
+        return _first_nonempty_line(_run_version_text([wavpack, '--version'])) or 'wavpack'
+    return f'{_ffmpeg_version_label()} (wavpack)'
+
+
+@lru_cache(maxsize=1)
 def _lame_version_label() -> str:
     lame = shutil.which('lame')
     if not lame:
@@ -498,6 +597,10 @@ def encoder_tag_for_format(fmt: str) -> str:
     key = (fmt or '').strip().lower()
     if key == 'flac':
         return _flac_version_label()
+    if key == 'wavpack':
+        return _wavpack_version_label()
+    if key == 'alac':
+        return f'{_ffmpeg_version_label()} (alac)'
     if key == 'mp3':
         return _lame_version_label()
     if key == 'aac':
