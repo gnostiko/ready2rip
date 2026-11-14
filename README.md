@@ -6,7 +6,8 @@ Careful archival extraction with full cdparanoia, AccurateRip and CTDB
 verification, MusicBrainz / gnudb metadata, disc-native CD-TEXT / MCN / ISRC,
 and modern tagging.
 
-<img width="1122" height="822" alt="ready2rip" src="https://github.com/user-attachments/assets/90a3db12-8bda-43b6-a82b-7e587c704efa" />
+<img width="1050" height="750" alt="Screenshot From 2026-11-14 14-51-13" src="https://github.com/user-attachments/assets/bebff08d-c118-42db-98cf-7e15f92cf286" />
+
 
 ## What it does
 
