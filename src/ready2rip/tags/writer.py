@@ -75,7 +75,7 @@ _LEGACY_RG_KEYS = (
 def rg2_db_to_r128_q78(gain_db: float) -> int:
     """Convert RG2 gain (dB @ −18 LUFS) to Opus ``R128_*`` Q7.8 integer (@ −23)."""
     r128_db = float(gain_db) - _RG2_TO_R128_OFFSET_DB
-    raw = int(round(r128_db * 256.0))
+    raw = round(r128_db * 256.0)
     return max(-32768, min(32767, raw))
 
 
@@ -376,7 +376,7 @@ class TagWriter:
             audio = WavPack(path)
             # APEv2 cover: ``filename\\0`` + image bytes.
             ext = 'png' if mime == 'image/png' else 'jpg'
-            payload = f'cover.{ext}'.encode('utf-8') + b'\x00' + image_bytes
+            payload = f'cover.{ext}'.encode() + b'\x00' + image_bytes
             audio['Cover Art (front)'] = APEBinaryValue(payload)
             audio.save()
         elif suffix == '.mp3':
