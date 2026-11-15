@@ -93,6 +93,17 @@ if [ "$bad" -ne 0 ]; then
 fi
 echo "    OK: no forbidden host libs in AppDir"
 
+# Symbolic / scalable icons need the SVG GdkPixbuf loader.
+if ! find "$LIBDIR/gdk-pixbuf-2.0" -name 'libpixbufloader-svg.so' 2>/dev/null | grep -q .; then
+  echo "error: AppDir missing libpixbufloader-svg.so (icons will be blank)" >&2
+  exit 1
+fi
+if ! grep -Rq 'libpixbufloader-svg' "$LIBDIR"/gdk-pixbuf-2.0/*/loaders.cache 2>/dev/null; then
+  echo "error: loaders.cache missing SVG entry" >&2
+  exit 1
+fi
+echo "    OK: SVG pixbuf loader present"
+
 # Host bash must work under AppDir LD_LIBRARY_PATH (qaac wrappers use bash).
 if LD_LIBRARY_PATH="$LIBDIR" /bin/bash -c 'echo ok' >/dev/null 2>&1; then
   echo "    OK: host bash runs under AppDir LD_LIBRARY_PATH"

@@ -1,6 +1,6 @@
 project(
   'ready2rip',
-  version: '0.4.49',
+  version: '0.4.50',
   meson_version: '>= 1.0.0',
   default_options: ['warning_level=2', 'prefix=/usr'],
 )

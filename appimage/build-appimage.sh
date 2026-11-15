@@ -727,7 +727,8 @@ for soname in libgtk-4.so.1 libadwaita-1.so.0 libgdk_pixbuf-2.0.so.0 \
   fi
 done
 
-# GdkPixbuf loaders (PNG/JPEG often built-in; ship any host plugins + cache)
+# GdkPixbuf loaders (PNG/JPEG often built-in; ship any host plugins + cache).
+# Ubuntu 24.04+: SVG lives in librsvg2-common — without it, AppImage icons blank.
 echo "==> bundling gdk-pixbuf loaders"
 for pbdir in /usr/lib/gdk-pixbuf-2.0 /usr/lib64/gdk-pixbuf-2.0 \
   "/usr/lib/${MULTIARCH_LIB}/gdk-pixbuf-2.0"; do
@@ -740,6 +741,30 @@ for pbdir in /usr/lib/gdk-pixbuf-2.0 /usr/lib64/gdk-pixbuf-2.0 \
     break
   fi
 done
+# Ensure SVG loader is present (host package may put it only under multiarch).
+if ! find "${APPDIR}/usr/lib/gdk-pixbuf-2.0" -name 'libpixbufloader-svg.so' 2>/dev/null | grep -q .; then
+  for cand in \
+    "/usr/lib/${MULTIARCH_LIB}/gdk-pixbuf-2.0"/*/loaders/libpixbufloader-svg.so \
+    /usr/lib64/gdk-pixbuf-2.0/*/loaders/libpixbufloader-svg.so \
+    /usr/lib/gdk-pixbuf-2.0/*/loaders/libpixbufloader-svg.so
+  do
+    [ -f "$cand" ] || continue
+    dest_dir="${APPDIR}/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders"
+    mkdir -p "$dest_dir"
+    install -D -m755 "$cand" "${dest_dir}/libpixbufloader-svg.so"
+    bundle_ldd_deps "$cand" || true
+    # librsvg itself (loader dlopens it)
+    for soname in librsvg-2.so.2; do
+      path="$(resolve_soname "$soname" || true)"
+      if [ -n "$path" ] && [ -f "$path" ]; then
+        copy_lib "$path"
+        bundle_ldd_deps "$path" || true
+      fi
+    done
+    echo "    installed SVG loader from ${cand}"
+    break
+  done
+fi
 if command -v gdk-pixbuf-query-loaders >/dev/null 2>&1; then
   for loaders_dir in "${APPDIR}/usr/lib"/gdk-pixbuf-2.0/*/loaders; do
     [ -d "$loaders_dir" ] || continue
@@ -754,6 +779,26 @@ if command -v gdk-pixbuf-query-loaders >/dev/null 2>&1; then
     fi
   done
 fi
+# Hard-fail: symbolic / scalable icons are SVG — missing loader → blank UI icons.
+SVG_LOADER="$(find "${APPDIR}/usr/lib/gdk-pixbuf-2.0" -name 'libpixbufloader-svg.so' 2>/dev/null | head -1)"
+if [ -z "$SVG_LOADER" ]; then
+  echo "error: libpixbufloader-svg.so missing from AppDir" >&2
+  echo "       install librsvg2-common (Debian/Ubuntu) or equivalent, then rebuild" >&2
+  exit 1
+fi
+SVG_CACHE_OK=0
+for cache in "${APPDIR}/usr/lib"/gdk-pixbuf-2.0/*/loaders.cache; do
+  [ -f "$cache" ] || continue
+  if grep -q 'libpixbufloader-svg' "$cache" 2>/dev/null; then
+    SVG_CACHE_OK=1
+    break
+  fi
+done
+if [ "$SVG_CACHE_OK" -ne 1 ]; then
+  echo "error: loaders.cache has no SVG entry (gdk-pixbuf-query-loaders failed?)" >&2
+  exit 1
+fi
+echo "    OK: SVG pixbuf loader + cache entry present"
 
 # Never leave shared objects in usr/bin
 find "${APPDIR}/usr/bin" -name 'lib*.so*' -delete 2>/dev/null || true

@@ -29,6 +29,15 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-15">
       <description>
         <p>
+          0.4.50: Restore AppImage icons on Ubuntu 24.04 builds by shipping
+          the SVG GdkPixbuf loader (librsvg2-common) and failing the build
+          when it is missing.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.49" date="2026-11-15">
+      <description>
+        <p>
           0.4.49: Harden AppImage host-tool compatibility (scrub AppDir
           LD_LIBRARY_PATH for Wine/qaac and other host binaries; stop shipping
           readline/NSS/session/audio/libstdc++ with the image) and build

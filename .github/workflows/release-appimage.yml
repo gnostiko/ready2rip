@@ -135,6 +135,8 @@ jobs:
             libpango1.0-dev \
             libcairo2-dev \
             libgdk-pixbuf2.0-dev \
+            librsvg2-dev \
+            librsvg2-common \
             libappstream-dev \
             gobject-introspection \
             libgirepository1.0-dev \
