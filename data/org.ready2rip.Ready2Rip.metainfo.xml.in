@@ -29,6 +29,15 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-15">
       <description>
         <p>
+          0.4.55: Soften CTDB fuzzy false mismatches (unverified vs hard
+          mismatch); defer archival failure when AccurateRip matched; restore
+          the previous rip log layout.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.54" date="2026-11-15">
+      <description>
+        <p>
           0.4.54: Retry auto-eject when the drive is still busy after a rip;
           rewrite the rip log into short labeled sections; trim encode and
           album-edit helpers.
