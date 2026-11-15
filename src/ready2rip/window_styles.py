@@ -58,25 +58,8 @@ label.ready2rip-cover-bubble {{
     padding: 3px 10px;
     min-height: 22px;
 }}
-/* Soft-locked while ripping: same paint as editable, no :disabled dimming. */
-row.entry.ready2rip-album-locked,
-row.entry.ready2rip-album-locked:disabled,
-row.entry.ready2rip-album-locked text,
-row.entry.ready2rip-album-locked:disabled text,
-row.entry.ready2rip-album-locked label,
-row.entry.ready2rip-album-locked:disabled label {{
+.ready2rip-album-locked {{
     opacity: 1;
-    filter: none;
-}}
-/* Album: no Adwaita boxed-list card — fields sit on the window background. */
-.ready2rip-album-group list.boxed-list {{
-    background-color: transparent;
-    box-shadow: none;
-    border-radius: 0;
-}}
-.ready2rip-album-group list.boxed-list > row {{
-    background-color: transparent;
-    box-shadow: none;
 }}
 .ready2rip-album-group row {{
     min-height: 36px;
@@ -123,16 +106,6 @@ button.ready2rip-cover-trash:active {{
     box-shadow: none;
 }}
 
-/* Tracks: no Adwaita boxed-list card — rows sit on the window background. */
-.ready2rip-track-group list.boxed-list {{
-    background-color: transparent;
-    box-shadow: none;
-    border-radius: 0;
-}}
-.ready2rip-track-group list.boxed-list > row {{
-    background-color: transparent;
-    box-shadow: none;
-}}
 .ready2rip-track-row {{
     padding: 10px 12px;
     min-height: 44px;

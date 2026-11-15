@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -96,6 +97,12 @@ from ready2rip.window_styles import banner_fill_css, install_window_styles
 log = logging.getLogger(__name__)
 
 _WINDOW_UI = str(Path(__file__).with_name('window.ui'))
+
+# Confirm Stop only after the rip has been running this long (avoids a
+# dialog on immediate mis-clicks right after pressing Rip).
+_CANCEL_RIP_CONFIRM_AFTER_S = 3.0
+# Settings header switcher → bottom bar below this dialog width.
+_SETTINGS_NARROW_BREAKPOINT = 'max-width: 550sp'
 
 _ADW_TEMPLATE_TYPES = (
     'ApplicationWindow',
@@ -233,7 +240,6 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._track_lead_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
         self._track_dur_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
         self._album_field_rows: list[Gtk.Widget] = []
-        self._album_fields_locked = False
         self._album_title_row: Adw.EntryRow | None = None
         self._album_artist_row: Adw.EntryRow | None = None
         self._album_date_row: Adw.EntryRow | None = None
@@ -255,6 +261,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._lyrics_generation = 0
         self._ripping = False
         self._rip_engine: RipEngine | None = None
+        self._rip_started_at = 0.0
+        self._cancel_rip_dialog: Adw.AlertDialog | None = None
         self._suppress_meta_write = False
         self._meta_cache = MetadataCache()
         self._cache_save_id: int | None = None
@@ -512,7 +520,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         return False
 
     def _setup_settings_dialog(self) -> None:
-        """Settings dialog with category switcher in the header (top)."""
+        """Settings dialog with header switcher (wide) or bottom bar (narrow)."""
         pages: list[tuple[str, str, tuple[Adw.PreferencesGroup, ...]]] = [
             (
                 'Ripping',
@@ -546,14 +554,24 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         stack.set_vexpand(True)
         stack.set_hexpand(True)
         # Crossfade between settings pages (Adw.ViewStack, libadwaita ≥ 1.7).
-        # AppImage GNOME prefix pins 1.5.x for glibc 2.35; skip when unavailable.
+        # AppImage GNOME prefix may be older; skip when unavailable.
         if hasattr(stack, 'set_enable_transitions'):
             stack.set_enable_transitions(True)
             stack.set_transition_duration(200)
 
         switcher = Adw.ViewSwitcher(stack=stack)
         switcher.set_policy(Adw.ViewSwitcherPolicy.WIDE)
-        header.set_title_widget(switcher)
+
+        # Wide: page switcher in the header. Narrow: “Settings” title + bottom bar.
+        title_stack = Gtk.Stack()
+        title_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        title_stack.set_transition_duration(150)
+        title_stack.add_named(switcher, 'switcher')
+        title_label = Gtk.Label(label='Settings')
+        title_label.add_css_class('title')
+        title_stack.add_named(title_label, 'title')
+        title_stack.set_visible_child_name('switcher')
+        header.set_title_widget(title_stack)
         toolbar.add_top_bar(header)
 
         for title, icon, groups in pages:
@@ -569,6 +587,26 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             stack.add_titled_with_icon(scrolled, title.lower(), title, icon)
 
         toolbar.set_content(stack)
+
+        switcher_bar = Adw.ViewSwitcherBar(stack=stack)
+        switcher_bar.set_reveal(False)
+        toolbar.add_bottom_bar(switcher_bar)
+
+        # GNOME Settings–style: bottom switcher when the dialog is narrow.
+        if (
+            hasattr(dialog, 'add_breakpoint')
+            and hasattr(Adw, 'Breakpoint')
+            and hasattr(Adw, 'BreakpointCondition')
+        ):
+            try:
+                condition = Adw.BreakpointCondition.parse(_SETTINGS_NARROW_BREAKPOINT)
+                breakpoint = Adw.Breakpoint.new(condition)
+                breakpoint.add_setter(title_stack, 'visible-child-name', 'title')
+                breakpoint.add_setter(switcher_bar, 'reveal', True)
+                dialog.add_breakpoint(breakpoint)
+            except Exception:
+                log.debug('Settings narrow breakpoint unavailable', exc_info=True)
+
         dialog.set_child(toolbar)
         self._settings_dialog = dialog
 
@@ -2431,12 +2469,48 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
     def _on_rip_clicked(self, *_args) -> None:
         if self._ripping:
-            if self._rip_engine is not None:
-                self._rip_engine.cancel()
-                self.rip_title_label.set_label('Ripping disc')
-                self.rip_status_label.set_label('Stopping extraction…')
+            self._request_cancel_rip()
             return
         self._start_rip()
+
+    def _request_cancel_rip(self) -> None:
+        """Stop the rip; confirm once it has been running a few seconds."""
+        if not self._ripping:
+            return
+        elapsed = time.monotonic() - self._rip_started_at
+        if elapsed < _CANCEL_RIP_CONFIRM_AFTER_S:
+            self._cancel_rip_now()
+            return
+        if self._cancel_rip_dialog is not None:
+            return
+        dialog = Adw.AlertDialog(
+            heading='Stop ripping?',
+            body=(
+                'Extraction or encoding is already in progress. '
+                'Stopping now may leave incomplete files.'
+            ),
+        )
+        dialog.add_response('keep', 'Keep ripping')
+        dialog.add_response('stop', 'Stop')
+        dialog.set_response_appearance('stop', Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response('keep')
+        dialog.set_close_response('keep')
+
+        def on_response(_dlg: Adw.AlertDialog, response: str) -> None:
+            self._cancel_rip_dialog = None
+            if response == 'stop' and self._ripping:
+                self._cancel_rip_now()
+
+        self._cancel_rip_dialog = dialog
+        dialog.connect('response', on_response)
+        dialog.present(self)
+
+    def _cancel_rip_now(self) -> None:
+        """Request cancellation of the active rip (no confirm)."""
+        if self._rip_engine is not None:
+            self._rip_engine.cancel()
+        self.rip_title_label.set_label('Ripping disc')
+        self.rip_status_label.set_label('Stopping extraction…')
 
     def _selected_track_numbers(self) -> list[int]:
         selected = [num for num, check in sorted(self._track_checks.items()) if check.get_active()]
@@ -2645,6 +2719,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
     def _begin_rip_job(self, job: RipJob) -> None:
         self._ripping = True
+        self._rip_started_at = time.monotonic()
         self._rip_engine = RipEngine()
         self._set_ripping_ui(True)
         fmt = (job.encode_format or 'flac').upper()
@@ -2895,6 +2970,13 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _on_rip_finished(self, result: RipResult) -> None:
         self._ripping = False
         self._rip_engine = None
+        self._rip_started_at = 0.0
+        if self._cancel_rip_dialog is not None:
+            try:
+                self._cancel_rip_dialog.force_close()
+            except Exception:
+                pass
+            self._cancel_rip_dialog = None
         self._set_ripping_ui(False)
 
         if result.cancelled:
@@ -3615,23 +3697,13 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._on_art_album_geometry()
 
     def _set_album_fields_editable(self, editable: bool) -> None:
-        """Lock Album fields while ripping without the insensitive grey look.
-
-        Keep rows sensitive + editable so Adwaita paints full-opacity text;
-        ``can_target=False`` blocks clicks/typing without dimming.
-        """
-        self._album_fields_locked = not editable
+        """Lock Album EntryRows while ripping without greying their text."""
         for row in self._album_field_rows:
-            row.set_sensitive(True)
-            row.set_editable(True)
-            row.set_can_target(editable)
-            row.set_focusable(editable)
+            row.set_editable(editable)
             if editable:
                 row.remove_css_class('ready2rip-album-locked')
             else:
                 row.add_css_class('ready2rip-album-locked')
-        if not editable:
-            self._defer_clear_window_focus()
 
     def _blank_album_for_disc(self, info: DiscInfo) -> AlbumMetadata:
         tracks = [TrackMetadata(number=t.number, title='', artist='') for t in info.tracks]
@@ -3675,7 +3747,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._suppress_meta_write = False
 
     def _on_album_field_changed(self, *_args) -> None:
-        if self._suppress_meta_write or self._album_fields_locked or self._disc is None:
+        if self._suppress_meta_write or self._disc is None:
             return
         album = self._ensure_album_tracks()
         if self._album_title_row is not None:
@@ -4391,13 +4463,21 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._apply_album(album)
 
     def _show_picker(self, candidates: list[AlbumMetadata]) -> None:
-        dialog = MetadataPickerDialog(candidates)
+        disc_tracks = self._disc.track_count if self._disc is not None else 0
+        dialog = MetadataPickerDialog(candidates, disc_track_count=disc_tracks)
 
         def on_closed(*_a) -> None:
             chosen = dialog.chosen
             if chosen is not None:
                 self._apply_album(chosen)
-                self._toast(f'Using {chosen.source}: {chosen.title}')
+                n = len(chosen.tracks) if chosen.tracks else 0
+                if disc_tracks > 0 and n and n != disc_tracks:
+                    self._toast(
+                        f'Using {chosen.source}: {chosen.title} '
+                        f'({n} tracks on this medium; disc has {disc_tracks})'
+                    )
+                else:
+                    self._toast(f'Using {chosen.source}: {chosen.title}')
             elif self._album is None:
                 self._toast(f'{len(candidates)} matches · none selected')
 
