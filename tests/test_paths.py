@@ -177,9 +177,9 @@ def test_artist_style_feat_and_slash_in_paths() -> None:
         ],
     )
     feat = template_values(album=album, track_number=1, artist_style='feat')
-    assert feat['album_artist'] == 'Main'
-    assert feat['artist'] == 'Main'
-    assert feat['title'] == 'Song feat. Guest & Other'
+    assert feat['album_artist'] == 'Main feat. Guest & Other'
+    assert feat['artist'] == 'Main feat. Guest & Other'
+    assert feat['title'] == 'Song'
 
     slash = template_values(album=album, track_number=1, artist_style='slash')
     # ASCII ``/`` cannot appear in path components; use fullwidth solidus.
@@ -189,14 +189,14 @@ def test_artist_style_feat_and_slash_in_paths() -> None:
     album_dir, path = build_output_paths(
         base_dir=Path('/tmp/music'),
         album_folder_template='{album_artist}/{album}/{disc_folder}',
-        filename_template='{track:02d} - {title}',
+        filename_template='{track:02d} - {artist} - {title}',
         album=album,
         track_number=1,
         extension='.flac',
         artist_style='feat',
     )
-    assert album_dir == Path('/tmp/music/Main/Collab')
-    assert path.name == '01 - Song feat. Guest & Other.flac'
+    assert album_dir == Path('/tmp/music/Main feat. Guest & Other/Collab')
+    assert path.name == '01 - Main feat. Guest & Other - Song.flac'
 
 
 def test_unique_output_path_versions(tmp_path: Path) -> None:

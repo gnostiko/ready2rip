@@ -5,13 +5,10 @@ In the UI and canonical string form, multiple artists are stored as::
 
     Artist One; Artist Two; Artist Three
 
-Filename styles (settings):
-  * ``semicolon`` — ``A; B; C``
-  * ``slash`` — ``A / B / C``
-  * ``feat`` — ``Song feat. B & C`` in the title; primary artist only in tags
-
-Embedded tags always use native multi-value artist fields (Vorbis / ID3 / MP4),
-except ``feat`` which writes the primary artist and puts guests on the title.
+Filename / tag styles (settings):
+  * ``semicolon`` — ``A; B; C`` (tags: native multi-value)
+  * ``slash`` — ``A / B / C`` (tags: native multi-value)
+  * ``feat`` — ``A feat. B & C`` in the artist field; title stays clean
 """
 
 from __future__ import annotations
@@ -82,7 +79,7 @@ def format_artists(
     value: str | None,
     style: str | None = DEFAULT_ARTIST_STYLE,
 ) -> str:
-    """Format a semicolon-stored artist string for display / filenames."""
+    """Format a semicolon-stored artist string for display / filenames / feat. tags."""
     names = split_artists(value)
     if not names:
         return ''
@@ -96,29 +93,37 @@ def format_artists(
     return join_artists(names)
 
 
+def artist_style_for_container(
+    style: str | None,
+    *,
+    suffix: str | None = None,
+    encode_format: str | None = None,
+    m4a_feat_artists: bool = False,
+) -> str:
+    """Resolve artist style for a file, optionally forcing feat. for Apple M4A."""
+    kind = normalize_artist_style(style)
+    if not m4a_feat_artists:
+        return kind
+    ext = (suffix or '').casefold()
+    fmt = (encode_format or '').casefold()
+    if ext in {'.m4a', '.mp4', '.aac'} or fmt in {'aac', 'qaac', 'alac'}:
+        return ARTIST_STYLE_FEAT
+    return kind
+
+
 def format_title_with_artists(
     title: str | None,
     artist: str | None,
     style: str | None = DEFAULT_ARTIST_STYLE,
 ) -> str:
-    """Append ``feat.`` guests to *title* when style is ``feat`` and guests exist.
+    """Return *title* unchanged.
 
-    Example: ``Song`` + ``Main; Guest; Other`` → ``Song feat. Guest & Other``.
+    Featured guests belong on the artist string (``format_artists`` / ``feat.``
+    style), not the title. *artist* / *style* are accepted for call-site
+    compatibility.
     """
-    text = (title or '').strip()
-    if normalize_artist_style(style) != ARTIST_STYLE_FEAT:
-        return text
-    names = split_artists(artist)
-    if len(names) <= 1:
-        return text
-    guests = join_names_natural(names[1:])
-    if not guests:
-        return text
-    if ' feat. ' in text.casefold():
-        return text
-    if not text:
-        return f'feat. {guests}'
-    return f'{text} feat. {guests}'
+    del artist, style
+    return (title or '').strip()
 
 
 def primary_artist(value: str | None) -> str:

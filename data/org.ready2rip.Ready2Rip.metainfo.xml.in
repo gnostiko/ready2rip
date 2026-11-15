@@ -29,6 +29,15 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-15">
       <description>
         <p>
+          0.4.51: Optional feat. artists for M4A/AAC (Apple/iPod); keep
+          Album text readable while ripping; swap Encoding/Metadata settings
+          icons; drop boxed-list cards on Album and Tracks.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.50" date="2026-11-15">
+      <description>
+        <p>
           0.4.50: Restore AppImage icons on Ubuntu 24.04 builds by shipping
           the SVG GdkPixbuf loader (librsvg2-common) and failing the build
           when it is missing.

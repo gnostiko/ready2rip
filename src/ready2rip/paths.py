@@ -9,13 +9,10 @@ from pathlib import Path
 
 from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
 from ready2rip.tags.artists import (
-    ARTIST_STYLE_FEAT,
     ARTIST_STYLE_SLASH,
     DEFAULT_ARTIST_STYLE,
     format_artists,
-    format_title_with_artists,
     normalize_artist_style,
-    primary_artist,
 )
 from ready2rip.util import ensure_path_under
 
@@ -247,15 +244,10 @@ def template_values(
     disc_prefix = ''
     disc_track = track_padded
 
-    if style == ARTIST_STYLE_FEAT:
-        # Title carries guests; keep folder/{artist} as the primary performer.
-        display_album_artist = primary_artist(album_artist) or album_artist
-        display_track_artist = primary_artist(track_artist) or track_artist
-        display_title = format_title_with_artists(track_title, track_artist, style)
-    else:
-        display_album_artist = format_artists(album_artist, style)
-        display_track_artist = format_artists(track_artist, style)
-        display_title = track_title
+    # feat. guests go on the artist string; title stays the plain track name.
+    display_album_artist = format_artists(album_artist, style)
+    display_track_artist = format_artists(track_artist, style)
+    display_title = track_title
 
     safe_artist = sanitize_component(
         _path_safe_artist(display_album_artist, style)

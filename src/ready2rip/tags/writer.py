@@ -14,10 +14,10 @@ from ready2rip.paths import track_meta_for
 from ready2rip.tags.artists import (
     ARTIST_STYLE_FEAT,
     DEFAULT_ARTIST_STYLE,
-    format_title_with_artists,
+    artist_style_for_container,
+    format_artists,
     normalize_artist_style,
     normalize_artists,
-    primary_artist,
     split_artists,
 )
 from ready2rip.util import normalize_release_date
@@ -123,6 +123,7 @@ class TagWriter:
         *,
         total_tracks: int | None = None,
         artist_style: str | None = DEFAULT_ARTIST_STYLE,
+        m4a_feat_artists: bool = False,
         image: bool = False,
         encoded_by: str | None = None,
         ripper_comment: str | None = None,
@@ -133,9 +134,15 @@ class TagWriter:
         When *image* is True, write album-level identity only (no track/ISRC).
         *encoded_by* is the codec/tool string (always written when provided).
         *ripper_comment* is optional ``ready2rip <version>`` in the comment field.
+        When *m4a_feat_artists* is True, M4A/MP4/AAC get a single
+        ``Primary feat. Guests`` artist string for Apple/iPod players.
         """
         suffix = path.suffix.lower()
-        style = normalize_artist_style(artist_style)
+        style = artist_style_for_container(
+            artist_style,
+            suffix=suffix,
+            m4a_feat_artists=m4a_feat_artists,
+        )
         album_title = album.title or 'Unknown Album'
         raw_album_artist = normalize_artists(album.artist or 'Unknown Artist')
         album_artists = _people_tag_values(_artist_names_for_tags(raw_album_artist, style=style))
@@ -149,17 +156,14 @@ class TagWriter:
             total = None
         else:
             track = track_meta_for(album, track_number)
-            raw_title = track.title if track and track.title else f'Track {track_number:02d}'
-            # UI / paths keep "A; B; C"; tags use native multi-value (or feat. title).
+            title = track.title if track and track.title else f'Track {track_number:02d}'
+            # UI / paths keep "A; B; C"; tags use native multi-value, or a single
+            # "A feat. B & C" artist string when style is feat. (or M4A override).
             raw_artist = normalize_artists(
                 (track.artist if track and track.artist else None)
                 or album.artist
                 or 'Unknown Artist'
             )
-            if style == ARTIST_STYLE_FEAT:
-                title = format_title_with_artists(raw_title, raw_artist, style)
-            else:
-                title = raw_title
             artists = _people_tag_values(_artist_names_for_tags(raw_artist, style=style))
             total = (
                 total_tracks
@@ -943,10 +947,14 @@ def _people_tag_values(names: list[str] | str | None) -> list[str]:
 
 
 def _artist_names_for_tags(value: str, *, style: str) -> list[str]:
-    """Artist names for native multi-value tags (feat. → primary only)."""
+    """Artist names for tags.
+
+    Semicolon / slash → native multi-value. feat. → one value
+    ``Primary feat. Guest & Other`` (title stays clean).
+    """
     if normalize_artist_style(style) == ARTIST_STYLE_FEAT:
-        primary = primary_artist(value)
-        return [primary] if primary else ['Unknown Artist']
+        formatted = format_artists(value, ARTIST_STYLE_FEAT)
+        return [formatted] if formatted else ['Unknown Artist']
     names = split_artists(value)
     return names or ['Unknown Artist']
 

@@ -304,14 +304,25 @@
       <summary>How multiple artists appear in filenames</summary>
       <description>
         semicolon — A; B; C. slash — A / B / C in filenames. Tags use native
-        multi-value artist fields. feat — title becomes "Track feat. B &amp; C"
-        with primary artist only in tags.
+        multi-value artist fields for those styles. feat — artist becomes
+        "A feat. B &amp; C" (single value); title stays clean.
       </description>
       <choices>
         <choice value='semicolon'/>
         <choice value='slash'/>
         <choice value='feat'/>
       </choices>
+    </key>
+
+    <key name="m4a-feat-artists" type="b">
+      <default>true</default>
+      <summary>Use feat. artists for M4A / AAC</summary>
+      <description>
+        When enabled, M4A/AAC/ALAC/QAAC files get a single artist string
+        "Primary feat. Guests" for iPod and Apple Music compatibility, even
+        if Multiple artists is set to semicolon or slash. FLAC and other
+        formats keep the Multiple artists style.
+      </description>
     </key>
 
     <key name="verify-accuraterip" type="b">

@@ -110,7 +110,7 @@ from ready2rip.settings_defs import (
     lyrics_mode_writes_tags,
     normalize_existing_files_policy,
 )
-from ready2rip.tags.artists import DEFAULT_ARTIST_STYLE
+from ready2rip.tags.artists import DEFAULT_ARTIST_STYLE, artist_style_for_container
 from ready2rip.tags.writer import TagWriter, ripper_tag_value
 from ready2rip.util import find_cdparanoia, subprocess_env_for, validate_device_path
 
@@ -189,6 +189,8 @@ class RipJob:
     filename_template: str = DEFAULT_FILENAME_TEMPLATE
     album_folder_template: str = DEFAULT_ALBUM_FOLDER_TEMPLATE
     artist_style: str = DEFAULT_ARTIST_STYLE
+    # Force "Primary feat. Guests" on M4A/AAC/ALAC/QAAC for Apple/iPod.
+    m4a_feat_artists: bool = True
     save_cover_file: bool = True
     verify_accuraterip: bool = True
     verify_ctdb: bool = True
@@ -1535,6 +1537,11 @@ class RipEngine:
                 else:
                     # Unknown / empty custom path → keep both in the album folder.
                     folder_layout = 'same_folder'
+            path_style = artist_style_for_container(
+                job.artist_style,
+                encode_format=enc_fmt,
+                m4a_feat_artists=job.m4a_feat_artists,
+            )
             meta_dir, templated = build_output_paths(
                 base_dir=enc_base,
                 album_folder_template=job.album_folder_template,
@@ -1542,7 +1549,7 @@ class RipEngine:
                 album=job.album,
                 track_number=max(1, track_number),
                 extension=enc_ext,
-                artist_style=job.artist_style,
+                artist_style=path_style,
             )
             audio_dir = audio_dir_for_format(
                 meta_dir,
@@ -1732,6 +1739,7 @@ class RipEngine:
                     track_number,
                     total_tracks=total_for_tags or None,
                     artist_style=job.artist_style,
+                    m4a_feat_artists=job.m4a_feat_artists,
                     image=tag_as_image,
                     encoded_by=encoder_tag_for_format(dest.format),
                     ripper_comment=(ripper_tag_value() if job.add_ripper_tag else None),
@@ -3012,6 +3020,11 @@ class RipEngine:
 
         # Album folder (reuse track-1 path builder for consistent layout).
         ext = self.EXTENSIONS[fmt]
+        path_style = artist_style_for_container(
+            job.artist_style,
+            encode_format=fmt,
+            m4a_feat_artists=job.m4a_feat_artists,
+        )
         album_dir, _ = build_output_paths(
             base_dir=base,
             album_folder_template=job.album_folder_template,
@@ -3019,7 +3032,7 @@ class RipEngine:
             album=job.album,
             track_number=1,
             extension=ext,
-            artist_style=job.artist_style,
+            artist_style=path_style,
         )
         try:
             album_dir.mkdir(parents=True, exist_ok=True)

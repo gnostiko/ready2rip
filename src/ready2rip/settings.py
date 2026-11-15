@@ -284,7 +284,10 @@ class AppSettings:
     # Multi-disc albums use {disc_folder} (CD1, CD2, …); track files stay 01…
     album_folder_template: str = DEFAULT_ALBUM_FOLDER_TEMPLATE
     # How multi-artist strings appear in filenames/tags: semicolon | slash | feat.
+    # feat. → "Primary feat. Guests" on the artist field (title unchanged).
     artist_style: str = DEFAULT_ARTIST_STYLE
+    # Force feat. artist string on M4A/AAC/ALAC/QAAC for Apple/iPod players.
+    m4a_feat_artists: bool = True
     verify_accuraterip: bool = True
     verify_ctdb: bool = True
     submit_ctdb: bool = False
@@ -473,6 +476,7 @@ class SettingsStore:
                 artist_style=normalize_artist_style(
                     _get_string(s, 'artist-style', DEFAULT_ARTIST_STYLE)
                 ),
+                m4a_feat_artists=_get_bool(s, 'm4a-feat-artists', True),
                 verify_accuraterip=s.get_boolean('verify-accuraterip'),
                 verify_ctdb=_get_bool(s, 'verify-ctdb', True),
                 submit_ctdb=_get_bool(s, 'submit-ctdb', False),
@@ -580,6 +584,7 @@ class SettingsStore:
             'filename_template': ('filename-template', 'string'),
             'album_folder_template': ('album-folder-template', 'string'),
             'artist_style': ('artist-style', 'string'),
+            'm4a_feat_artists': ('m4a-feat-artists', 'bool'),
             'verify_accuraterip': ('verify-accuraterip', 'bool'),
             'verify_ctdb': ('verify-ctdb', 'bool'),
             'submit_ctdb': ('submit-ctdb', 'bool'),

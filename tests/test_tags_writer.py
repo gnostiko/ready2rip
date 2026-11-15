@@ -27,7 +27,9 @@ def test_artist_names_multi_value_and_feat() -> None:
         'Guest',
         'Other',
     ]
-    assert _artist_names_for_tags(value, style='feat') == ['Main']
+    assert _artist_names_for_tags(value, style='feat') == [
+        'Main feat. Guest & Other'
+    ]
 
 
 def test_people_tag_values_never_keeps_semicolon_blob() -> None:

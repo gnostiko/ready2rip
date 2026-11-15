@@ -233,6 +233,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._track_lead_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
         self._track_dur_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
         self._album_field_rows: list[Gtk.Widget] = []
+        self._album_fields_locked = False
         self._album_title_row: Adw.EntryRow | None = None
         self._album_artist_row: Adw.EntryRow | None = None
         self._album_date_row: Adw.EntryRow | None = None
@@ -520,12 +521,12 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             ),
             (
                 'Encoding',
-                'audio-x-generic-symbolic',
+                'document-properties-symbolic',
                 (self.encoding_group, self.files_group, self.naming_group),
             ),
             (
                 'Metadata',
-                'document-properties-symbolic',
+                'audio-x-generic-symbolic',
                 (self.lookup_group, self.artwork_group, self.tags_group),
             ),
             (
@@ -1131,12 +1132,26 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             normalize_artist_style(settings.artist_style),
         )
         self._artist_style_row.set_tooltip_text(
-            'How multiple artists appear in filenames. Tags keep native '
-            'multi-value artist fields. feat. moves guests onto the title '
-            '(Track feat. Guest & Other) and keeps the primary artist'
+            'How multiple artists appear in filenames and tags. '
+            'semicolon / slash keep native multi-value artist fields. '
+            'feat. writes a single artist string '
+            '(Primary feat. Guest & Other) and leaves the title clean'
         )
         self._artist_style_row.connect('notify::selected', self._on_artist_style_changed)
         self._add_pref(self.naming_group, self._artist_style_row)
+
+        self._m4a_feat_row = self._make_switch_row(
+            title='feat. artists for M4A',
+            tooltip=(
+                'Write a single “Primary feat. Guests” artist string on '
+                'M4A/AAC/ALAC/QAAC for iPod and Apple Music compatibility, '
+                'even when Multiple artists is semicolon or slash. '
+                'FLAC and other formats keep the Multiple artists style'
+            ),
+            active=settings.m4a_feat_artists,
+            handler=self._on_m4a_feat_toggled,
+        )
+        self._add_pref(self.naming_group, self._m4a_feat_row)
 
     def _build_ripping_settings(self, settings) -> None:
         switches: list[tuple[str, Adw.PreferencesGroup, str, str, bool, object]] = [
@@ -1436,6 +1451,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             (self._filename_scheme_row, self._on_filename_scheme_changed),
             (self._filename_row, self._on_filename_changed),
             (self._artist_style_row, self._on_artist_style_changed),
+            (self._m4a_feat_row, self._on_m4a_feat_toggled),
             (self._encoder_row, self._on_encoder_changed),
             (self._quality_row, self._on_quality_changed),
             (self._also_encode_row, self._on_also_encode_toggled),
@@ -1505,6 +1521,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 [sid for sid, _label in ARTIST_STYLES],
                 normalize_artist_style(settings.artist_style),
             )
+            self._m4a_feat_row.set_active(settings.m4a_feat_artists)
             self._sync_naming_scheme_ui()
             self._select_combo(self._encoder_row, ids, settings.encode_format)
             # Force quality combo to reload from store values.
@@ -2028,6 +2045,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         idx = row.get_selected()
         if 0 <= idx < len(ARTIST_STYLES):
             self.store.update(artist_style=ARTIST_STYLES[idx][0])
+
+    def _on_m4a_feat_toggled(self, row: Adw.SwitchRow, *_args) -> None:
+        self.store.update(m4a_feat_artists=row.get_active())
 
     def _on_existing_files_changed(self, row: Adw.ComboRow, *_args) -> None:
         idx = row.get_selected()
@@ -2562,6 +2582,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             filename_template=settings.filename_template,
             album_folder_template=settings.album_folder_template,
             artist_style=settings.artist_style,
+            m4a_feat_artists=settings.m4a_feat_artists,
             # Loose cover.jpg only with lossless encodes (not lossy companions).
             save_cover_file=folder_art is not None,
             verify_accuraterip=settings.verify_accuraterip,
@@ -3594,13 +3615,23 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._on_art_album_geometry()
 
     def _set_album_fields_editable(self, editable: bool) -> None:
-        """Lock Album EntryRows while ripping without greying their text."""
+        """Lock Album fields while ripping without the insensitive grey look.
+
+        Keep rows sensitive + editable so Adwaita paints full-opacity text;
+        ``can_target=False`` blocks clicks/typing without dimming.
+        """
+        self._album_fields_locked = not editable
         for row in self._album_field_rows:
-            row.set_editable(editable)
+            row.set_sensitive(True)
+            row.set_editable(True)
+            row.set_can_target(editable)
+            row.set_focusable(editable)
             if editable:
                 row.remove_css_class('ready2rip-album-locked')
             else:
                 row.add_css_class('ready2rip-album-locked')
+        if not editable:
+            self._defer_clear_window_focus()
 
     def _blank_album_for_disc(self, info: DiscInfo) -> AlbumMetadata:
         tracks = [TrackMetadata(number=t.number, title='', artist='') for t in info.tracks]
@@ -3644,7 +3675,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._suppress_meta_write = False
 
     def _on_album_field_changed(self, *_args) -> None:
-        if self._suppress_meta_write or self._disc is None:
+        if self._suppress_meta_write or self._album_fields_locked or self._disc is None:
             return
         album = self._ensure_album_tracks()
         if self._album_title_row is not None:

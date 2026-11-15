@@ -291,6 +291,9 @@
                                             <property name="title" translatable="yes">Tracks</property>
                                             <property name="halign">fill</property>
                                             <property name="hexpand">true</property>
+                                            <style>
+                                              <class name="ready2rip-track-group"/>
+                                            </style>
                                           </object>
                                         </child>
 
