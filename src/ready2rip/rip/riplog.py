@@ -184,151 +184,161 @@ class RipLog:
         self.cancelled = cancelled
 
     def render(self) -> str:
-        """Build a compact but complete rip log (EAC-style checksum appended)."""
         lines: list[str] = []
         app = config.APPLICATION_NAME
         ver = config.APPLICATION_VERSION
-        stamp = self.started_at.strftime('%d %B %Y, %H:%M')
-        lines.append(f'{app} {ver} — rip log')
-        lines.append(f'Started:  {stamp}')
+        lines.append(f'{app} {ver}  —  extraction logfile')
+        lines.append('')
+        lines.append(
+            f'{app} extraction logfile from {self.started_at.strftime("%d. %B %Y, %H:%M")}'
+        )
         if self.finished_at is not None:
-            lines.append(f'Finished: {self.finished_at.strftime("%d %B %Y, %H:%M")}')
+            lines.append(f'Finished: {self.finished_at.strftime("%d. %B %Y, %H:%M")}')
         lines.append('')
 
         artist = (self.album.artist if self.album else '') or 'Unknown Artist'
         album = (self.album.title if self.album else '') or 'Unknown Album'
         lines.append(f'{artist} / {album}')
         if self.album and self.album.date:
-            lines.append(_kv('Release date', self.album.date))
+            lines.append(f'Release date: {self.album.date}')
         if self.album and self.album.musicbrainz_release_id:
-            lines.append(_kv('MusicBrainz', self.album.musicbrainz_release_id))
+            lines.append(f'MusicBrainz release: {self.album.musicbrainz_release_id}')
         lines.append('')
 
-        self._render_drive_section(lines)
-        self._render_extraction_section(lines)
-        self._render_encode_section(lines)
-        self._render_verify_section(lines)
-        self._render_toc_section(lines)
-        self._render_tracks_section(lines)
-        self._render_summary_section(lines)
-
-        lines.append('End of status report')
-        lines.append('')
-        return append_eac_checksum('\n'.join(lines))
-
-    def _render_drive_section(self, lines: list[str]) -> None:
-        lines.append('== Drive ==')
-        lines.append(_kv('Device', self.device or 'unknown'))
+        lines.append(f'Used drive  : {self.device or "unknown"}')
         lines.append(
-            _kv(
-                'Host',
-                f'{platform.system()} {platform.release()} ({platform.machine()})',
-            )
+            f'Host system : {platform.system()} {platform.release()} ({platform.machine()})'
         )
-        offset_note = (
-            'calibrated' if self.offset_configured else 'NOT CALIBRATED — AccurateRip may mismatch'
-        )
-        lines.append(_kv('Read offset', f'{self.sample_offset} ({offset_note})'))
-        lines.append(_kv('Overread', self.overread_label))
-        if self.overread_label == 'Yes':
-            fill = 'No — drive overreads; real samples at edges'
-        elif self.overread_label == 'No':
-            fill = 'Yes — silence at AccurateRip edges'
-        else:
-            fill = 'Partial — silence where overread unavailable'
-        lines.append(_kv('Missing samples', fill))
-        lines.append(_kv('Interface', 'Linux /dev (cdparanoia)'))
-        lines.append(_kv('CRC', 'CRC-32 of PCM (nulls in; WAV header out)'))
         lines.append('')
 
-    def _render_extraction_section(self, lines: list[str]) -> None:
+        # Reflect what was actually used for the final audio, not only intent.
         final_modes = [(t.extract_mode or '').lower() for t in self.tracks if t.number > 0]
         any_burst = any('burst' in m for m in final_modes)
         all_burst = bool(final_modes) and all('burst' in m for m in final_modes)
         if self.burst_mode or all_burst:
-            read_mode = 'Burst (-Z, paranoia off)'
-            read_cmd = 'cdparanoia -w -Z -e (-O when calibrated)'
+            read_mode = (
+                'Burst mode (paranoia disabled / -Z)'
+                if self.burst_mode
+                else 'Burst (paranoia disabled / -Z) — full-disc or per-track fallback'
+            )
+            read_cmd = 'cdparanoia -w -Z -e (-O offset when calibrated)'
         elif any_burst:
-            read_mode = 'Secure + burst fallback (some tracks -Z)'
-            read_cmd = 'cdparanoia -w --never-skip=500 -X -o 8 (burst: -Z)'
+            read_mode = 'Secure with burst fallback (some tracks re-read with -Z)'
+            read_cmd = (
+                'cdparanoia -w --never-skip=500 -X -o 8  (burst: -Z) (-O offset when calibrated)'
+            )
         else:
-            read_mode = 'Secure (full paranoia)'
-            read_cmd = 'cdparanoia -w --never-skip=500 -X -o 8 (-O when calibrated)'
-
-        lines.append('== Extraction ==')
-        lines.append(_kv('Mode', read_mode))
-        lines.append(_kv('Command', read_cmd))
+            read_mode = (
+                'Secure (cdparanoia full paranoia, never-skip + abort-on-skip + forced overlap)'
+            )
+            read_cmd = 'cdparanoia -w --never-skip=500 -X -o 8 (-O offset when calibrated)'
+        lines.append(f'Read mode               : {read_mode}')
+        lines.append(f'Read command            : {read_cmd}')
         if self.burst_mode:
-            lines.append(_kv('Test & copy', 'No (burst mode)'))
+            lines.append('Test & copy             : No (burst mode)')
         elif self.test_and_copy:
             lines.append(
-                _kv('Test & copy', f'Yes (max {max(0, self.test_copy_max_retries)} CRC retries)')
+                f'Test & copy             : Yes '
+                f'(max {max(0, self.test_copy_max_retries)} CRC retry)'
             )
         else:
-            lines.append(_kv('Test & copy', 'No'))
-        lines.append(_kv('Burst mode', _yes_no(self.burst_mode)))
+            lines.append('Test & copy             : No')
+        lines.append('Burst mode              : Yes' if self.burst_mode else 'Burst mode              : No')
         lines.append(
-            _kv('Burst fallback', _yes_no(self.burst_fallback and not self.burst_mode))
+            'Burst fallback          : Yes'
+            if self.burst_fallback and not self.burst_mode
+            else 'Burst fallback          : No'
         )
         lines.append(
-            _kv(
-                'Cache flush',
-                'Yes (between test/copy)' if self.defeat_audio_cache else 'No',
-            )
+            'Defeat audio cache      : Yes (flush between test/copy)'
+            if self.defeat_audio_cache
+            else 'Defeat audio cache      : No'
         )
-        lines.append(_kv('HTOA / pregap', _yes_no(self.rip_htoa)))
-        lines.append(_kv('Data tracks', _yes_no(self.rip_data_tracks)))
+        lines.append(
+            'Rip HTOA / pregap       : Yes' if self.rip_htoa else 'Rip HTOA / pregap       : No'
+        )
+        lines.append(
+            'Rip data tracks         : Yes'
+            if self.rip_data_tracks
+            else 'Rip data tracks         : No'
+        )
         if self.disc is not None and getattr(self.disc, 'pregap_source', ''):
-            lines.append(_kv('Pregap source', self.disc.pregap_source))
-        lines.append(
-            _kv(
-                'Gaps',
-                'INDEX 00 → previous; 2s pause → PREGAP; non-silent HTOA → track 00',
-            )
+            lines.append(f'Pregap source           : {self.disc.pregap_source}')
+        lines.append('')
+        offset_note = (
+            'calibrated' if self.offset_configured else 'NOT CALIBRATED — AccurateRip may mismatch'
         )
         lines.append(
-            _kv(
-                'Recovery',
-                'paranoia re-read; CRC mismatch → retries; else fail '
-                '(or -Z if burst fallback)',
-            )
+            f'Read offset correction                      : {self.sample_offset} ({offset_note})'
+        )
+        lines.append(f'Overread into Lead-In and Lead-Out          : {self.overread_label}')
+        if self.overread_label == 'Yes':
+            fill = 'No (drive overreads; offset edges use real samples)'
+        elif self.overread_label == 'No':
+            fill = 'Yes (cdparanoia -O / AccurateRip edges)'
+        else:
+            fill = 'Partial (silence where overread is unavailable)'
+        lines.append(f'Fill up missing offset samples with silence : {fill}')
+        lines.append('Delete leading and trailing silent blocks   : No')
+        lines.append('Null samples used in CRC calculations       : Yes')
+        lines.append(
+            'Used interface                              : Linux /dev (cdparanoia / libcdio-paranoia)'
+        )
+        lines.append(
+            'Gap handling                                : '
+            'INDEX 00 merged into previous track; '
+            'standard 2s track-1 pause as PREGAP unless HTOA; '
+            'longer non-silent HTOA → track 00; track 1 never includes INDEX 00'
+        )
+        lines.append(
+            'Error recovery                              : '
+            'Full paranoia re-read + jitter fixup; never-skip=500; '
+            'force overlap (-o 8); abort on skip (-X); '
+            'CRC mismatch → up to 3 secure retries; unmatched tracks fail '
+            'unless Burst Fallback (-Z) is enabled'
+        )
+        lines.append(
+            'CRC algorithm                               : '
+            'CRC-32 of all PCM samples (null samples included; WAV header excluded)'
         )
         lines.append('')
 
-    def _render_encode_section(self, lines: list[str]) -> None:
-        lines.append('== Encode ==')
-        fmt = (self.encode_format or 'flac').strip().lower()
-        if fmt == 'flac':
-            bitrate = f'lossless (FLAC level {self.flac_compression})'
-        elif fmt == 'wavpack':
+        lines.append(f'Used output format              : {self.encode_format.upper()}')
+        if self.encode_format == 'flac':
+            lines.append(f'FLAC compression level          : {self.flac_compression}')
+            lines.append('Selected bitrate                : lossless')
+        elif self.encode_format == 'wavpack':
             from ready2rip.settings_defs import rip_log_wavpack_level
 
-            bitrate = f'lossless ({rip_log_wavpack_level(self.wavpack_compression)})'
-        elif fmt == 'alac':
-            bitrate = 'lossless (ALAC)'
-        elif fmt == 'mp3':
-            bitrate = rip_log_mp3_quality(self.mp3_quality)
-        elif fmt == 'aac':
-            bitrate = rip_log_aac_quality(self.aac_quality)
-        elif fmt == 'qaac':
-            bitrate = rip_log_qaac_quality(self.qaac_quality)
-        elif fmt == 'opus':
-            bitrate = f'{self.opus_bitrate} kBit/s VBR'
+            lines.append(
+                f'WavPack compression             : '
+                f'{rip_log_wavpack_level(self.wavpack_compression)}'
+            )
+            lines.append('Selected bitrate                : lossless')
+        elif self.encode_format == 'alac':
+            lines.append('Selected bitrate                : lossless (ALAC)')
+        elif self.encode_format == 'mp3':
+            lines.append(
+                f'Selected bitrate                : {rip_log_mp3_quality(self.mp3_quality)}'
+            )
+        elif self.encode_format == 'aac':
+            lines.append(
+                f'Selected bitrate                : {rip_log_aac_quality(self.aac_quality)}'
+            )
+        elif self.encode_format == 'opus':
+            lines.append(f'Selected bitrate                : {self.opus_bitrate} kBit/s VBR')
         else:
-            bitrate = 'uncompressed PCM'
-        lines.append(_kv('Format', f'{fmt.upper()} — {bitrate}'))
+            lines.append('Selected bitrate                : uncompressed PCM')
         lines.append(
-            _kv(
-                'Encoder',
-                encode_command_summary(
-                    self.encode_format,
-                    flac_compression=self.flac_compression,
-                    wavpack_compression=self.wavpack_compression,
-                    mp3_quality=self.mp3_quality,
-                    aac_quality=self.aac_quality,
-                    qaac_quality=self.qaac_quality,
-                    opus_bitrate=self.opus_bitrate,
-                ),
+            'Encoder command                 : '
+            + encode_command_summary(
+                self.encode_format,
+                flac_compression=self.flac_compression,
+                wavpack_compression=self.wavpack_compression,
+                mp3_quality=self.mp3_quality,
+                aac_quality=self.aac_quality,
+                qaac_quality=self.qaac_quality,
+                opus_bitrate=self.opus_bitrate,
             )
         )
         if self.also_encode:
@@ -344,33 +354,39 @@ class RipLog:
                 layout_note = f'custom → {self.also_encode_directory}'
             else:
                 layout_note = layout
-            lines.append(_kv('Also encode', f'{also_label} ({layout_note})'))
+            lines.append(f'Also encode lossy               : {also_label} ({layout_note})')
+            if also_fmt == 'qaac':
+                lines.append(
+                    f'Selected bitrate                : {rip_log_qaac_quality(self.qaac_quality)}'
+                )
             lines.append(
-                _kv(
-                    'Lossy encoder',
-                    encode_command_summary(
-                        self.also_encode_format,
-                        flac_compression=self.flac_compression,
-                        mp3_quality=self.mp3_quality,
-                        aac_quality=self.aac_quality,
-                        qaac_quality=self.qaac_quality,
-                        opus_bitrate=self.opus_bitrate,
-                    ),
+                'Lossy encoder command           : '
+                + encode_command_summary(
+                    self.also_encode_format,
+                    flac_compression=self.flac_compression,
+                    mp3_quality=self.mp3_quality,
+                    aac_quality=self.aac_quality,
+                    qaac_quality=self.qaac_quality,
+                    opus_bitrate=self.opus_bitrate,
                 )
             )
-        lines.append(_kv('Pre-process', 'None'))
-        lines.append(_kv('Tags', 'Yes (Encoded by = tool + version)'))
-        lines.append(_kv('Ripper tag', _yes_no(self.add_ripper_tag)))
+        lines.append(
+            'Audio pre-process               : None '
+            '(no gain, EQ, fade, remix, or forced resample before encode)'
+        )
+        lines.append('Add tags                        : Yes')
+        lines.append('Encoded by tag                   : Yes (codec tool + version)')
+        lines.append(f'Ripper tag (comment)             : {"Yes" if self.add_ripper_tag else "No"}')
         if not self.embed_lyrics:
             lyrics_label = 'No'
         else:
             mode = (self.lyrics_save_mode or 'both').strip().lower()
             lyrics_label = {
-                'embed': 'Yes (embed)',
-                'sidecar': 'Yes (sidecar)',
+                'embed': 'Yes (embed in tags)',
+                'sidecar': 'Yes (sidecar files)',
                 'both': 'Yes (embed + sidecar)',
             }.get(mode, f'Yes ({mode})')
-        lines.append(_kv('Lyrics', lyrics_label))
+        lines.append(f'Save lyrics (lossless)           : {lyrics_label}')
         if self.embed_artwork and self.embed_artwork_lossless:
             embed_label = 'Yes (lossy + lossless)'
         elif self.embed_artwork:
@@ -379,146 +395,138 @@ class RipLog:
             embed_label = 'Yes (lossless)'
         else:
             embed_label = 'No'
-        lines.append(_kv('Artwork', embed_label))
-        lines.append(_kv('ReplayGain', _yes_no(self.apply_replaygain)))
-        lines.append(_kv('Sound Check', _yes_no(self.write_sound_check)))
-        lines.append('')
-
-    def _render_verify_section(self, lines: list[str]) -> None:
-        lines.append('== Verify ==')
-        lines.append(_kv('AccurateRip', _yes_no(self.verify_accuraterip)))
-        if self.ar_status:
-            lines.append(_kv('AR database', self.ar_status))
-        lines.append(_kv('CTDB', _yes_no(self.verify_ctdb)))
-        if self.ctdb_status:
-            lines.append(_kv('CTDB database', self.ctdb_status))
-        lines.append(_kv('CTDB submit', _yes_no(self.submit_ctdb)))
+        lines.append(f'Embed artwork                   : {embed_label}')
         lines.append(
-            _kv(
-                'CUE sheet',
-                'Yes (multi-file / image)' if self.write_cue_file else 'No',
-            )
+            f'ReplayGain                      : {"Yes" if self.apply_replaygain else "No"}'
+        )
+        lines.append(
+            f'iTunes Sound Check               : {"Yes" if self.write_sound_check else "No"}'
+        )
+        lines.append(
+            f'AccurateRip                     : {"Yes" if self.verify_accuraterip else "No"}'
+        )
+        if self.ar_status:
+            lines.append(f'AccurateRip database            : {self.ar_status}')
+        lines.append(f'CTDB                            : {"Yes" if self.verify_ctdb else "No"}')
+        if self.ctdb_status:
+            lines.append(f'CTDB database                   : {self.ctdb_status}')
+        lines.append(f'CTDB submit                      : {"Yes" if self.submit_ctdb else "No"}')
+        lines.append(
+            'Write CUE sheet                 : Yes '
+            '(multi-file with INDEX 00 in previous, or image CUE; '
+            'data tracks as MODE1/2352 or MODE2/2352)'
+            if self.write_cue_file
+            else 'Write CUE sheet                 : No'
         )
         lines.append('')
 
-    def _render_toc_section(self, lines: list[str]) -> None:
-        if not (self.disc and self.disc.tracks):
-            return
-        lines.append('== TOC ==')
-        lines.append('Track |   Start  |  Length  |   Pregap | Start sec | End sec')
-        lines.append('------+----------+----------+----------+-----------+--------')
-        for t in self.disc.tracks:
-            end = t.start_sector + t.length_sectors - 1
+        burst_early = [t.number for t in self.tracks if 'burst' in (t.extract_mode or '').lower()]
+        if burst_early:
+            lines.append('WARNING: Insecure burst extraction (-Z) on this session')
+            lines.append(f'  Affected track(s): {", ".join(str(n) for n in burst_early)}')
             lines.append(
-                f'{t.number:5d} | {_msf_from_sectors(t.start_sector):>8s} | '
-                f'{_msf_from_sectors(t.length_sectors):>8s} | '
-                f'{_msf_from_sectors(t.pregap_sectors):>8s} | '
-                f'{t.start_sector:9d} | {end:7d}'
+                '  Those tracks are not archival-grade secure rips '
+                '(paranoia disabled for the final audio).'
             )
-        for d in getattr(self.disc, 'data_tracks', None) or []:
-            end = d.start_sector + d.length_sectors - 1
-            lines.append(
-                f'{d.number:5d} | {_msf_from_sectors(d.start_sector):>8s} | '
-                f'{_msf_from_sectors(d.length_sectors):>8s} | '
-                f'{_msf_from_sectors(d.pregap_sectors):>8s} | '
-                f'{d.start_sector:9d} | {end:7d}  '
-                f'{d.cue_mode} session {d.session}'
-            )
-        lines.append('')
+            lines.append('')
 
-    def _render_tracks_section(self, lines: list[str]) -> None:
-        burst_tracks = [
-            t.number for t in self.tracks if 'burst' in (t.extract_mode or '').lower()
-        ]
-        if burst_tracks:
-            lines.append(
-                f'WARNING: burst (-Z) on track(s) '
-                f'{", ".join(str(n) for n in burst_tracks)} — not archival-grade'
-            )
+        if self.disc and self.disc.tracks:
+            lines.append('TOC of the extracted CD')
+            lines.append('')
+            lines.append('     Track |   Start  |  Length  |   Pregap | Start sector | End sector')
+            lines.append('    ------------------------------------------------------------------')
+            for t in self.disc.tracks:
+                end = t.start_sector + t.length_sectors - 1
+                start_lab = _msf_from_sectors(t.start_sector)
+                len_lab = _msf_from_sectors(t.length_sectors)
+                gap_lab = _msf_from_sectors(t.pregap_sectors)
+                lines.append(
+                    f'       {t.number:2d}  | {start_lab:>8s} | {len_lab:>8s} | '
+                    f'{gap_lab:>8s} | {t.start_sector:9d}    | {end:8d}'
+                )
+            for d in getattr(self.disc, 'data_tracks', None) or []:
+                end = d.start_sector + d.length_sectors - 1
+                start_lab = _msf_from_sectors(d.start_sector)
+                len_lab = _msf_from_sectors(d.length_sectors)
+                gap_lab = _msf_from_sectors(d.pregap_sectors)
+                lines.append(
+                    f'       {d.number:2d}  | {start_lab:>8s} | {len_lab:>8s} | '
+                    f'{gap_lab:>8s} | {d.start_sector:9d}    | {end:8d}  '
+                    f'{d.cue_mode} session {d.session}'
+                )
             lines.append('')
 
         for entry in self.tracks:
-            title = entry.title.strip() if entry.title else ''
-            heading = f'Track {entry.number:02d}'
-            if title:
-                heading = f'{heading} — {title}'
-            if entry.length_label:
-                heading = f'{heading} ({entry.length_label})'
-            lines.append(heading)
+            lines.append(f'Track {entry.number:2d}')
+            lines.append('')
             if entry.output_path is not None:
-                lines.append(f'  File: {entry.output_path}')
+                lines.append(f'     Filename {entry.output_path}')
             elif entry.filename:
-                lines.append(f'  File: {entry.filename}')
-
-            stats: list[str] = []
+                lines.append(f'     Filename {entry.filename}')
+            if entry.title:
+                lines.append(f'     Title    {entry.title}')
+            lines.append('')
             if entry.peak_percent is not None:
-                stats.append(f'peak {entry.peak_percent:.1f}%')
+                lines.append(f'     Peak level {entry.peak_percent:.1f} %')
             if entry.extract_speed_x is not None:
-                stats.append(f'{entry.extract_speed_x:.1f}×')
+                lines.append(f'     Extraction speed {entry.extract_speed_x:.1f} X')
             if entry.extract_seconds is not None:
-                stats.append(f'{entry.extract_seconds:.1f}s')
-            quality = entry.quality_percent
-            if quality is None:
+                lines.append(f'     Extraction time {entry.extract_seconds:.1f} s')
+            if entry.quality_percent is not None:
+                lines.append(f'     Track quality {entry.quality_percent:.1f} %')
+            elif entry.error_correction_lines:
+                # First line from summary is usually Track quality …
                 for ec in entry.error_correction_lines:
                     if ec.lower().startswith('track quality'):
-                        # Keep "Track quality 100.0 %" style from the source line.
-                        stats.append(ec)
+                        lines.append(f'     {ec}')
                         break
-            else:
-                stats.append(f'quality {quality:.1f}%')
-            if stats:
-                lines.append(f'  {" · ".join(stats)}')
-
-            lines.append(f'  Mode: {entry.extract_mode}')
+            lines.append(f'     Extraction mode {entry.extract_mode}')
             if entry.expected_wav_bytes > 0 and entry.wav_bytes > 0:
                 delta = entry.wav_bytes - entry.expected_wav_bytes
                 lines.append(
-                    f'  WAV: {entry.wav_bytes} bytes '
+                    f'     WAV size {entry.wav_bytes} bytes '
                     f'(expected ~{entry.expected_wav_bytes}, Δ {delta:+d})'
                 )
             elif entry.wav_bytes > 0:
-                lines.append(f'  WAV: {entry.wav_bytes} bytes')
-
+                lines.append(f'     WAV size {entry.wav_bytes} bytes')
+            # Dual-pass CRC only when a real test pass was performed.
             if entry.crc_verified is not None:
                 if entry.test_crc:
-                    lines.append(f'  Test CRC: {entry.test_crc.upper()}')
+                    lines.append(f'     Test CRC {entry.test_crc.upper()}')
                 if entry.copy_crc:
-                    lines.append(f'  Copy CRC: {entry.copy_crc.upper()}')
-                lines.append(
-                    '  Test & copy: matched'
-                    if entry.crc_verified
-                    else '  Test & copy: WARNING — CRCs differ'
-                )
+                    lines.append(f'     Copy CRC {entry.copy_crc.upper()}')
+                if entry.crc_verified:
+                    lines.append('     Test and Copy CRCs matched')
+                else:
+                    lines.append('     WARNING: Test and Copy CRCs differ')
             elif entry.copy_crc:
-                lines.append(f'  Audio CRC: {entry.copy_crc.upper()} (single-pass)')
-
-            raw_mode = (entry.extract_mode or '').lower().startswith('raw')
+                # Single-pass (burst or no test&copy): one authoritative CRC.
+                lines.append(f'     Audio CRC {entry.copy_crc.upper()}')
+                lines.append('     (single-pass extract — no dual CRC verify)')
             if entry.accuraterip is not None:
-                lines.append(f'  {_format_ar_line(entry.accuraterip)}')
-            elif self.verify_accuraterip and not raw_mode:
-                lines.append('  AccurateRip: not checked')
+                lines.append(f'     {_format_ar_line(entry.accuraterip)}')
+            elif not (entry.extract_mode or '').lower().startswith('raw'):
+                lines.append('     AccurateRip not checked')
             if entry.ctdb is not None:
-                lines.append(f'  {_format_ctdb_line(entry.ctdb)}')
-            elif self.verify_ctdb and not raw_mode:
-                lines.append('  CTDB: not checked')
-
+                lines.append(f'     {_format_ctdb_line(entry.ctdb)}')
+            elif self.verify_ctdb and not (entry.extract_mode or '').lower().startswith('raw'):
+                lines.append('     CTDB not checked')
+            # Error correction block (skip duplicate quality line).
             for ec in entry.error_correction_lines:
                 if ec.lower().startswith('track quality'):
                     continue
-                lines.append(f'  {ec}')
+                lines.append(f'     {ec}')
             for line in entry.attempt_log:
-                lines.append(f'  Attempt: {line}')
+                lines.append(f'     Attempt: {line}')
             for note in entry.notes:
-                lines.append(f'  Note: {note}')
-
+                lines.append(f'     Note: {note}')
             if entry.had_errors and entry.status.upper() in ('OK', 'FINISHED'):
-                lines.append('  Result: finished with errors')
+                lines.append('     Copy finished with errors')
             else:
-                lines.append(f'  Result: {entry.status}')
+                lines.append(f'     Copy {entry.status}')
             lines.append('')
 
-    def _render_summary_section(self, lines: list[str]) -> None:
-        lines.append('== Summary ==')
+        # Summary
         ar_checked = [t for t in self.tracks if t.accuraterip is not None]
         if ar_checked:
             matches = sum(
@@ -527,11 +535,12 @@ class RipLog:
                 if t.accuraterip and t.accuraterip.confidence == AccurateRipConfidence.MATCH
             )
             if matches == len(ar_checked):
-                lines.append('AccurateRip: all tracks matched')
+                lines.append('All tracks accurately ripped')
             elif matches == 0:
-                lines.append('AccurateRip: no tracks verified')
+                lines.append('No tracks could be verified as accurate')
             else:
-                lines.append(f'AccurateRip: {matches}/{len(ar_checked)} tracks matched')
+                lines.append(f'{matches} of {len(ar_checked)} tracks accurately ripped')
+            lines.append('')
 
         ctdb_checked = [t for t in self.tracks if t.ctdb is not None]
         if ctdb_checked:
@@ -539,61 +548,75 @@ class RipLog:
                 1 for t in ctdb_checked if t.ctdb and t.ctdb.confidence == CtdbConfidence.MATCH
             )
             if matches == len(ctdb_checked):
-                lines.append('CTDB: all tracks matched')
+                lines.append('All tracks verified by CTDB')
             elif matches == 0:
-                lines.append('CTDB: no tracks verified')
+                lines.append('No tracks could be verified by CTDB')
             else:
-                lines.append(f'CTDB: {matches}/{len(ctdb_checked)} tracks matched')
+                lines.append(f'{matches} of {len(ctdb_checked)} tracks verified by CTDB')
+            lines.append('')
 
         burst = [t.number for t in self.tracks if 'burst' in (t.extract_mode or '').lower()]
         if burst:
+            lines.append('WARNING: Insecure burst extraction (-Z)')
             lines.append(
-                f'WARNING: burst (-Z) on track(s) {", ".join(str(n) for n in burst)}'
+                f'  Track(s) {", ".join(str(n) for n in burst)} were NOT ripped '
+                'with full paranoia. Audio may contain uncorrected errors.'
             )
+            lines.append('  Do not treat this as an archival-grade secure rip for those tracks.')
+            lines.append('')
 
         crc_ok = [t.number for t in self.tracks if t.crc_verified is True]
         crc_bad = [t.number for t in self.tracks if t.crc_verified is False]
-        if crc_ok and not crc_bad:
-            lines.append(f'Test & copy CRC: matched on all checked tracks ({len(crc_ok)})')
-        else:
-            if crc_ok:
-                lines.append(
-                    f'Test & copy CRC matched: {", ".join(str(n) for n in crc_ok)}'
-                )
-            if crc_bad:
-                lines.append(
-                    f'Test & copy CRC MISMATCH: {", ".join(str(n) for n in crc_bad)}'
-                )
+        if crc_ok:
+            lines.append(
+                f'Test & copy CRC matched on track(s): {", ".join(str(n) for n in crc_ok)}'
+            )
+            lines.append('')
+        if crc_bad:
+            lines.append(
+                f'Test & copy CRC MISMATCH on track(s): {", ".join(str(n) for n in crc_bad)}'
+            )
+            lines.append('')
 
         errored = [t.number for t in self.tracks if t.had_errors]
         if errored:
-            lines.append(f'Errors on track(s): {", ".join(str(n) for n in errored)}')
+            lines.append(f'There were errors on track(s): {", ".join(str(n) for n in errored)}')
+            lines.append('')
 
         if self.history:
-            lines.append('Session history:')
+            lines.append('Session history (archival):')
             for n in self.history:
                 lines.append(f'  {n}')
+            lines.append('')
+
         if self.replaygain_notes:
             lines.append('ReplayGain:')
             for n in self.replaygain_notes:
                 lines.append(f'  {n}')
+            lines.append('')
+
         if self.notes:
-            lines.append('Notes:')
+            lines.append('Additional notes:')
             for n in self.notes:
                 lines.append(f'  {n}')
+            lines.append('')
 
-        lines.append('')
         if self.cancelled:
-            lines.append('Outcome: cancelled by user')
+            lines.append('Extraction cancelled by user')
         elif self.error:
-            lines.append(f'Outcome: errors — {self.error}')
+            lines.append(f'Errors occurred: {self.error}')
         elif any(t.had_errors for t in self.tracks) or crc_bad or burst:
             lines.append(
-                'Outcome: completed with corrections, burst fallback, and/or CRC issues'
+                'Extraction completed with corrections, burst fallback, '
+                'and/or CRC issues (see per-track details and session history)'
             )
         else:
-            lines.append('Outcome: no errors')
+            lines.append('No errors occurred')
         lines.append('')
+        lines.append('End of status report')
+        lines.append('')
+        # Interchangeable log signature (Rijndael-256 CBC XOR).
+        return append_eac_checksum('\n'.join(lines))
 
     def default_log_filename(self) -> str:
         artist = sanitize_component((self.album.artist if self.album else '') or 'Unknown Artist')
@@ -701,15 +724,6 @@ def _msf_from_sectors(sectors: int) -> str:
     total_sec = sectors // 75
     minutes, seconds = divmod(total_sec, 60)
     return f'{minutes:2d}:{seconds:02d}.{frames:02d}'
-
-
-def _kv(label: str, value: str, *, width: int = 18) -> str:
-    """Compact ``Label: value`` line for the rip log."""
-    return f'{label:<{width}} {value}'
-
-
-def _yes_no(flag: bool) -> str:
-    return 'Yes' if flag else 'No'
 
 
 def _format_ar_line(ar: AccurateRipResult) -> str:
