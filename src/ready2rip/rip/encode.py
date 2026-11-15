@@ -30,6 +30,7 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 
+from ready2rip.settings_defs import normalize_aac_quality, normalize_qaac_quality
 from ready2rip.util import subprocess_env_for
 
 # WavPack preset → (wavpack CLI flags, ffmpeg -compression_level).
@@ -41,31 +42,6 @@ _WAVPACK_PRESETS: dict[str, tuple[list[str], int]] = {
     'extra': (['-hx'], 8),
 }
 
-# Preset IDs mirrored from settings (keep encode helpers gi-free for CI).
-_AAC_QUALITY_IDS = frozenset(
-    {
-        'vbr1',
-        'vbr2',
-        'vbr3',
-        'vbr4',
-        'vbr5',
-        'cbr128',
-        'cbr192',
-        'cbr256',
-        'cbr320',
-    }
-)
-
-_QAAC_QUALITY_IDS = frozenset(
-    {
-        'tvbr82',
-        'tvbr91',
-        'tvbr100',
-        'cvbr256',
-        'cbr256',
-    }
-)
-
 # FDK VBR 1–5 → ffmpeg native ``aac`` VBR quality scale (``-q:a``).
 # Higher values ≈ higher bitrate / quality for the native encoder.
 _AAC_VBR_TO_NATIVE_Q = {
@@ -75,20 +51,6 @@ _AAC_VBR_TO_NATIVE_Q = {
     4: 1.7,
     5: 2.0,
 }
-
-
-def _normalize_aac_quality(value: str | None) -> str:
-    raw = (value or '').strip().lower()
-    if raw in _AAC_QUALITY_IDS:
-        return raw
-    return 'cbr256'
-
-
-def _normalize_qaac_quality(value: str | None) -> str:
-    raw = (value or '').strip().lower()
-    if raw in _QAAC_QUALITY_IDS:
-        return raw
-    return 'cvbr256'
 
 
 def _qaac_wrapper_candidates() -> list[Path]:
@@ -251,7 +213,7 @@ def aac_encode_argv(
     Presets match the Encoding panel (VBR 1–5 / CBR). No resample, profile
     override, or psychoacoustic tweaks beyond encoder defaults.
     """
-    q = _normalize_aac_quality(quality)
+    q = normalize_aac_quality(quality)
     if use_fdk is None:
         use_fdk = prefer_fdk_aac()
     codec = 'libfdk_aac' if use_fdk else 'aac'
@@ -306,7 +268,7 @@ def qaac_encode_argv(
         raise RuntimeError(
             'qaac not found (install Wine + qaac.exe + Apple AAC codecs, or set READY2RIP_QAAC)'
         )
-    q = _normalize_qaac_quality(quality)
+    q = normalize_qaac_quality(quality)
     cmd = list(prefix)
     if q.startswith('tvbr') and q[4:].isdigit():
         cmd.extend(['--tvbr', q[4:]])

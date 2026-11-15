@@ -15,51 +15,11 @@ Authors: Bram Cohen; Trevor Perrin (Python 3); packaging via pprp.
 ################ RIJNDAEL ###
 # Trevor edited below code for python 3, and ease of packaging
 
-"""
-A pure python (slow) implementation of rijndael with a decent interface
+"""Pure-Python Rijndael used by ``rip.eac_logcrc`` for EAC-compatible log CRCs."""
 
-To include -
-
-from rijndael import rijndael
-
-To do a key setup -
-
-r = rijndael(key, block_size = 16)
-
-key must be a string of length 16, 24, or 32
-blocksize must be 16, 24, or 32. Default is 16
-
-To use -
-
-ciphertext = r.encrypt(plaintext)
-plaintext = r.decrypt(ciphertext)
-
-If any strings are of the wrong length a ValueError is thrown
-"""
-
-# ported from the Java reference code by Bram Cohen, bram@gawth.com, April 2001
-# this code is public domain, unless someone makes
-# an intellectual property claim against the reference
-# code, in which case it can be made public domain by
-# deleting all the comments and renaming all the variables
+# Ported from the Java reference code by Bram Cohen, April 2001.
 
 import copy
-
-
-
-#TREV 2011 - is this still needed? seems not
-#-----------------------
-#TREV - ADDED BECAUSE THERE'S WARNINGS ABOUT INT OVERFLOW BEHAVIOR CHANGING IN
-#2.4.....
-#import os
-#if os.name != "java":
-#    import exceptions
-#    if hasattr(exceptions, "FutureWarning"):
-#        import warnings
-#        warnings.filterwarnings("ignore", category=FutureWarning, append=1)
-#-----------------------
-
-
 
 shifts = [[[0, 0], [1, 3], [2, 2], [3, 1]],
           [[0, 0], [1, 5], [2, 4], [3, 3]],

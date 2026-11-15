@@ -7,7 +7,6 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import replace
 from pathlib import Path
 
 import gi
@@ -39,6 +38,7 @@ from ready2rip.disc.drive_status import (
 from ready2rip.disc.probe import DiscInfo, probe_disc
 from ready2rip.drive_setup import needs_drive_setup
 from ready2rip.icons import apply_icon
+from ready2rip.metadata.album_edit import gap_fill_album, mark_album_edited
 from ready2rip.metadata.cache import MetadataCache
 from ready2rip.metadata.providers import (
     AlbumMetadata,
@@ -618,7 +618,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._settings_dialog.present(self)
 
     def _setup_cover_widget(self) -> None:
-        """Square cover in the Artwork 1/3 column; actions on hover."""
+        """Square cover beside Album; actions on hover."""
         self._cover_display_size = self._COVER_SIZE
         for widget in (self.cover_overlay, self.cover_picture):
             widget.set_hexpand(True)
@@ -3074,7 +3074,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             )
 
         if self.store.get().auto_eject:
-            GLib.timeout_add(800, self._do_auto_eject)
+            # Give the kernel a moment to release the optical device after the
+            # rip thread finishes; eject_drive also retries on “busy”.
+            GLib.timeout_add(2000, self._do_auto_eject)
 
     def _eject_disc(self) -> None:
         """Open the tray / eject media on the configured optical device."""
@@ -3102,6 +3104,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         threading.Thread(target=work, daemon=True, name='ready2rip-eject').start()
 
     def _do_auto_eject(self) -> bool:
+        if not self.store.get().auto_eject:
+            return GLib.SOURCE_REMOVE
+        # Don't fight a brand-new rip / cancel path.
+        if self._ripping:
+            return GLib.SOURCE_REMOVE
         self._eject_disc()
         return GLib.SOURCE_REMOVE
 
@@ -3772,7 +3779,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                         self._album_disc_row.set_text(normalized)
                     finally:
                         self._suppress_meta_write = False
-        _mark_album_edited(album)
+        mark_album_edited(album)
         self._update_album_header(self._disc, album)
         self._schedule_cache_save()
 
@@ -4186,7 +4193,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         found.title = title
         found.artist = artist
 
-        _mark_album_edited(album)
+        mark_album_edited(album)
         self._schedule_cache_save()
 
     def _set_all_tracks(self, active: bool) -> None:
@@ -4251,7 +4258,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         finally:
             self._suppress_meta_write = False
         if filled:
-            _mark_album_edited(album)
+            mark_album_edited(album)
             self._sync_track_labels_from_entries()
             self._schedule_cache_save()
             self._toast(f'Applied album artist to {filled} track{"s" if filled != 1 else ""}')
@@ -4519,7 +4526,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                     self._album = enriched
                 else:
                     # Online lookup won the race — copy only empty gaps.
-                    merged = _gap_fill_album(current, enriched)
+                    merged = gap_fill_album(current, enriched)
                     if merged is current:
                         return GLib.SOURCE_REMOVE
                     self._album = merged
@@ -4835,63 +4842,3 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         except (AttributeError, TypeError):
             pass
         self.toast_overlay.add_toast(toast)
-
-
-def _mark_album_edited(album: AlbumMetadata) -> None:
-    """Annotate metadata source after a manual edit."""
-    source = album.source or ''
-    if source in ('musicbrainz', 'gnudb', 'freedb') and not source.endswith('+manual'):
-        album.source = f'{source}+manual'
-    elif not source:
-        album.source = 'manual'
-
-
-def _gap_fill_album(target: AlbumMetadata, donor: AlbumMetadata) -> AlbumMetadata:
-    """Copy empty title/artist/genre/barcode/ISRC fields from *donor* into *target*."""
-    changed = False
-    title = target.title or donor.title
-    artist = target.artist or donor.artist
-    genre = target.genre or donor.genre
-    barcode = target.barcode or donor.barcode
-    if (
-        title != target.title
-        or artist != target.artist
-        or genre != target.genre
-        or barcode != target.barcode
-    ):
-        changed = True
-
-    donor_tracks = {t.number: t for t in donor.tracks}
-    new_tracks: list[TrackMetadata] = []
-    seen: set[int] = set()
-    for track in target.tracks:
-        seen.add(track.number)
-        other = donor_tracks.get(track.number)
-        if other is None:
-            new_tracks.append(track)
-            continue
-        merged = replace(
-            track,
-            title=track.title or other.title,
-            artist=track.artist or other.artist,
-            isrc=track.isrc or other.isrc,
-        )
-        if merged != track:
-            changed = True
-        new_tracks.append(merged)
-    for num, other in sorted(donor_tracks.items()):
-        if num in seen:
-            continue
-        new_tracks.append(other)
-        changed = True
-
-    if not changed:
-        return target
-    return replace(
-        target,
-        title=title,
-        artist=artist,
-        genre=genre,
-        barcode=barcode,
-        tracks=new_tracks,
-    )

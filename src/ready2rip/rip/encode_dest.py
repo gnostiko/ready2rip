@@ -5,8 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_ALSO_ENCODER_IDS = frozenset({'mp3', 'aac', 'qaac', 'opus'})
-_FOLDER_LAYOUT_IDS = frozenset({'format_subdir', 'same_folder', 'custom_folder'})
+from ready2rip.settings_defs import ALSO_ENCODER_IDS, ALSO_FOLDER_LAYOUT_IDS
 
 # Formats / extensions that may receive a .cue sheet (lossless / PCM only).
 # ALAC uses ``.m4a`` (same as AAC); callers that only have a path should treat
@@ -86,7 +85,7 @@ def encode_format_list(
     if not also_encode or not allow_also:
         return formats
     secondary = (also_format or 'mp3').strip().lower()
-    if secondary not in _ALSO_ENCODER_IDS:
+    if secondary not in ALSO_ENCODER_IDS:
         secondary = 'mp3'
     # Primary is always lossless; secondary is always lossy — never equal.
     formats.append(secondary)
@@ -102,7 +101,7 @@ def audio_dir_for_format(
 ) -> Path:
     """Directory that holds audio for *fmt* under *album_dir*."""
     layout = (folder_layout or 'format_subdir').strip().lower()
-    if layout not in _FOLDER_LAYOUT_IDS:
+    if layout not in ALSO_FOLDER_LAYOUT_IDS:
         layout = 'format_subdir'
     # custom_folder uses a separate output root (caller); files sit in the album dir.
     if multi_format and layout == 'format_subdir':
