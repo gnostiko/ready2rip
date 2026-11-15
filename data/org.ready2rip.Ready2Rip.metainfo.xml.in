@@ -29,6 +29,15 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-15">
       <description>
         <p>
+          0.4.56: Allow lossless embed covers up to 1200 px; encode tag
+          embeds as baseline JPEG quality 90; keep folder cover.jpg as the
+          original download.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.55" date="2026-11-15">
+      <description>
+        <p>
           0.4.55: Soften CTDB fuzzy false mismatches (unverified vs hard
           mismatch); defer archival failure when AccurateRip matched; restore
           the previous rip log layout.
