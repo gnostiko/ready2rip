@@ -200,12 +200,12 @@
     </key>
 
     <key name="artwork-max-size-lossless" type="i">
-      <range min="300" max="800"/>
+      <range min="300" max="1200"/>
       <default>600</default>
       <summary>Lossless embed artwork edge length (pixels)</summary>
       <description>
         Longest edge for covers embedded into FLAC / WAV / AIFF / WavPack /
-        ALAC (300–800). Folder cover.jpg stays full resolution. Default is 600.
+        ALAC (300–1200). Folder cover.jpg stays full resolution. Default is 600.
       </description>
     </key>
 

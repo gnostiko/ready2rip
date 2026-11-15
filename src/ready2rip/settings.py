@@ -26,7 +26,9 @@ from ready2rip.settings_defs import (
     ALSO_FOLDER_LAYOUT_IDS,
     ALSO_FOLDER_LAYOUTS,
     ARTWORK_SIZE_IDS,
+    ARTWORK_SIZE_LOSSLESS_IDS,
     ARTWORK_SIZES,
+    ARTWORK_SIZES_LOSSLESS,
     DEFAULT_ARTWORK_MAX_SIZE,
     DEFAULT_EXISTING_FILES_POLICY,
     DEFAULT_LYRICS_SAVE_MODE,
@@ -53,6 +55,7 @@ from ready2rip.settings_defs import (
     normalize_also_encode_folder,
     normalize_also_encode_format,
     normalize_artwork_max_size,
+    normalize_artwork_max_size_lossless,
     normalize_existing_files_policy,
     normalize_lyrics_save_mode,
     normalize_mp3_quality,
@@ -79,7 +82,9 @@ __all__ = [
     'ALSO_FOLDER_LAYOUTS',
     'ALSO_FOLDER_LAYOUT_IDS',
     'ARTWORK_SIZES',
+    'ARTWORK_SIZES_LOSSLESS',
     'ARTWORK_SIZE_IDS',
+    'ARTWORK_SIZE_LOSSLESS_IDS',
     'DEFAULT_ARTWORK_MAX_SIZE',
     'DEFAULT_EXISTING_FILES_POLICY',
     'DEFAULT_LYRICS_SAVE_MODE',
@@ -111,6 +116,7 @@ __all__ = [
     'normalize_also_encode_folder',
     'normalize_also_encode_format',
     'normalize_artwork_max_size',
+    'normalize_artwork_max_size_lossless',
     'normalize_encode_format',
     'normalize_existing_files_policy',
     'normalize_lyrics_save_mode',
@@ -157,12 +163,12 @@ def _load_artwork_max_size_lossless(settings: Gio.Settings) -> int:
     try:
         user = settings.get_user_value('artwork-max-size-lossless')
         if user is not None:
-            return normalize_artwork_max_size(int(user.get_int32()))
+            return normalize_artwork_max_size_lossless(int(user.get_int32()))
     except Exception:
         pass
     # First run after the split: pin a copy of the old shared size so later
     # lossy changes do not drag lossless along.
-    seeded = normalize_artwork_max_size(
+    seeded = normalize_artwork_max_size_lossless(
         _get_int(settings, 'artwork-max-size', DEFAULT_ARTWORK_MAX_SIZE)
     )
     try:
@@ -519,11 +525,13 @@ class SettingsStore:
                 except Exception:
                     pass
 
-        # Migrate removed / oversized artwork presets (e.g. 1000 → 800).
+        # Migrate removed / odd artwork presets (lossy still caps at 800).
         prior_lossy = int(snap.artwork_max_size)
         prior_lossless = int(snap.artwork_max_size_lossless)
         snap.artwork_max_size = normalize_artwork_max_size(snap.artwork_max_size)
-        snap.artwork_max_size_lossless = normalize_artwork_max_size(snap.artwork_max_size_lossless)
+        snap.artwork_max_size_lossless = normalize_artwork_max_size_lossless(
+            snap.artwork_max_size_lossless
+        )
         if s is not None and snap.artwork_max_size != prior_lossy:
             try:
                 s.set_int('artwork-max-size', int(snap.artwork_max_size))

@@ -22,6 +22,10 @@ log = logging.getLogger(__name__)
 CAA_RELEASE = 'https://coverartarchive.org/release/{mbid}'
 ITUNES_SEARCH = 'https://itunes.apple.com/search'
 
+# Embeds + folder cover.jpg: baseline (not progressive) JPEG at a fixed quality.
+# Progressive JPEGs break some car/DAP tag parsers; Q90 is the library sweet spot.
+JPEG_EMBED_QUALITY = 90
+
 
 @dataclass
 class ArtworkImage:
@@ -234,37 +238,29 @@ class ArtworkFetcher:
         return image
 
     def resize(self, image: ArtworkImage, max_edge: int) -> ArtworkImage:
-        """Scale so the longest edge is at most *max_edge* (0 = original)."""
-        if max_edge <= 0 or image.max_edge <= max_edge:
-            return image
+        """Scale longest edge to at most *max_edge* and encode baseline JPEG Q90.
 
+        Always re-encodes (even when already small enough) so embeds never keep
+        a progressive source JPEG. ``max_edge <= 0`` keeps original dimensions.
+        """
         try:
             from PIL import Image
         except ImportError:
             return self._resize_gdk(image, max_edge)
 
         with Image.open(io.BytesIO(image.data)) as im:
-            # Flatten alpha so JPEG embeds stay valid.
-            if im.mode in ('RGBA', 'LA', 'P'):
-                rgba = im.convert('RGBA')
-                background = Image.new('RGB', rgba.size, (255, 255, 255))
-                background.paste(rgba, mask=rgba.split()[-1])
-                im = background
-            elif im.mode != 'RGB':
-                im = im.convert('RGB')
-            # LANCZOS for high-quality downscale
-            im.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
-            width, height = im.size
-            buf = io.BytesIO()
-            # JPEG for embeds is widely supported in audio tags.
-            im.save(buf, format='JPEG', quality=90, optimize=True)
-            mime = 'image/jpeg'
+            rgb = _pil_rgb(im)
+            if max_edge > 0 and max(rgb.size) > max_edge:
+                rgb.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+            width, height = rgb.size
+            data = encode_jpeg_baseline(rgb)
+            label = f'embed-{max_edge}' if max_edge > 0 else 'embed'
             return ArtworkImage(
-                data=buf.getvalue(),
-                mime=mime,
+                data=data,
+                mime='image/jpeg',
                 width=width,
                 height=height,
-                source=f'{image.source}/embed-{max_edge}',
+                source=f'{image.source}/{label}',
                 url=image.url,
             )
 
@@ -285,20 +281,29 @@ class ArtworkFetcher:
             return image
 
         w, h = pixbuf.get_width(), pixbuf.get_height()
-        scale = max_edge / max(w, h)
-        nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
-        scaled = pixbuf.scale_simple(nw, nh, GdkPixbuf.InterpType.BILINEAR)
-        if scaled is None:
-            return image
-        ok, buf = scaled.save_to_bufferv('jpeg', ['quality'], ['90'])
+        if max_edge > 0 and max(w, h) > max_edge:
+            scale = max_edge / max(w, h)
+            nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+            scaled = pixbuf.scale_simple(nw, nh, GdkPixbuf.InterpType.BILINEAR)
+            if scaled is None:
+                return image
+            pixbuf = scaled
+            nw, nh = scaled.get_width(), scaled.get_height()
+        else:
+            nw, nh = w, h
+        # GdkPixbuf JPEG export is baseline; pin quality to match Pillow path.
+        ok, buf = pixbuf.save_to_bufferv(
+            'jpeg', ['quality'], [str(JPEG_EMBED_QUALITY)]
+        )
         if not ok:
             return image
+        label = f'embed-{max_edge}' if max_edge > 0 else 'embed'
         return ArtworkImage(
             data=bytes(buf),
             mime='image/jpeg',
             width=nw,
             height=nh,
-            source=f'{image.source}/embed-{max_edge}',
+            source=f'{image.source}/{label}',
             url=image.url,
         )
 
@@ -386,6 +391,58 @@ class ArtworkFetcher:
 def _close_http_error(exc: urllib.error.HTTPError) -> None:
     """Drain/close HTTPError to avoid ResourceWarning on CPython."""
     drain_http_error(exc)
+
+
+def _pil_rgb(im):
+    """Flatten/convert a Pillow image to RGB for JPEG encode."""
+    from PIL import Image
+
+    if im.mode in ('RGBA', 'LA', 'P'):
+        rgba = im.convert('RGBA')
+        background = Image.new('RGB', rgba.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.split()[-1])
+        return background
+    if im.mode != 'RGB':
+        return im.convert('RGB')
+    return im.copy()
+
+
+def encode_jpeg_baseline(im, *, quality: int = JPEG_EMBED_QUALITY) -> bytes:
+    """Encode *im* as a baseline (non-progressive) JPEG at *quality*."""
+    buf = io.BytesIO()
+    im.save(
+        buf,
+        format='JPEG',
+        quality=int(quality),
+        optimize=True,
+        progressive=False,
+        subsampling='4:2:0',
+    )
+    return buf.getvalue()
+
+
+def jpeg_as_baseline(
+    image: ArtworkImage,
+    *,
+    quality: int = JPEG_EMBED_QUALITY,
+) -> ArtworkImage:
+    """Re-encode *image* to baseline JPEG at *quality* (no resize)."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return image
+    with Image.open(io.BytesIO(image.data)) as im:
+        rgb = _pil_rgb(im)
+        width, height = rgb.size
+        data = encode_jpeg_baseline(rgb, quality=quality)
+    return ArtworkImage(
+        data=data,
+        mime='image/jpeg',
+        width=width,
+        height=height,
+        source=image.source,
+        url=image.url,
+    )
 
 
 def itunes_hires_url(url: str, size: int = 10000) -> str:

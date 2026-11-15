@@ -271,7 +271,7 @@ def normalize_existing_files_policy(value: str | None) -> str:
     return DEFAULT_EXISTING_FILES_POLICY
 
 
-# Embed sizes (≤800 px). Lossy and lossless each have their own setting.
+# Embed sizes. Lossy caps at 800 px; lossless allows up to 1200 (Roon-friendly).
 DEFAULT_ARTWORK_MAX_SIZE = 600
 ARTWORK_SIZES = (
     (300, '300 px'),
@@ -279,25 +279,52 @@ ARTWORK_SIZES = (
     (600, '600 px'),
     (800, '800 px'),
 )
+ARTWORK_SIZES_LOSSLESS = (
+    (300, '300 px'),
+    (500, '500 px'),
+    (600, '600 px'),
+    (800, '800 px'),
+    (1000, '1000 px'),
+    (1200, '1200 px'),
+)
 ARTWORK_SIZE_IDS = frozenset(px for px, _label in ARTWORK_SIZES)
+ARTWORK_SIZE_LOSSLESS_IDS = frozenset(px for px, _label in ARTWORK_SIZES_LOSSLESS)
 
-# Map removed / oversized legacy presets down to the 800 px ceiling.
-_ARTWORK_SIZE_ALIASES = {
+# Legacy / odd values → nearest allowed preset (lossy ceiling 800).
+_ARTWORK_SIZE_ALIASES_LOSSY = {
     720: 800,
     1000: 800,
     1200: 800,
     0: 800,
 }
+# Lossless keeps 1000/1200; only map odd legacy values.
+_ARTWORK_SIZE_ALIASES_LOSSLESS = {
+    720: 800,
+    0: 1200,
+}
 
 
 def normalize_artwork_max_size(value: int | None) -> int:
-    """Clamp / migrate an embed-size preference to a known preset."""
+    """Clamp / migrate a *lossy* embed-size preference to a known preset."""
     try:
         raw = int(value) if value is not None else DEFAULT_ARTWORK_MAX_SIZE
     except (TypeError, ValueError):
         return DEFAULT_ARTWORK_MAX_SIZE
-    if raw in _ARTWORK_SIZE_ALIASES:
-        return _ARTWORK_SIZE_ALIASES[raw]
+    if raw in _ARTWORK_SIZE_ALIASES_LOSSY:
+        return _ARTWORK_SIZE_ALIASES_LOSSY[raw]
     if raw in ARTWORK_SIZE_IDS:
+        return raw
+    return DEFAULT_ARTWORK_MAX_SIZE
+
+
+def normalize_artwork_max_size_lossless(value: int | None) -> int:
+    """Clamp / migrate a *lossless* embed-size preference (up to 1200 px)."""
+    try:
+        raw = int(value) if value is not None else DEFAULT_ARTWORK_MAX_SIZE
+    except (TypeError, ValueError):
+        return DEFAULT_ARTWORK_MAX_SIZE
+    if raw in _ARTWORK_SIZE_ALIASES_LOSSLESS:
+        return _ARTWORK_SIZE_ALIASES_LOSSLESS[raw]
+    if raw in ARTWORK_SIZE_LOSSLESS_IDS:
         return raw
     return DEFAULT_ARTWORK_MAX_SIZE

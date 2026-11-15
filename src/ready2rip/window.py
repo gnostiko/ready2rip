@@ -67,6 +67,7 @@ from ready2rip.settings import (
     ALSO_ENCODERS,
     ALSO_FOLDER_LAYOUTS,
     ARTWORK_SIZES,
+    ARTWORK_SIZES_LOSSLESS,
     DEFAULT_ARTWORK_MAX_SIZE,
     ENCODERS,
     EXISTING_FILE_POLICIES,
@@ -1314,6 +1315,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         enabled: bool,
         size: int,
         size_tooltip: str,
+        sizes: tuple[tuple[int, str], ...],
         on_toggle,
         on_size,
     ) -> tuple[Adw.ExpanderRow, Adw.ComboRow]:
@@ -1324,8 +1326,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             handler=on_toggle,
         )
         size_row = Adw.ComboRow(title='Size')
-        size_row.set_model(Gtk.StringList.new([label for _px, label in ARTWORK_SIZES]))
-        self._select_art_size_row(size_row, size)
+        size_row.set_model(Gtk.StringList.new([label for _px, label in sizes]))
+        self._select_art_size_row(size_row, size, values=[px for px, _ in sizes])
         size_row.set_tooltip_text(size_tooltip)
         size_row.connect('notify::selected', on_size)
         expander.add_row(size_row)
@@ -1381,7 +1383,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self._add_pref(self.artwork_group, self._fetch_art_row)
         self._sync_artwork_source_sensitivity(settings.fetch_artwork)
 
-        self._art_size_values = [px for px, _label in ARTWORK_SIZES]
+        self._art_size_values_lossy = [px for px, _label in ARTWORK_SIZES]
+        self._art_size_values_lossless = [px for px, _label in ARTWORK_SIZES_LOSSLESS]
         self._embed_lossy_row, self._art_size_lossy_row = self._build_embed_size_expander(
             title='Embed in lossy',
             tooltip=(
@@ -1391,6 +1394,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             enabled=settings.embed_artwork,
             size=settings.artwork_max_size,
             size_tooltip='Longest edge for lossy embeds (300–800 px). Default 600.',
+            sizes=ARTWORK_SIZES,
             on_toggle=self._on_embed_lossy_toggled,
             on_size=self._on_art_size_lossy_changed,
         )
@@ -1402,7 +1406,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             ),
             enabled=settings.embed_artwork_lossless,
             size=settings.artwork_max_size_lossless,
-            size_tooltip='Longest edge for lossless embeds (300–800 px). Default 600.',
+            size_tooltip='Longest edge for lossless embeds (300–1200 px). Default 600.',
+            sizes=ARTWORK_SIZES_LOSSLESS,
             on_toggle=self._on_embed_lossless_toggled,
             on_size=self._on_art_size_lossless_changed,
         )
@@ -1617,9 +1622,15 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._art_caa_row.set_active(settings.artwork_source_caa)
             self._art_itunes_row.set_active(settings.artwork_source_itunes)
             self._sync_artwork_source_sensitivity(settings.fetch_artwork)
-            self._select_art_size_row(self._art_size_lossy_row, settings.artwork_max_size)
             self._select_art_size_row(
-                self._art_size_lossless_row, settings.artwork_max_size_lossless
+                self._art_size_lossy_row,
+                settings.artwork_max_size,
+                values=self._art_size_values_lossy,
+            )
+            self._select_art_size_row(
+                self._art_size_lossless_row,
+                settings.artwork_max_size_lossless,
+                values=self._art_size_values_lossless,
             )
         finally:
             for widget, handler in handlers:
@@ -2301,15 +2312,23 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     def _on_embed_lossless_toggled(self, row: Adw.ExpanderRow, *_args) -> None:
         self._apply_feature_enable(row, 'embed_artwork_lossless', after=self._after_embed_toggle)
 
-    def _select_art_size_row(self, row: Adw.ComboRow, size: int) -> None:
-        values = getattr(self, '_art_size_values', None) or [px for px, _label in ARTWORK_SIZES]
+    def _select_art_size_row(
+        self,
+        row: Adw.ComboRow,
+        size: int,
+        *,
+        values: list[int] | None = None,
+    ) -> None:
+        opts = values or getattr(self, '_art_size_values_lossy', None) or [
+            px for px, _label in ARTWORK_SIZES
+        ]
         try:
-            row.set_selected(values.index(int(size)))
+            row.set_selected(opts.index(int(size)))
         except ValueError:
             try:
-                row.set_selected(values.index(DEFAULT_ARTWORK_MAX_SIZE))
+                row.set_selected(opts.index(DEFAULT_ARTWORK_MAX_SIZE))
             except ValueError:
-                row.set_selected(max(0, len(values) - 1))
+                row.set_selected(max(0, len(opts) - 1))
 
     def _on_fetch_art_toggled(self, row: Adw.ExpanderRow, *_args) -> None:
         def after(enabled: bool) -> None:
@@ -2350,14 +2369,16 @@ class Ready2RipWindow(Adw.ApplicationWindow):
 
     def _on_art_size_lossy_changed(self, row: Adw.ComboRow, *_args) -> None:
         idx = row.get_selected()
-        if 0 <= idx < len(self._art_size_values):
-            self.store.update(artwork_max_size=self._art_size_values[idx])
+        values = self._art_size_values_lossy
+        if 0 <= idx < len(values):
+            self.store.update(artwork_max_size=values[idx])
             self._refresh_embed_after_size_change(kind='lossy')
 
     def _on_art_size_lossless_changed(self, row: Adw.ComboRow, *_args) -> None:
         idx = row.get_selected()
-        if 0 <= idx < len(self._art_size_values):
-            self.store.update(artwork_max_size_lossless=self._art_size_values[idx])
+        values = self._art_size_values_lossless
+        if 0 <= idx < len(values):
+            self.store.update(artwork_max_size_lossless=values[idx])
             self._refresh_embed_after_size_change(kind='lossless')
 
     def _refresh_embed_after_size_change(self, *, kind: str) -> None:

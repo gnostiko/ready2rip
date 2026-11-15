@@ -4223,12 +4223,11 @@ def _place_wav_output(src: Path, dest: Path, *, move: bool) -> None:
 
 
 def _scaled_embed(source: ArtworkImage | None, max_edge: int) -> ArtworkImage | None:
-    """Return *source* scaled so the longest edge is at most *max_edge*."""
+    """Return *source* as baseline JPEG Q90, scaled to at most *max_edge*."""
     if source is None:
         return None
-    if max_edge > 0 and source.max_edge > max_edge:
-        return ArtworkFetcher().resize(source, max_edge)
-    return source
+    # Always re-encode so progressive source JPEGs never land in tags.
+    return ArtworkFetcher().resize(source, max_edge)
 
 
 def _prepare_artwork(
@@ -4237,7 +4236,8 @@ def _prepare_artwork(
 ) -> tuple[EmbedArtworkSet, ArtworkImage | None, Path | None, list[str]]:
     """Save full-size cover to the album folder; return lossy/lossless embeds.
 
-    Called **before** track extraction begins.
+    Called **before** track extraction begins. Folder cover keeps the original
+    downloaded bytes (no re-encode). Tag embeds are baseline JPEG Q90.
     """
     notes: list[str] = []
     candidates = [
@@ -4252,36 +4252,12 @@ def _prepare_artwork(
             cover_path = album_dir / 'cover.png'
         else:
             cover_path = album_dir / 'cover.jpg'
-            # Re-encode non-JPEG as JPEG for a consistent cover.jpg when needed.
-            if folder_art.mime not in ('image/jpeg', 'image/jpg') and cover_path.suffix == '.jpg':
-                try:
-                    import io
-
-                    from PIL import Image  # type: ignore[import-not-found]
-
-                    with Image.open(io.BytesIO(folder_art.data)) as im:
-                        if im.mode in ('RGBA', 'LA', 'P'):
-                            rgba = im.convert('RGBA')
-                            bg = Image.new('RGB', rgba.size, (255, 255, 255))
-                            bg.paste(rgba, mask=rgba.split()[-1])
-                            im = bg
-                        elif im.mode != 'RGB':
-                            im = im.convert('RGB')
-                        buf = io.BytesIO()
-                        im.save(buf, format='JPEG', quality=92, optimize=True)
-                        cover_path.write_bytes(buf.getvalue())
-                        notes.append(f'Folder cover written ({im.size[0]}×{im.size[1]})')
-                        embeds = _embed_set_from_job(job, folder_art)
-                        return embeds, folder_art, cover_path, notes
-                except ImportError:
-                    # Pillow not installed — fall through and write raw bytes.
-                    pass
-                except Exception:
-                    cover_path = album_dir / 'cover.png'
         try:
+            # Write source bytes as-is — do not re-encode folder cover.
             cover_path.write_bytes(folder_art.data)
             notes.append(
-                f'Folder cover written ({folder_art.width}×{folder_art.height} {folder_art.source})'
+                f'Folder cover written '
+                f'({folder_art.width}×{folder_art.height} {folder_art.source})'
             )
         except OSError as exc:
             log.warning('Could not write cover file: %s', exc)
