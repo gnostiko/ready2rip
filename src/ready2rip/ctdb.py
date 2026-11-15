@@ -136,8 +136,21 @@ class CtdbDatabase:
     toc: str
     entries: list[CtdbEntry] = field(default_factory=list)
 
+    def exact_toc_entries(self) -> list[CtdbEntry]:
+        """Entries whose TOC matches the lookup query (empty query → all)."""
+        if not self.toc:
+            return list(self.entries)
+        return [e for e in self.entries if e.toc == self.toc]
+
     def best_match(self, track_number: int, crc: int) -> CtdbResult:
-        """Sum confidence across entries whose track CRC matches *crc*."""
+        """Match *crc* against returned entries.
+
+        Positive matches may come from any returned entry (including fuzzy
+        neighbors). A hard ``MISMATCH`` is only reported when at least one
+        **exact-TOC** entry exists and none of those (nor any fuzzy entry)
+        match the CRC — otherwise the result is ``NOT_IN_DB`` so fuzzy
+        neighbors do not look like a failed rip.
+        """
         if not self.entries:
             return CtdbResult(
                 track_number=track_number,
@@ -161,13 +174,25 @@ class CtdbDatabase:
                 message=f"CTDB match (confidence {conf})",
             )
 
-        max_conf = max((e.confidence for e in self.entries), default=0)
+        exact = self.exact_toc_entries()
+        if not exact:
+            # Fuzzy-only neighborhood (or TOC-less junk): not a hard conflict.
+            max_conf = max((e.confidence for e in self.entries), default=0)
+            return CtdbResult(
+                track_number=track_number,
+                confidence=CtdbConfidence.NOT_IN_DB,
+                confidence_count=max_conf,
+                crc=f"{crc:08x}",
+                message="CTDB: not verified (no matching entry for this TOC)",
+            )
+
+        max_conf = max((e.confidence for e in exact), default=0)
         return CtdbResult(
             track_number=track_number,
             confidence=CtdbConfidence.MISMATCH,
             confidence_count=max_conf,
             crc=f"{crc:08x}",
-            message=f"No CTDB match (DB max confidence {max_conf})",
+            message=f"CTDB CRC differs from TOC entry (confidence {max_conf})",
         )
 
     def entry_matching_track_crcs(self, track_crcs: list[int]) -> CtdbEntry | None:
@@ -338,13 +363,16 @@ def parse_lookup_xml(raw: bytes | str, *, toc: str = "") -> CtdbDatabase:
             stride = int(elem.get("stride") or str(CTDB_STRIDE))
         except ValueError:
             stride = CTDB_STRIDE
+        # Keep the entry TOC as returned. Do NOT backfill the lookup query TOC:
+        # fuzzy neighbors often omit toc=, and inheriting the query would make
+        # every neighbor look exact → false MISMATCH on CRC miss.
         db.entries.append(
             CtdbEntry(
                 entry_id=str(elem.get("id") or ""),
                 confidence=conf,
                 crc32=str(elem.get("crc32") or ""),
                 track_crcs=track_crcs,
-                toc=str(elem.get("toc") or toc),
+                toc=str(elem.get("toc") or ""),
                 parity=str(elem.get("parity") or ""),
                 syndrome=str(elem.get("syndrome") or ""),
                 npar=npar,
@@ -1110,11 +1138,11 @@ class CtdbVerifier:
             return CtdbRepairProbe(ok=False, message="CTDB repair: no database entries")
         if not any(r.confidence == CtdbConfidence.MISMATCH for r in results):
             return CtdbRepairProbe(ok=False, message="CTDB repair: no mismatched tracks")
-        entry = max(
-            (e for e in self._db.entries if e.hasparity),
-            key=lambda e: e.confidence,
-            default=None,
-        )
+        # Prefer exact-TOC parity entries; fall back to any hasparity neighbor.
+        pool = [e for e in self._db.exact_toc_entries() if e.hasparity] or [
+            e for e in self._db.entries if e.hasparity
+        ]
+        entry = max(pool, key=lambda e: e.confidence, default=None)
         if entry is None:
             return CtdbRepairProbe(
                 ok=False,

@@ -83,3 +83,40 @@ def test_archival_skips_ar_when_verify_off() -> None:
         burst_tracks=[],
     )
     assert reasons == []
+
+
+def test_archival_fail_on_ctdb_mismatch_without_ar_match() -> None:
+    reasons = _archival_fail_reasons(
+        _job(),
+        ar_results=[AccurateRipResult(1, AccurateRipConfidence.NOT_IN_DB)],
+        ctdb_results=[CtdbResult(1, CtdbConfidence.MISMATCH)],
+        burst_tracks=[],
+    )
+    assert any('CTDB mismatch' in r for r in reasons)
+
+
+def test_archival_ok_ctdb_mismatch_when_ar_matched() -> None:
+    """AccurateRip match outweighs a CTDB exact-TOC conflict (pressing noise)."""
+    reasons = _archival_fail_reasons(
+        _job(),
+        ar_results=[AccurateRipResult(1, AccurateRipConfidence.MATCH)],
+        ctdb_results=[CtdbResult(1, CtdbConfidence.MISMATCH)],
+        burst_tracks=[],
+    )
+    assert reasons == []
+
+
+def test_archival_ok_on_ctdb_soft_unverified() -> None:
+    reasons = _archival_fail_reasons(
+        _job(),
+        ar_results=[],
+        ctdb_results=[
+            CtdbResult(
+                1,
+                CtdbConfidence.NOT_IN_DB,
+                message='CTDB: not verified (no matching entry for this TOC)',
+            )
+        ],
+        burst_tracks=[],
+    )
+    assert reasons == []

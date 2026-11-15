@@ -3023,7 +3023,17 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             ar_bits.append(f'AR {matches}/{len(result.accuraterip)}')
         if result.ctdb:
             matches = sum(1 for r in result.ctdb if r.confidence == CtdbConfidence.MATCH)
-            ar_bits.append(f'CTDB {matches}/{len(result.ctdb)}')
+            hard_miss = sum(
+                1 for r in result.ctdb if r.confidence == CtdbConfidence.MISMATCH
+            )
+            if matches == len(result.ctdb):
+                ar_bits.append(f'CTDB {matches}/{len(result.ctdb)}')
+            elif hard_miss:
+                ar_bits.append(f'CTDB {matches}/{len(result.ctdb)} ({hard_miss} mismatch)')
+            elif matches:
+                ar_bits.append(f'CTDB {matches}/{len(result.ctdb)}')
+            else:
+                ar_bits.append('CTDB unverified')
         intentional_burst = bool(self.store.get().burst_mode)
         if result.burst_tracks:
             n_burst = len(result.burst_tracks)

@@ -547,10 +547,22 @@ class RipLog:
             matches = sum(
                 1 for t in ctdb_checked if t.ctdb and t.ctdb.confidence == CtdbConfidence.MATCH
             )
+            hard_miss = sum(
+                1
+                for t in ctdb_checked
+                if t.ctdb and t.ctdb.confidence == CtdbConfidence.MISMATCH
+            )
             if matches == len(ctdb_checked):
                 lines.append('All tracks verified by CTDB')
+            elif hard_miss and matches == 0:
+                lines.append('CTDB reported CRC mismatches (exact TOC entries)')
+            elif hard_miss:
+                lines.append(
+                    f'{matches} of {len(ctdb_checked)} tracks verified by CTDB '
+                    f'({hard_miss} CRC mismatch)'
+                )
             elif matches == 0:
-                lines.append('No tracks could be verified by CTDB')
+                lines.append('CTDB: not verified (no matching entries)')
             else:
                 lines.append(f'{matches} of {len(ctdb_checked)} tracks verified by CTDB')
             lines.append('')
@@ -749,11 +761,14 @@ def _format_ctdb_line(ctdb: CtdbResult) -> str:
         return f'CTDB accurately ripped (confidence {ctdb.confidence_count})  [CRC {ctdb.crc}]'
     if ctdb.confidence == CtdbConfidence.MISMATCH:
         return (
-            f'CTDB cannot be verified as accurate '
+            f'CTDB CRC differs from database entry '
             f'(confidence {ctdb.confidence_count})  [CRC {ctdb.crc}]'
         )
     if ctdb.confidence == CtdbConfidence.NOT_IN_DB:
-        return 'Track not present in CUETools Database'
+        # Soft miss (fuzzy neighbors / absent TOC) or truly empty DB.
+        if ctdb.message and 'no matching entry' in ctdb.message.lower():
+            return 'CTDB: not verified (no matching entry)'
+        return 'CTDB: not verified (not in database)'
     if ctdb.confidence == CtdbConfidence.ERROR:
         return f'CTDB error: {ctdb.message}'
     return f'CTDB: {ctdb.message or "unknown"}'

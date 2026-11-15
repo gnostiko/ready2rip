@@ -112,11 +112,85 @@ def test_parse_lookup_xml_and_best_match() -> None:
     assert miss.confidence_count == 11
     none = db.best_match(2, 0xDEADBEEF)
     assert none.confidence == CtdbConfidence.MISMATCH
+    assert "CRC differs" in none.message
     crcs = [0x797874E7, 0xB8492504, 0x4B87B5DE, 0xD29262A2]
     entry = db.entry_matching_track_crcs(crcs)
     assert entry is not None
     assert entry.entry_id == "10631343"
     assert db.entry_matching_track_crcs([1, 2, 3, 4]) is None
+
+
+def test_parse_lookup_xml_omitted_toc_is_not_exact() -> None:
+    """Entries without toc= must not inherit the query TOC (fuzzy softening)."""
+    xml = """<?xml version="1.0"?>
+<ctdb xmlns="http://db.cuetools.net/ns/mmd-1.0#">
+ <entry confidence="40" crc32="aaaaaaaa" id="9"
+        trackcrcs="11111111 22222222" />
+</ctdb>
+"""
+    db = parse_lookup_xml(xml, toc="0:100:200")
+    assert db.entries[0].toc == ""
+    assert db.exact_toc_entries() == []
+    soft = db.best_match(1, 0xDEADBEEF)
+    assert soft.confidence == CtdbConfidence.NOT_IN_DB
+    assert "no matching entry" in soft.message.lower()
+
+
+def test_best_match_fuzzy_neighbor_is_not_hard_mismatch() -> None:
+    """Fuzzy lookup neighbors with a different TOC must not look like a bad rip."""
+    db = CtdbDatabase(
+        toc="0:100:200",
+        entries=[
+            CtdbEntry(
+                entry_id="1",
+                confidence=50,
+                crc32="aaaaaaaa",
+                track_crcs=[0x11111111, 0x22222222],
+                toc="0:100:999",  # different lead-out / neighbor
+            ),
+            CtdbEntry(
+                entry_id="2",
+                confidence=12,
+                crc32="bbbbbbbb",
+                track_crcs=[0x33333333, 0x44444444],
+                toc="0:90:200",
+            ),
+        ],
+    )
+    soft = db.best_match(1, 0xDEADBEEF)
+    assert soft.confidence == CtdbConfidence.NOT_IN_DB
+    assert "no matching entry" in soft.message.lower()
+
+    # CRC hit on a fuzzy neighbor still counts as a match.
+    fuzzy_hit = db.best_match(1, 0x11111111)
+    assert fuzzy_hit.confidence == CtdbConfidence.MATCH
+    assert fuzzy_hit.confidence_count == 50
+
+
+def test_best_match_exact_toc_wrong_crc_is_mismatch() -> None:
+    db = CtdbDatabase(
+        toc="0:100:200",
+        entries=[
+            CtdbEntry(
+                entry_id="1",
+                confidence=8,
+                crc32="aaaaaaaa",
+                track_crcs=[0x11111111, 0x22222222],
+                toc="0:100:200",
+            ),
+            # Fuzzy neighbor must not dilute the hard mismatch.
+            CtdbEntry(
+                entry_id="2",
+                confidence=99,
+                crc32="bbbbbbbb",
+                track_crcs=[0xAAAAAAAA, 0xBBBBBBBB],
+                toc="0:100:999",
+            ),
+        ],
+    )
+    miss = db.best_match(1, 0xDEADBEEF)
+    assert miss.confidence == CtdbConfidence.MISMATCH
+    assert miss.confidence_count == 8  # exact-TOC max, not fuzzy 99
 
 
 def test_parse_submit_response_success() -> None:

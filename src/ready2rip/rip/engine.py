@@ -4487,10 +4487,18 @@ def _archival_fail_reasons(
                 f'AccurateRip mismatch on track(s) {", ".join(str(n) for n in bad)}'
             )
     if job.verify_ctdb and ctdb_results:
+        # Soft CTDB misses are NOT_IN_DB (fuzzy neighbors). Hard MISMATCH is
+        # exact-TOC CRC conflict — still defer to AccurateRip when it matched.
+        ar_matched = {
+            r.track_number
+            for r in ar_results
+            if r.confidence == AccurateRipConfidence.MATCH
+        }
         bad = [
             r.track_number
             for r in ctdb_results
             if r.confidence == CtdbConfidence.MISMATCH
+            and r.track_number not in ar_matched
         ]
         if bad:
             reasons.append(
@@ -4589,9 +4597,11 @@ def _summarize_ctdb(results: list[CtdbResult]) -> str:
     matches = sum(1 for r in results if r.confidence == CtdbConfidence.MATCH)
     mismatches = sum(1 for r in results if r.confidence == CtdbConfidence.MISMATCH)
     missing = sum(1 for r in results if r.confidence == CtdbConfidence.NOT_IN_DB)
+    if matches == len(results):
+        return f'CTDB {matches}/{len(results)} match'
     parts = [f'CTDB {matches}/{len(results)} match']
     if mismatches:
         parts.append(f'{mismatches} mismatch')
     if missing:
-        parts.append(f'{missing} not in DB')
+        parts.append(f'{missing} unverified')
     return ', '.join(parts)
