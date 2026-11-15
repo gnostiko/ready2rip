@@ -30,6 +30,8 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 
+from ready2rip.util import subprocess_env_for
+
 # WavPack preset → (wavpack CLI flags, ffmpeg -compression_level).
 _WAVPACK_PRESETS: dict[str, tuple[list[str], int]] = {
     'fast': (['-f'], 0),
@@ -222,12 +224,14 @@ def prefer_fdk_aac() -> bool:
     if ffmpeg is None:
         return False
     try:
+        encoders_cmd = [ffmpeg, '-hide_banner', '-encoders']
         proc = subprocess.run(
-            [ffmpeg, '-hide_banner', '-encoders'],
+            encoders_cmd,
             check=False,
             capture_output=True,
             text=True,
             timeout=15,
+            env=subprocess_env_for(encoders_cmd),
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -501,6 +505,7 @@ def _run_version_text(argv: list[str], *, timeout: float = 20.0) -> str:
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=subprocess_env_for(argv),
         )
     except (OSError, subprocess.TimeoutExpired):
         return ''

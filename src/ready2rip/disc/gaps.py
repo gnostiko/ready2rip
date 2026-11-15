@@ -18,6 +18,7 @@ from ready2rip.disc.probe import (
     TrackInfo,
     apply_track1_toc_pregap,
 )
+from ready2rip.util import subprocess_env_for
 
 log = logging.getLogger(__name__)
 
@@ -136,13 +137,15 @@ def _pregaps_from_cdrdao(device: str) -> list[ParsedGap] | None:
     try:
         with tempfile.TemporaryDirectory(prefix='ready2rip-toc-') as tmp:
             toc_path = Path(tmp) / 'disc.toc'
+            cdrdao_cmd = [binary, 'read-toc', '--device', device, str(toc_path)]
             completed = subprocess.run(
-                [binary, 'read-toc', '--device', device, str(toc_path)],
+                cdrdao_cmd,
                 check=False,
                 capture_output=True,
                 text=True,
                 timeout=120,
                 start_new_session=True,
+                env=subprocess_env_for(cdrdao_cmd),
             )
             if not toc_path.is_file():
                 log.debug(

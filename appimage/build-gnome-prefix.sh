@@ -5,8 +5,8 @@
 # Usage:
 #   ./appimage/build-gnome-prefix.sh [/path/to/prefix]
 #
-# Intended for Ubuntu 22.04 (glibc 2.35). Skips work when the prefix already
-# has a new enough libadwaita.
+# Intended for Ubuntu 24.04 AppImage CI (also builds on 22.04). Skips work when
+# the prefix already has a new enough libadwaita.
 set -euo pipefail
 
 PREFIX="${1:-${GNOME_PREFIX:-$HOME/.cache/ready2rip-gnome-prefix}}"

@@ -3,9 +3,17 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from ready2rip.util import is_safe_http_url, validate_device_path
+from ready2rip.util import (
+    argv_primary_executable,
+    is_safe_http_url,
+    path_is_under_appdir,
+    subprocess_env_for,
+    validate_device_path,
+)
 
 
 def test_validate_device_path_optical() -> None:
@@ -46,3 +54,65 @@ def test_is_safe_http_url_rejects_private_resolve(
         lambda *_a, **_k: [(0, 0, 0, '', ('10.0.0.1', 0))],
     )
     assert not is_safe_http_url('https://musicbrainz.org/ws/2/release')
+
+
+def test_argv_primary_executable_skips_env_and_stdbuf() -> None:
+    assert argv_primary_executable(['flac', '-5', 'a.wav']) == 'flac'
+    assert (
+        argv_primary_executable(
+            ['env', 'WINEPREFIX=/tmp/w', 'wine', 'qaac64.exe', '-o', 'x.m4a']
+        )
+        == 'wine'
+    )
+    assert argv_primary_executable(['stdbuf', '-oL', '-eL', 'cdparanoia', '-Q']) == (
+        'cdparanoia'
+    )
+
+
+def test_subprocess_env_for_scrubs_host_tools(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    appdir = tmp_path / 'AppDir'
+    bundled = appdir / 'usr' / 'bin' / 'flac'
+    bundled.parent.mkdir(parents=True)
+    bundled.write_text('#!/bin/sh\n')
+    bundled.chmod(0o755)
+    host_bin = tmp_path / 'host' / 'qaac'
+    host_bin.parent.mkdir(parents=True)
+    host_bin.write_text('#!/bin/sh\n')
+    host_bin.chmod(0o755)
+
+    monkeypatch.setenv('APPDIR', str(appdir))
+    monkeypatch.setenv('LD_LIBRARY_PATH', f'{appdir}/usr/lib:/usr/lib')
+    monkeypatch.setenv('PYTHONHOME', str(appdir / 'usr'))
+    monkeypatch.setenv('GI_TYPELIB_PATH', f'{appdir}/usr/lib/girepository-1.0')
+
+    host_env = subprocess_env_for([str(host_bin), '--tvbr', '90'])
+    assert host_env.get('LD_LIBRARY_PATH') == '/usr/lib'
+    assert 'PYTHONHOME' not in host_env
+    assert 'GI_TYPELIB_PATH' not in host_env
+
+    bundled_env = subprocess_env_for([str(bundled), '-5', 'x.wav'])
+    assert f'{appdir}/usr/lib' in bundled_env.get('LD_LIBRARY_PATH', '')
+    assert bundled_env.get('PYTHONHOME') == str(appdir / 'usr')
+
+
+def test_path_is_under_appdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    appdir = tmp_path / 'AppDir'
+    nested = appdir / 'usr' / 'bin' / 'flac'
+    nested.parent.mkdir(parents=True)
+    nested.write_text('x')
+    outside = tmp_path / 'other'
+    outside.write_text('y')
+    monkeypatch.setenv('APPDIR', str(appdir))
+    assert path_is_under_appdir(nested)
+    assert not path_is_under_appdir(outside)
+
+
+def test_subprocess_env_for_noop_without_appdir(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv('APPDIR', raising=False)
+    monkeypatch.setenv('LD_LIBRARY_PATH', '/opt/foo')
+    env = subprocess_env_for(['/bin/bash', '-c', 'true'])
+    assert env.get('LD_LIBRARY_PATH') == '/opt/foo'

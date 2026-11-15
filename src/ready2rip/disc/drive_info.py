@@ -10,6 +10,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ready2rip.util import subprocess_env_for
+
 log = logging.getLogger(__name__)
 
 
@@ -91,12 +93,14 @@ def _fill_from_udev(info: DriveInfo) -> None:
     if not udevadm:
         return
     try:
+        udev_cmd = [udevadm, 'info', '--query=property', f'--name={info.device}']
         completed = subprocess.run(
-            [udevadm, 'info', '--query=property', f'--name={info.device}'],
+            udev_cmd,
             check=False,
             capture_output=True,
             text=True,
             timeout=5,
+            env=subprocess_env_for(udev_cmd),
         )
     except (OSError, subprocess.TimeoutExpired):
         return
@@ -202,12 +206,14 @@ def _fill_from_cd_drive(info: DriveInfo) -> None:
     if not cd_drive:
         return
     try:
+        cd_drive_cmd = [cd_drive, '-q', info.device]
         completed = subprocess.run(
-            [cd_drive, '-q', info.device],
+            cd_drive_cmd,
             check=False,
             capture_output=True,
             text=True,
             timeout=10,
+            env=subprocess_env_for(cd_drive_cmd),
         )
     except (OSError, subprocess.TimeoutExpired):
         return
@@ -229,12 +235,14 @@ def _fill_from_cdparanoia(info: DriveInfo) -> None:
     if not cdparanoia:
         return
     try:
+        cp_cmd = [cdparanoia, '-Q', '-d', info.device]
         completed = subprocess.run(
-            [cdparanoia, '-Q', '-d', info.device],
+            cp_cmd,
             check=False,
             capture_output=True,
             text=True,
             timeout=15,
+            env=subprocess_env_for(cp_cmd),
         )
     except (OSError, subprocess.TimeoutExpired):
         return

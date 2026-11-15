@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
 import shutil
 import socket
 import urllib.parse
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 # Optical devices commonly used on Linux (plus by-id / by-path links under /dev).
@@ -51,6 +53,177 @@ _FETCH_HOST_SUFFIXES = (
 def find_cdparanoia() -> str | None:
     """Return path to ``cdparanoia`` or libcdio's ``cd-paranoia`` binary."""
     return shutil.which('cdparanoia') or shutil.which('cd-paranoia')
+
+
+# ---------------------------------------------------------------------------
+# AppImage / host subprocess environment
+# ---------------------------------------------------------------------------
+# AppRun exports LD_LIBRARY_PATH (and friends) for the bundled GTK/Python stack.
+# Host tools (Wine/qaac wrappers, udevadm, cdrdao, …) must not inherit that
+# view — Ubuntu 22.04 libreadline under Solus bash is the canonical failure:
+# ``undefined symbol: rl_trim_arg_from_keyseq``.
+
+_APPDIR_PATH_ENV_KEYS = (
+    'LD_LIBRARY_PATH',
+    'GI_TYPELIB_PATH',
+    'PYTHONPATH',
+    'GSETTINGS_SCHEMA_DIR',
+    'GDK_PIXBUF_MODULE_FILE',
+    'SSL_CERT_DIR',
+)
+
+
+def appdir_root() -> Path | None:
+    """Resolved ``$APPDIR`` when running inside an AppImage / AppDir, else None."""
+    raw = (os.environ.get('APPDIR') or '').strip()
+    if not raw:
+        return None
+    try:
+        return Path(raw).resolve()
+    except OSError:
+        return Path(raw)
+
+
+def path_is_under_appdir(path: str | Path, appdir: Path | None = None) -> bool:
+    """True if *path* resolves inside the active AppDir."""
+    root = appdir if appdir is not None else appdir_root()
+    if root is None:
+        return False
+    try:
+        resolved = Path(path).expanduser().resolve()
+    except OSError:
+        return False
+    try:
+        resolved.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def argv_primary_executable(argv: Sequence[str]) -> str | None:
+    """Best-effort path/name of the real binary in *argv* (skips ``env``/``stdbuf``)."""
+    if not argv:
+        return None
+    args = [str(a) for a in argv]
+    i = 0
+    head = Path(args[0]).name
+    if head == 'env':
+        i = 1
+        while i < len(args):
+            tok = args[i]
+            if tok == '--':
+                i += 1
+                break
+            if tok.startswith('-'):
+                i += 1
+                continue
+            if '=' in tok:
+                i += 1
+                continue
+            break
+    if i >= len(args):
+        return None
+    if Path(args[i]).name == 'stdbuf':
+        i += 1
+        while i < len(args) and args[i].startswith('-'):
+            opt = args[i]
+            if opt in ('-o', '-e', '-i') and i + 1 < len(args):
+                i += 2
+            else:
+                i += 1
+    if i >= len(args):
+        return None
+    return args[i]
+
+
+def resolve_argv_executable(argv: Sequence[str]) -> Path | None:
+    """Resolve :func:`argv_primary_executable` to an absolute path when possible."""
+    raw = argv_primary_executable(argv)
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    if path.is_file():
+        try:
+            return path.resolve()
+        except OSError:
+            return path
+    found = shutil.which(raw)
+    if found:
+        try:
+            return Path(found).resolve()
+        except OSError:
+            return Path(found)
+    return None
+
+
+def _filter_path_env(value: str, appdir: Path) -> str | None:
+    """Drop AppDir entries from a ``PATH``-style env value; None if empty."""
+    kept: list[str] = []
+    for part in value.split(':'):
+        if not part:
+            continue
+        try:
+            resolved = Path(part).resolve()
+        except OSError:
+            kept.append(part)
+            continue
+        try:
+            resolved.relative_to(appdir)
+            continue
+        except ValueError:
+            kept.append(part)
+    if not kept:
+        return None
+    return ':'.join(kept)
+
+
+def subprocess_env_for(
+    argv: Sequence[str],
+    *,
+    base: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Env for ``subprocess``: scrub AppDir linker paths for host binaries.
+
+    Bundled AppDir tools keep the full AppRun environment. Host tools (Wine,
+    qaac wrappers, udevadm, …) get AppDir removed from ``LD_LIBRARY_PATH`` and
+    related variables so they load the host library stack.
+    """
+    env = dict(os.environ if base is None else base)
+    appdir = appdir_root()
+    if appdir is None:
+        return env
+
+    exe = resolve_argv_executable(argv)
+    if exe is not None and path_is_under_appdir(exe, appdir):
+        return env
+
+    # Host (or unresolved) binary: strip AppDir from the linker / GI view.
+    for key in _APPDIR_PATH_ENV_KEYS:
+        raw = env.get(key)
+        if not raw:
+            continue
+        if key in {'GSETTINGS_SCHEMA_DIR', 'GDK_PIXBUF_MODULE_FILE', 'SSL_CERT_DIR'}:
+            if path_is_under_appdir(raw, appdir):
+                env.pop(key, None)
+            continue
+        filtered = _filter_path_env(raw, appdir)
+        if filtered is None:
+            env.pop(key, None)
+        else:
+            env[key] = filtered
+
+    python_home = env.get('PYTHONHOME')
+    if python_home and path_is_under_appdir(python_home, appdir):
+        env.pop('PYTHONHOME', None)
+
+    ssl_cert = env.get('SSL_CERT_FILE')
+    if ssl_cert and path_is_under_appdir(ssl_cert, appdir):
+        # Host OpenSSL/Wine should use the system trust store.
+        env.pop('SSL_CERT_FILE', None)
+        env.pop('CURL_CA_BUNDLE', None)
+        env.pop('REQUESTS_CA_BUNDLE', None)
+
+    return env
 
 
 def validate_device_path(device: str | None, *, default: str = '/dev/sr0') -> str:

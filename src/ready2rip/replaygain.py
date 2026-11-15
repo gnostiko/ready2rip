@@ -12,6 +12,7 @@ from pathlib import Path
 
 from ready2rip.rip.soundcheck import supports_sound_check
 from ready2rip.tags.writer import ReplayGainValues, TagWriter
+from ready2rip.util import subprocess_env_for
 
 log = logging.getLogger(__name__)
 
@@ -231,6 +232,7 @@ def _values_from_ffmpeg(cmd: list[str], *, label: str) -> ReplayGainValues | Non
             capture_output=True,
             text=True,
             timeout=max(600, 120 * max(1, cmd.count('-i'))),
+            env=subprocess_env_for(cmd),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         log.warning('ReplayGain analysis failed for %s: %s', label, exc)

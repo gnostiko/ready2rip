@@ -12,9 +12,9 @@
 #   PyGObject + GTK 4 + libadwaita (bundled into the image)
 #   cdparanoia or cd-paranoia, flac, lame, ffmpeg (recommended; bundled)
 #
-# For AppImageHub / older distros, build on Ubuntu 22.04 (glibc 2.35) and set
-# GNOME_PREFIX to a prefix from appimage/build-gnome-prefix.sh (GLib/GTK/Adw
-# built on that same old base). Override the interpreter with PYTHON=python3.11.
+# Preferred build host: Ubuntu 24.04 (glibc 2.39). Set GNOME_PREFIX to a prefix
+# from appimage/build-gnome-prefix.sh so GLib/GTK/Adw stay pinned and portable.
+# Override the interpreter with PYTHON=python3.12 (noble) or python3.11.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -306,17 +306,40 @@ echo "    OK: Gio-2.0.typelib contains DEFAULT_FLAGS"
 # ---------------------------------------------------------------------------
 # Helpers: copy shared libraries and binaries (via ldd)
 # ---------------------------------------------------------------------------
-# Graphics / compositor stack must come from the *host*. Bundling Ubuntu
-# 22.04-era libwayland + libEGL/libGL while the host uses a newer NVIDIA (or
-# Mesa) driver causes SIGSEGV at GTK startup: host libEGL_nvidia → AppImage
-# libwayland-client. Keep libepoxy (dlopens host GL); drop the rest.
-is_host_graphics_lib() {
+# Libraries that must come from the *host* (never ship in the AppImage).
+# Mixing build-host copies with a newer distro breaks NVIDIA/Wayland startup,
+# host bash/Wine (readline), and host ffmpeg (libstdc++ GLIBCXX).
+# Keep libepoxy (dlopens host GL). App-side OpenSSL/Python stay bundled.
+is_host_provided_lib() {
   local base
   base="$(basename "$1")"
   case "$base" in
+    # GPU / compositor
     libwayland-*.so*|libEGL*.so*|libGL.so*|libGLX*.so*|libGLdispatch*.so*| \
     libOpenGL.so*|libGLESv*.so*|libgbm.so*|libdrm.so*|libdrm_*.so*| \
     libglapi.so*|libnvidia*.so*|libcuda*.so*|libvulkan.so*|libVkLayer*.so*)
+      return 0
+      ;;
+    # Shell / TTY (host bash + qaac wrappers)
+    libreadline.so*|libhistory.so*|libtinfo.so*|libncurses*.so*)
+      return 0
+      ;;
+    # glibc NSS / name services
+    libresolv.so*|libnsl.so*|libnss_*.so*)
+      return 0
+      ;;
+    # Session / device (portals, eject, udev)
+    libsystemd.so*|libudev.so*|libdbus-1.so*)
+      return 0
+      ;;
+    # Audio backends pulled by fat ffmpeg (use host if needed)
+    libasound.so*|libpulse.so*|libpulsecommon-*.so*|libjack.so*| \
+    libpipewire*.so*|libspa-*.so*)
+      return 0
+      ;;
+    # Toolchain — host libstdc++ is backward-compatible; bundling an old one
+    # breaks newer host CLIs under LD_LIBRARY_PATH.
+    libstdc++.so*|libgcc_s.so*)
       return 0
       ;;
   esac
@@ -332,7 +355,7 @@ copy_lib() {
   [ -f "$real" ] || real="$src"
   local base
   base="$(basename "$real")"
-  if is_host_graphics_lib "$base"; then
+  if is_host_provided_lib "$base"; then
     return 0
   fi
   if [ ! -e "${APPDIR}/usr/lib/${base}" ]; then
@@ -424,15 +447,15 @@ bundle_ldd_deps() {
       */librt.so.*) continue ;;
       */libpthread.so.*) continue ;;
     esac
-    if is_host_graphics_lib "$lib"; then
+    if is_host_provided_lib "$lib"; then
       continue
     fi
     copy_lib "$lib" || true
   done
 }
 
-# linuxdeploy / ldd may still drop GPU libs into AppDir — purge before pack.
-strip_host_graphics_libs() {
+# linuxdeploy / ldd may still drop host-only libs into AppDir — purge before pack.
+strip_host_provided_libs() {
   local libdir="${APPDIR}/usr/lib"
   local f base removed=0
   [ -d "$libdir" ] || return 0
@@ -440,7 +463,7 @@ strip_host_graphics_libs() {
   for f in "$libdir"/lib*.so*; do
     [ -e "$f" ] || continue
     base="$(basename "$f")"
-    if is_host_graphics_lib "$base"; then
+    if is_host_provided_lib "$base"; then
       rm -f "$f"
       removed=$((removed + 1))
     fi
@@ -457,12 +480,18 @@ strip_host_graphics_libs() {
       removed=$((removed + 1))
     fi
   done
+  # Stale interpreter leftovers (wrong major.minor next to the bundled one).
+  for f in "$libdir"/libpython3.10.so*; do
+    [ -e "$f" ] || continue
+    rm -f "$f"
+    removed=$((removed + 1))
+  done
   if [ "$removed" -gt 0 ]; then
-    echo "    removed ${removed} host-graphics path(s) from AppDir"
+    echo "    removed ${removed} host-provided path(s) from AppDir"
   fi
 }
 
-assert_no_host_graphics_libs() {
+assert_no_host_provided_libs() {
   local libdir="${APPDIR}/usr/lib"
   local f base leftovers=0
   [ -d "$libdir" ] || return 0
@@ -470,8 +499,8 @@ assert_no_host_graphics_libs() {
   for f in "$libdir"/lib*.so*; do
     [ -e "$f" ] || continue
     base="$(basename "$f")"
-    if is_host_graphics_lib "$base"; then
-      echo "error: AppDir still contains host graphics lib: ${base}" >&2
+    if is_host_provided_lib "$base"; then
+      echo "error: AppDir still contains host-provided lib: ${base}" >&2
       leftovers=1
     fi
   done
@@ -484,7 +513,7 @@ assert_no_host_graphics_libs() {
   if [ "$leftovers" -ne 0 ]; then
     return 1
   fi
-  echo "    OK: no Wayland/EGL/GL/GBM/DRM libs in AppDir (host GPU stack)"
+  echo "    OK: host GPU/shell/NSS/session/audio/libstdc++ libs not in AppDir"
 }
 
 # Bundle host Python stdlib so the AppImage does not need host Python X.Y.
@@ -894,12 +923,11 @@ if [ ! -f "$GIO_TL" ] || ! grep -a -q 'DEFAULT_FLAGS' "$GIO_TL"; then
   exit 1
 fi
 
-# linuxdeploy / GTK plugin often re-copies Wayland + EGL/GL. Drop them so the
-# host NVIDIA/Mesa + compositor stack is used at runtime.
-echo "==> stripping host graphics libs from AppDir"
-strip_host_graphics_libs
+# linuxdeploy often re-copies Wayland/EGL/GL, readline, libstdc++, etc.
+echo "==> stripping host-provided libs from AppDir"
+strip_host_provided_libs
 ensure_soname_links
-assert_no_host_graphics_libs
+assert_no_host_provided_libs
 
 # ---------------------------------------------------------------------------
 # Smoke-test inside AppDir (isolated from host Python stdlib)
@@ -1001,7 +1029,7 @@ if command -v objdump >/dev/null 2>&1; then
     fi
   done
   echo "    → this AppImage needs host glibc >= ${MAX_GLIBC}"
-  echo "    (build on older distro/container for wider reach; Solus/current often needs very new glibc)"
+  echo "    (CI builds on Ubuntu 24.04 / glibc 2.39; use deb/rpm on older hosts)"
 fi
 
 # ---------------------------------------------------------------------------

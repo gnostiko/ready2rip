@@ -26,7 +26,17 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-11-14">
+    <release version="@APPLICATION_VERSION@" date="2026-11-15">
+      <description>
+        <p>
+          0.4.49: Harden AppImage host-tool compatibility (scrub AppDir
+          LD_LIBRARY_PATH for Wine/qaac and other host binaries; stop shipping
+          readline/NSS/session/audio/libstdc++ with the image) and build
+          AppImages on Ubuntu 24.04 (glibc ≥ 2.39).
+        </p>
+      </description>
+    </release>
+    <release version="0.4.48" date="2026-11-14">
       <description>
         <p>
           0.4.48: Fix AppImage startup segfault on NVIDIA hosts (e.g. Solus)

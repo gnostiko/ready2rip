@@ -17,6 +17,7 @@ from ready2rip.rip.paranoia_stats import (
     parse_paranoia_stderr,
     progress_frame_from_line,
 )
+from ready2rip.util import subprocess_env_for
 
 log = logging.getLogger(__name__)
 
@@ -177,6 +178,7 @@ def run_paranoia_streaming(
             # Binary pipe + non-blocking reads: never block on a partial line.
             text=False,
             bufsize=0,
+            env=subprocess_env_for(run_cmd),
         )
         if register_proc is not None:
             register_proc(proc)

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Smoke-test a ready2rip AppImage the way AppImageHub roughly does:
-# Ubuntu 22.04-era host, no network, Xvfb, must stay alive briefly without
-# the DEFAULT_FLAGS / typelib crash (and preferably open a window).
+# Smoke-test a ready2rip AppImage:
+# Xvfb, no network, must stay alive briefly without the DEFAULT_FLAGS /
+# typelib crash (and preferably open a window). Also verify AppDir does not
+# ship host-only libs that break bash/Wine under LD_LIBRARY_PATH.
 #
 # Usage:
 #   ./appimage/smoke-appimage.sh dist/ready2rip-VERSION-x86_64.AppImage
@@ -43,6 +44,63 @@ export APPIMAGE_EXTRACT_AND_RUN=1
 export HOME="$WORKDIR/home"
 mkdir -p "$HOME/.local/share/appimagekit"
 touch "$HOME/.local/share/appimagekit/no_desktopintegration"
+
+# ---- host-lib hygiene (extract once) ----
+echo "    checking AppDir host-provided lib exclusions"
+EXTRACT="$WORKDIR/extract"
+mkdir -p "$EXTRACT"
+(
+  cd "$EXTRACT"
+  APPIMAGE_EXTRACT_AND_RUN=1 "$WORKDIR/app.AppImage" --appimage-extract >/dev/null
+)
+LIBDIR="$EXTRACT/squashfs-root/usr/lib"
+if [ ! -d "$LIBDIR" ]; then
+  echo "error: AppImage extract missing usr/lib" >&2
+  exit 1
+fi
+bad=0
+for pat in \
+  'libwayland-*.so*' \
+  'libEGL*.so*' \
+  'libGL.so*' \
+  'libGLX*.so*' \
+  'libGLdispatch*.so*' \
+  'libgbm.so*' \
+  'libdrm.so*' \
+  'libreadline.so*' \
+  'libtinfo.so*' \
+  'libncurses*.so*' \
+  'libresolv.so*' \
+  'libnsl.so*' \
+  'libsystemd.so*' \
+  'libudev.so*' \
+  'libdbus-1.so*' \
+  'libasound.so*' \
+  'libpulse.so*' \
+  'libjack.so*' \
+  'libstdc++.so*' \
+  'libgcc_s.so*'
+do
+  # shellcheck disable=SC2086
+  matches=( "$LIBDIR"/$pat )
+  if [ -e "${matches[0]}" ]; then
+    echo "error: AppDir still contains host-provided lib: ${matches[0]##*/}" >&2
+    bad=1
+  fi
+done
+if [ "$bad" -ne 0 ]; then
+  exit 1
+fi
+echo "    OK: no forbidden host libs in AppDir"
+
+# Host bash must work under AppDir LD_LIBRARY_PATH (qaac wrappers use bash).
+if LD_LIBRARY_PATH="$LIBDIR" /bin/bash -c 'echo ok' >/dev/null 2>&1; then
+  echo "    OK: host bash runs under AppDir LD_LIBRARY_PATH"
+else
+  echo "error: host bash fails under AppDir LD_LIBRARY_PATH (readline/libstdc++?)" >&2
+  LD_LIBRARY_PATH="$LIBDIR" /bin/bash -c 'echo ok' 2>&1 || true
+  exit 1
+fi
 
 # Block outbound network for the app process tree when unshare is available
 # (AppImageHub uses firejail --net=none).

@@ -25,7 +25,7 @@ from ready2rip.accuraterip import (
 )
 from ready2rip.disc.probe import DiscInfo, TrackInfo, probe_disc
 from ready2rip.rip.secure import secure_paranoia_flags
-from ready2rip.util import find_cdparanoia
+from ready2rip.util import find_cdparanoia, subprocess_env_for
 
 log = logging.getLogger(__name__)
 
@@ -194,21 +194,23 @@ def calibrate_drive_offset(
             wav_path = tmp_path / f'cal{track.number}.wav'
             try:
                 # Burst mode: much faster than full paranoia for offset finding.
+                cal_cmd = [
+                    cdparanoia,
+                    '-q',
+                    '-Z',
+                    '-w',
+                    '-d',
+                    device,
+                    str(track.number),
+                    str(wav_path),
+                ]
                 subprocess.run(
-                    [
-                        cdparanoia,
-                        '-q',
-                        '-Z',
-                        '-w',
-                        '-d',
-                        device,
-                        str(track.number),
-                        str(wav_path),
-                    ],
+                    cal_cmd,
                     check=True,
                     capture_output=True,
                     text=True,
                     timeout=extract_timeout,
+                    env=subprocess_env_for(cal_cmd),
                 )
             except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
                 extract_failures += 1
@@ -578,6 +580,7 @@ def _scan_with_native(
                 capture_output=True,
                 text=True,
                 timeout=max(5, timeout),
+                env=subprocess_env_for(cmd),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             log.warning('Native offset scan failed: %s', exc)
@@ -642,6 +645,7 @@ def _confirm_offset_secure(
             capture_output=True,
             text=True,
             timeout=max(15, int(timeout)),
+            env=subprocess_env_for(cmd),
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         log.warning('Secure offset confirm extract failed: %s', exc)
@@ -691,12 +695,14 @@ def _ensure_native_helper() -> Path | None:
         return binary
 
     try:
+        cc_cmd = [cc, '-O3', '-o', str(binary), str(src)]
         subprocess.run(
-            [cc, '-O3', '-o', str(binary), str(src)],
+            cc_cmd,
             check=True,
             capture_output=True,
             text=True,
             timeout=60,
+            env=subprocess_env_for(cc_cmd),
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         log.warning('Could not build ar_offset_scan: %s', exc)

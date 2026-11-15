@@ -1,13 +1,12 @@
-# Build portable AppImages (x86_64 + aarch64) on Ubuntu 22.04 (glibc 2.35),
+# Build portable AppImages (x86_64 + aarch64) on Ubuntu 24.04 (glibc 2.39),
 # GPG-sign them, and attach to the GitHub Release for the matching tag.
 #
-# Why 22.04: AppImageHub’s catalog tester still runs on the oldest Ubuntu LTS
-# in standard support (currently 22.04). Building on newer runners (24.04/26.04)
-# produces binaries that need GLIBC_2.36+ and fail that check.
+# Why 24.04: balances a modern toolchain / system Python 3.12 with a still-
+# reasonable glibc floor (2.39). Older hosts (Ubuntu 22.04 / glibc 2.35) need
+# the distro package or an older AppImage release.
 #
 # Modern GTK 4 / libadwaita are built into a cached GNOME_PREFIX via
-# appimage/build-gnome-prefix.sh (jammy’s packages are too old for Adw.Dialog).
-# Python 3.11 comes from deadsnakes (jammy’s system Python is 3.10).
+# appimage/build-gnome-prefix.sh so the AppImage stack stays pinned.
 #
 # Secrets (required for signed publish builds):
 #   APPIMAGE_GPG_PRIVATE_KEY  — armored private key
@@ -52,16 +51,16 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-22.04
+            runner: ubuntu-24.04
           - arch: aarch64
-            runner: ubuntu-22.04-arm
+            runner: ubuntu-24.04-arm
 
     name: AppImage ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
 
     env:
       GNOME_PREFIX: ${{ github.workspace }}/build-appimage/gnome-prefix
-      PYTHON: python3.11
+      PYTHON: python3.12
 
     steps:
       - uses: actions/checkout@v4
@@ -82,13 +81,14 @@ jobs:
             bison \
             xz-utils \
             git \
-            software-properties-common \
             python3 \
+            python3-dev \
             python3-pip \
             python3-setuptools \
             python3-wheel \
+            python3-venv \
             ca-certificates \
-            libfuse2 \
+            libfuse2t64 \
             desktop-file-utils \
             gnupg \
             zsync \
@@ -138,22 +138,15 @@ jobs:
             libappstream-dev \
             gobject-introspection \
             libgirepository1.0-dev \
+            libgirepository-2.0-dev \
             sassc \
             cmake
-          # Python 3.11 (jammy system Python is 3.10; project requires >=3.11).
-          sudo add-apt-repository -y ppa:deadsnakes/ppa
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            python3.11 \
-            python3.11-dev \
-            python3.11-venv \
-            python3.11-distutils
-          curl -sS https://bootstrap.pypa.io/get-pip.py | sudo python3.11
-          # PyGObject ≥3.52 needs girepository-2.0 (noble+). Stay on 3.4x for jammy.
-          sudo python3.11 -m pip install --upgrade \
+          # Noble system Python is 3.12 (project requires >=3.11).
+          # PEP 668 marks the system interpreter as externally managed on 24.04.
+          python3.12 -m pip install --user --break-system-packages --upgrade \
             'meson>=1.3,<2' \
             'pycairo>=1.20' \
-            'PyGObject>=3.42,<3.52'
+            'PyGObject>=3.42'
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Verify encoder / extract tools on PATH
@@ -161,10 +154,10 @@ jobs:
           set -euo pipefail
           echo "runner arch=$(uname -m) expected=${{ matrix.arch }}"
           test "$(uname -m)" = "${{ matrix.arch }}"
-          for t in python3.11 meson ninja gcc curl cdparanoia flac lame ffmpeg opusenc zsyncmake gpg; do
+          for t in python3.12 meson ninja gcc curl cdparanoia flac lame ffmpeg opusenc zsyncmake gpg; do
             command -v "$t"
           done
-          python3.11 --version
+          python3.12 --version
           meson --version
           ldd --version | head -1
 
@@ -174,8 +167,8 @@ jobs:
           path: |
             build-appimage/gnome-prefix
             build-appimage/gnome-src
-          # v2: include gobject-introspection so Gio typelib has DEFAULT_FLAGS
-          key: gnome-prefix-22.04-${{ matrix.arch }}-v2-glib2.78.6-gi1.78.1-gtk4.14.5-adw1.5.3
+          # v1 on 24.04: new glibc floor; keep pin aligned with build-gnome-prefix.sh
+          key: gnome-prefix-24.04-${{ matrix.arch }}-v1-glib2.78.6-gi1.78.1-gtk4.14.5-adw1.5.3
 
       - name: Build GNOME prefix
         run: |
@@ -236,8 +229,6 @@ jobs:
           ./appimage/build-appimage.sh
 
       - name: Smoke-test AppImage (Xvfb, no network)
-        # Same glibc floor as AppImageHub (ubuntu-22.04 runners). Catches Gio
-        # typelib mismatches before publish /retest.
         run: |
           set -euo pipefail
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \

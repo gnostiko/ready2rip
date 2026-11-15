@@ -112,7 +112,7 @@ from ready2rip.settings_defs import (
 )
 from ready2rip.tags.artists import DEFAULT_ARTIST_STYLE
 from ready2rip.tags.writer import TagWriter, ripper_tag_value
-from ready2rip.util import find_cdparanoia, validate_device_path
+from ready2rip.util import find_cdparanoia, subprocess_env_for, validate_device_path
 
 log = logging.getLogger(__name__)
 
@@ -3975,6 +3975,7 @@ class RipEngine:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                env=subprocess_env_for(cmd),
             )
             with self._proc_lock:
                 self._procs.add(proc)

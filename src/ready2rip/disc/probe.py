@@ -8,6 +8,8 @@ import re
 import subprocess
 from dataclasses import dataclass, field, replace
 
+from ready2rip.util import find_cdparanoia, subprocess_env_for
+
 log = logging.getLogger(__name__)
 
 
@@ -86,7 +88,7 @@ def probe_disc(device: str = '/dev/sr0') -> DiscInfo | None:
     or no audio tracks are found. Data tracks (ioctl TOC) are attached when
     the kernel exposes them; INDEX 00 pregaps are filled later at rip start.
     """
-    from ready2rip.util import find_cdparanoia, validate_device_path
+    from ready2rip.util import validate_device_path
 
     try:
         device = validate_device_path(device)
@@ -100,8 +102,9 @@ def probe_disc(device: str = '/dev/sr0') -> DiscInfo | None:
     try:
         # Keep TOC probe bounded. Always run off the GTK thread — cdparanoia can
         # block for several seconds while the drive spins up.
+        probe_cmd = [cdparanoia, '-Q', '-d', device]
         completed = subprocess.run(
-            [cdparanoia, '-Q', '-d', device],
+            probe_cmd,
             check=False,
             capture_output=True,
             text=True,
@@ -109,6 +112,7 @@ def probe_disc(device: str = '/dev/sr0') -> DiscInfo | None:
             # Start a new session so a timed-out probe does not leave orphans
             # holding the device open.
             start_new_session=True,
+            env=subprocess_env_for(probe_cmd),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

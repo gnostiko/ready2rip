@@ -68,6 +68,7 @@ from ready2rip.tags.artists import (
     DEFAULT_ARTIST_STYLE,
     normalize_artist_style,
 )
+from ready2rip.util import subprocess_env_for
 
 # Re-export defs for callers that import from ready2rip.settings.
 __all__ = [
@@ -364,11 +365,13 @@ def _compile_checkout_schemas() -> Path | None:
             if stale:
                 cache.mkdir(parents=True, exist_ok=True)
                 dest_xml.write_bytes(xml.read_bytes())
+                schema_cmd = [compiler, str(cache)]
                 subprocess.run(
-                    [compiler, str(cache)],
+                    schema_cmd,
                     check=True,
                     capture_output=True,
                     text=True,
+                    env=subprocess_env_for(schema_cmd),
                 )
             if compiled.is_file():
                 return cache

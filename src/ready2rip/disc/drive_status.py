@@ -10,6 +10,8 @@ import subprocess
 from dataclasses import dataclass
 from enum import Enum
 
+from ready2rip.util import subprocess_env_for
+
 log = logging.getLogger(__name__)
 
 # From linux/cdrom.h
@@ -119,12 +121,14 @@ def eject_drive(device: str = '/dev/sr0') -> tuple[bool, str]:
     eject_bin = shutil.which('eject')
     if eject_bin:
         try:
+            eject_cmd = [eject_bin, '--', device]
             completed = subprocess.run(
-                [eject_bin, '--', device],
+                eject_cmd,
                 check=False,
                 capture_output=True,
                 text=True,
                 timeout=30,
+                env=subprocess_env_for(eject_cmd),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             return False, str(exc)

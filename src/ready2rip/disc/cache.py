@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from ready2rip.disc.probe import DiscInfo
+from ready2rip.util import subprocess_env_for
 
 log = logging.getLogger(__name__)
 
@@ -233,6 +234,7 @@ def _extract_span(
         capture_output=True,
         text=True,
         timeout=timeout,
+        env=subprocess_env_for(cmd),
     )
     if completed.returncode != 0 or not wav_path.is_file() or wav_path.stat().st_size < 1000:
         detail = (completed.stderr or completed.stdout or '').strip()
