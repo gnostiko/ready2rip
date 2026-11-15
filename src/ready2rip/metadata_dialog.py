@@ -10,7 +10,7 @@ gi.require_version('Adw', '1')
 
 from gi.repository import Adw, GLib, Gtk
 
-from ready2rip.metadata.picker_text import disc_label, subtitle, track_count_mismatch
+from ready2rip.metadata.picker_text import subtitle, track_count_mismatch
 from ready2rip.metadata.providers import AlbumMetadata
 
 

@@ -29,6 +29,15 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-15">
       <description>
         <p>
+          0.4.53: Confirm Stop after a rip has been running; add a narrow
+          Settings bottom switcher; restore Album/Tracks boxed lists; show
+          disc numbers and track-count mismatches in the metadata picker.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.52" date="2026-11-15">
+      <description>
+        <p>
           0.4.52: Confirm Stop after a rip has been running; add a narrow
           Settings bottom switcher; restore Album/Tracks boxed lists; show
           disc numbers and track-count mismatches in the metadata picker.
