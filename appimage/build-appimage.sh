@@ -306,6 +306,23 @@ echo "    OK: Gio-2.0.typelib contains DEFAULT_FLAGS"
 # ---------------------------------------------------------------------------
 # Helpers: copy shared libraries and binaries (via ldd)
 # ---------------------------------------------------------------------------
+# Graphics / compositor stack must come from the *host*. Bundling Ubuntu
+# 22.04-era libwayland + libEGL/libGL while the host uses a newer NVIDIA (or
+# Mesa) driver causes SIGSEGV at GTK startup: host libEGL_nvidia → AppImage
+# libwayland-client. Keep libepoxy (dlopens host GL); drop the rest.
+is_host_graphics_lib() {
+  local base
+  base="$(basename "$1")"
+  case "$base" in
+    libwayland-*.so*|libEGL*.so*|libGL.so*|libGLX*.so*|libGLdispatch*.so*| \
+    libOpenGL.so*|libGLESv*.so*|libgbm.so*|libdrm.so*|libdrm_*.so*| \
+    libglapi.so*|libnvidia*.so*|libcuda*.so*|libvulkan.so*|libVkLayer*.so*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 copy_lib() {
   local src="$1"
   [ -f "$src" ] || return 1
@@ -315,6 +332,9 @@ copy_lib() {
   [ -f "$real" ] || real="$src"
   local base
   base="$(basename "$real")"
+  if is_host_graphics_lib "$base"; then
+    return 0
+  fi
   if [ ! -e "${APPDIR}/usr/lib/${base}" ]; then
     install -D -m755 "$real" "${APPDIR}/usr/lib/${base}" 2>/dev/null || return 1
   fi
@@ -404,8 +424,67 @@ bundle_ldd_deps() {
       */librt.so.*) continue ;;
       */libpthread.so.*) continue ;;
     esac
+    if is_host_graphics_lib "$lib"; then
+      continue
+    fi
     copy_lib "$lib" || true
   done
+}
+
+# linuxdeploy / ldd may still drop GPU libs into AppDir — purge before pack.
+strip_host_graphics_libs() {
+  local libdir="${APPDIR}/usr/lib"
+  local f base removed=0
+  [ -d "$libdir" ] || return 0
+  # shellcheck disable=SC2044
+  for f in "$libdir"/lib*.so*; do
+    [ -e "$f" ] || continue
+    base="$(basename "$f")"
+    if is_host_graphics_lib "$base"; then
+      rm -f "$f"
+      removed=$((removed + 1))
+    fi
+  done
+  # DRI / GLVND vendor trees belong to the host GPU stack.
+  for d in \
+    "${APPDIR}/usr/lib/dri" \
+    "${APPDIR}/usr/lib/glvnd" \
+    "${APPDIR}/usr/share/glvnd" \
+    "${APPDIR}/usr/lib/${MULTIARCH_LIB}/dri"
+  do
+    if [ -e "$d" ]; then
+      rm -rf "$d"
+      removed=$((removed + 1))
+    fi
+  done
+  if [ "$removed" -gt 0 ]; then
+    echo "    removed ${removed} host-graphics path(s) from AppDir"
+  fi
+}
+
+assert_no_host_graphics_libs() {
+  local libdir="${APPDIR}/usr/lib"
+  local f base leftovers=0
+  [ -d "$libdir" ] || return 0
+  # shellcheck disable=SC2044
+  for f in "$libdir"/lib*.so*; do
+    [ -e "$f" ] || continue
+    base="$(basename "$f")"
+    if is_host_graphics_lib "$base"; then
+      echo "error: AppDir still contains host graphics lib: ${base}" >&2
+      leftovers=1
+    fi
+  done
+  for d in "${APPDIR}/usr/lib/dri" "${APPDIR}/usr/lib/glvnd" "${APPDIR}/usr/share/glvnd"; do
+    if [ -e "$d" ]; then
+      echo "error: AppDir still contains host graphics tree: ${d}" >&2
+      leftovers=1
+    fi
+  done
+  if [ "$leftovers" -ne 0 ]; then
+    return 1
+  fi
+  echo "    OK: no Wayland/EGL/GL/GBM/DRM libs in AppDir (host GPU stack)"
 }
 
 # Bundle host Python stdlib so the AppImage does not need host Python X.Y.
@@ -814,7 +893,13 @@ if [ ! -f "$GIO_TL" ] || ! grep -a -q 'DEFAULT_FLAGS' "$GIO_TL"; then
   echo "error: after linuxdeploy, Gio-2.0.typelib lacks DEFAULT_FLAGS" >&2
   exit 1
 fi
+
+# linuxdeploy / GTK plugin often re-copies Wayland + EGL/GL. Drop them so the
+# host NVIDIA/Mesa + compositor stack is used at runtime.
+echo "==> stripping host graphics libs from AppDir"
+strip_host_graphics_libs
 ensure_soname_links
+assert_no_host_graphics_libs
 
 # ---------------------------------------------------------------------------
 # Smoke-test inside AppDir (isolated from host Python stdlib)

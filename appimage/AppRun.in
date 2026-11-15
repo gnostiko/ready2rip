@@ -56,7 +56,9 @@ export XDG_DATA_DIRS="$HERE/usr/share${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
 
 # ---------------------------------------------------------------------------
 # Shared libraries + GObject Introspection typelibs
-# Bundled libs first; host still searched after (Mesa, Vulkan, libGL, …).
+# Bundled libs first. Wayland / EGL / GL / GBM / DRM are *not* shipped in the
+# AppImage — the host GPU stack (NVIDIA, Mesa, …) must supply them. Mixing a
+# bundled libwayland-client with host libEGL_nvidia segfaults at GTK startup.
 # ---------------------------------------------------------------------------
 if [ -d "$HERE/usr/lib" ]; then
   export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

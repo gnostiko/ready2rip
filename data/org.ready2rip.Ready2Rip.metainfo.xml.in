@@ -29,6 +29,15 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-14">
       <description>
         <p>
+          0.4.48: Fix AppImage startup segfault on NVIDIA hosts (e.g. Solus)
+          by not bundling Wayland/EGL/GL/GBM/DRM — use the host GPU stack
+          instead of mixing Ubuntu 22.04 libwayland with proprietary drivers.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.47" date="2026-11-14">
+      <description>
+        <p>
           0.4.47: Stop aborting rips when the drive cannot overread lead-in /
           lead-out; restore 0.4.45 behavior (use overread when available,
           otherwise silence-fill edges and continue).
