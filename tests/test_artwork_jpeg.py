@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import io
 
+import pytest
+
+pytest.importorskip('PIL')
 from PIL import Image
 
 from ready2rip.artwork.fetch import (
