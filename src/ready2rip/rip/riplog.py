@@ -90,7 +90,13 @@ class RipLog:
         self.verify_accuraterip: bool = True
         self.verify_ctdb: bool = True
         self.submit_ctdb: bool = False
+        self.require_db_match: bool = False
         self.apply_replaygain: bool = True
+        # Filled by finish_result before write.
+        self.outcome_secure_ok: bool | None = None
+        self.outcome_db_verified: bool | None = None
+        self.outcome_archival_ok: bool | None = None
+        self.outcome_summary: str = ''
         self.write_sound_check: bool = True
         self.add_ripper_tag: bool = True
         self.embed_lyrics: bool = True
@@ -143,6 +149,7 @@ class RipLog:
         self.verify_accuraterip = job.verify_accuraterip
         self.verify_ctdb = getattr(job, 'verify_ctdb', True)
         self.submit_ctdb = getattr(job, 'submit_ctdb', False)
+        self.require_db_match = bool(getattr(job, 'require_db_match', False))
         self.apply_replaygain = job.apply_replaygain
         self.write_sound_check = bool(getattr(job, 'write_sound_check', True))
         self.add_ripper_tag = bool(getattr(job, 'add_ripper_tag', True))
@@ -177,6 +184,20 @@ class RipLog:
         )
         self.tracks.append(entry)
         return entry
+
+    def set_outcome(
+        self,
+        *,
+        secure_ok: bool,
+        db_verified: bool,
+        archival_ok: bool,
+        summary: str = '',
+    ) -> None:
+        """Record archival tiers for the session footer."""
+        self.outcome_secure_ok = bool(secure_ok)
+        self.outcome_db_verified = bool(db_verified)
+        self.outcome_archival_ok = bool(archival_ok)
+        self.outcome_summary = (summary or '').strip()
 
     def finish(self, *, error: str | None = None, cancelled: bool = False) -> None:
         self.finished_at = datetime.now()
@@ -407,6 +428,14 @@ class RipLog:
         )
         if self.ar_status:
             lines.append(f'AccurateRip database            : {self.ar_status}')
+        lines.append(
+            'Require AccurateRip match       : '
+            + (
+                'Yes (≥1 track MATCH)'
+                if self.require_db_match
+                else 'No'
+            )
+        )
         lines.append(f'CTDB                            : {"Yes" if self.verify_ctdb else "No"}')
         if self.ctdb_status:
             lines.append(f'CTDB database                   : {self.ctdb_status}')
@@ -505,11 +534,19 @@ class RipLog:
                 lines.append('     (single-pass extract — no dual CRC verify)')
             if entry.accuraterip is not None:
                 lines.append(f'     {_format_ar_line(entry.accuraterip)}')
+            elif self.verify_accuraterip and not (
+                entry.extract_mode or ''
+            ).lower().startswith('raw'):
+                lines.append('     AccurateRip result missing')
             elif not (entry.extract_mode or '').lower().startswith('raw'):
                 lines.append('     AccurateRip not checked')
             if entry.ctdb is not None:
                 lines.append(f'     {_format_ctdb_line(entry.ctdb)}')
-            elif self.verify_ctdb and not (entry.extract_mode or '').lower().startswith('raw'):
+            elif self.verify_ctdb and not (entry.extract_mode or '').lower().startswith(
+                'raw'
+            ):
+                lines.append('     CTDB result missing')
+            elif not (entry.extract_mode or '').lower().startswith('raw'):
                 lines.append('     CTDB not checked')
             # Error correction block (skip duplicate quality line).
             for ec in entry.error_correction_lines:
@@ -613,6 +650,26 @@ class RipLog:
                 lines.append(f'  {n}')
             lines.append('')
 
+        # Archival verdict first, then extraction status — avoids “No errors”
+        # sitting above an Archival FAIL (or the reverse skim confusion).
+        if self.outcome_archival_ok is not None:
+            arch = 'OK' if self.outcome_archival_ok else 'FAIL'
+            secure = (
+                'Secure OK'
+                if self.outcome_secure_ok
+                else 'not secure (burst)'
+            )
+            if self.outcome_db_verified:
+                db = 'DB verified'
+            elif self.verify_accuraterip or self.verify_ctdb:
+                db = 'not DB-verified'
+            else:
+                db = 'DB checks off'
+            outcome = f'Outcome: Archival {arch} · {secure} · {db}'
+            if self.outcome_summary:
+                outcome = f'{outcome} ({self.outcome_summary})'
+            lines.append(outcome)
+
         if self.cancelled:
             lines.append('Extraction cancelled by user')
         elif self.error:
@@ -622,8 +679,12 @@ class RipLog:
                 'Extraction completed with corrections, burst fallback, '
                 'and/or CRC issues (see per-track details and session history)'
             )
+        elif self.outcome_archival_ok is False:
+            # Archival fail without a stashed error string — avoid “No errors”.
+            lines.append('Archival checks failed (see Outcome and notes above)')
         else:
             lines.append('No errors occurred')
+
         lines.append('')
         lines.append('End of status report')
         lines.append('')

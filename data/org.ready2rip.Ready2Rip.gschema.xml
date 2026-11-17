@@ -333,11 +333,12 @@
 
     <key name="require-db-match" type="b">
       <default>false</default>
-      <summary>Require AccurateRip match</summary>
+      <summary>Require AccurateRip match (≥1)</summary>
       <description>
-        When AccurateRip verification is enabled, fail the archival check if
-        no tracks match the database (uncatalogued discs or network errors).
-        Off by default — Secure OK rips of unknown discs still succeed.
+        When AccurateRip verification is enabled, fail the archival check
+        unless at least one track MATCHES the database. Off by default —
+        Secure OK rips of uncatalogued discs still succeed. Network/lookup
+        errors always fail archival separately.
       </description>
     </key>
 

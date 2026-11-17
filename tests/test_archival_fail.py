@@ -38,7 +38,7 @@ def test_archival_fail_on_burst() -> None:
 
 def test_archival_ok_on_intentional_burst_mode() -> None:
     reasons = archival_fail_reasons(
-        _job(burst_mode=True),
+        _job(burst_mode=True, verify_accuraterip=False, verify_ctdb=False),
         ar_results=[],
         ctdb_results=[],
         burst_tracks=[1, 2, 3],
@@ -48,7 +48,7 @@ def test_archival_ok_on_intentional_burst_mode() -> None:
 
 def test_archival_fail_ar_mismatch_even_in_burst_mode() -> None:
     reasons = archival_fail_reasons(
-        _job(burst_mode=True),
+        _job(burst_mode=True, verify_ctdb=False),
         ar_results=[AccurateRipResult(1, AccurateRipConfidence.MISMATCH)],
         ctdb_results=[],
         burst_tracks=[1],
@@ -58,7 +58,7 @@ def test_archival_fail_ar_mismatch_even_in_burst_mode() -> None:
 
 def test_archival_fail_on_ar_mismatch() -> None:
     reasons = archival_fail_reasons(
-        _job(),
+        _job(verify_ctdb=False),
         ar_results=[
             AccurateRipResult(1, AccurateRipConfidence.MATCH),
             AccurateRipResult(2, AccurateRipConfidence.MISMATCH),
@@ -81,7 +81,7 @@ def test_archival_ok_when_not_in_db() -> None:
 
 def test_archival_fail_on_ar_error() -> None:
     reasons = archival_fail_reasons(
-        _job(),
+        _job(verify_ctdb=False),
         ar_results=[AccurateRipResult(1, AccurateRipConfidence.ERROR)],
         ctdb_results=[],
         burst_tracks=[],
@@ -91,7 +91,7 @@ def test_archival_fail_on_ar_error() -> None:
 
 def test_archival_fail_on_ctdb_error() -> None:
     reasons = archival_fail_reasons(
-        _job(),
+        _job(verify_accuraterip=False),
         ar_results=[],
         ctdb_results=[CtdbResult(2, CtdbConfidence.ERROR)],
         burst_tracks=[],
@@ -101,7 +101,7 @@ def test_archival_fail_on_ctdb_error() -> None:
 
 def test_archival_fail_require_db_match_when_zero_matches() -> None:
     reasons = archival_fail_reasons(
-        _job(require_db_match=True),
+        _job(require_db_match=True, verify_ctdb=False),
         ar_results=[
             AccurateRipResult(1, AccurateRipConfidence.NOT_IN_DB),
             AccurateRipResult(2, AccurateRipConfidence.NOT_IN_DB),
@@ -109,12 +109,23 @@ def test_archival_fail_require_db_match_when_zero_matches() -> None:
         ctdb_results=[],
         burst_tracks=[],
     )
-    assert any('require DB match' in r for r in reasons)
+    assert any('require ≥1 MATCH' in r for r in reasons)
+
+
+def test_archival_fail_require_db_match_when_no_results() -> None:
+    reasons = archival_fail_reasons(
+        _job(require_db_match=True),
+        ar_results=[],
+        ctdb_results=[],
+        burst_tracks=[],
+    )
+    # verify_accuraterip is on but empty results still trip require_db_match.
+    assert any('require ≥1 MATCH' in r for r in reasons)
 
 
 def test_archival_ok_require_db_match_when_matched() -> None:
     reasons = archival_fail_reasons(
-        _job(require_db_match=True),
+        _job(require_db_match=True, verify_ctdb=False),
         ar_results=[AccurateRipResult(1, AccurateRipConfidence.MATCH)],
         ctdb_results=[],
         burst_tracks=[],
@@ -166,7 +177,7 @@ def test_archival_ok_ctdb_mismatch_when_ar_matched() -> None:
 
 def test_archival_ok_on_ctdb_soft_unverified() -> None:
     reasons = archival_fail_reasons(
-        _job(),
+        _job(verify_accuraterip=False),
         ar_results=[],
         ctdb_results=[
             CtdbResult(
@@ -178,6 +189,27 @@ def test_archival_ok_on_ctdb_soft_unverified() -> None:
         burst_tracks=[],
     )
     assert reasons == []
+
+
+def test_archival_fail_when_ar_verify_produces_no_results() -> None:
+    reasons = archival_fail_reasons(
+        _job(verify_ctdb=False),
+        ar_results=[],
+        ctdb_results=[],
+        burst_tracks=[],
+    )
+    assert any('no results' in r.lower() for r in reasons)
+
+
+def test_archival_fail_ar_lookup_error_without_results() -> None:
+    reasons = archival_fail_reasons(
+        _job(verify_ctdb=False),
+        ar_results=[],
+        ctdb_results=[],
+        burst_tracks=[],
+        ar_lookup_error='timed out',
+    )
+    assert any('AccurateRip lookup failed' in r for r in reasons)
 
 
 def test_tiers_secure_ok_not_db_verified() -> None:

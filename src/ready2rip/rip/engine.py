@@ -13,7 +13,11 @@ from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 from pathlib import Path
 
-from ready2rip.accuraterip import AccurateRipResult, AccurateRipVerifier
+from ready2rip.accuraterip import (
+    AccurateRipConfidence,
+    AccurateRipResult,
+    AccurateRipVerifier,
+)
 from ready2rip.artwork.fetch import ArtworkFetcher, ArtworkImage
 from ready2rip.ctdb import (
     CtdbConfidence,
@@ -965,6 +969,12 @@ class RipEngine:
             ctdb_results=ctdb_results,
             burst_tracks=burst_tracks,
             skipped_unverified=skipped_unverified,
+            ar_lookup_error=(
+                ar_verifier.fetch_error if ar_verifier is not None else None
+            ),
+            ctdb_lookup_error=(
+                ctdb_verifier.lookup_error if ctdb_verifier is not None else None
+            ),
         )
         apply_burst_notes(job, burst_tracks=burst_tracks, notes=notes)
         for reason in fail_reasons:
@@ -3461,6 +3471,19 @@ class RipEngine:
                     if copy_mode == 'burst':
                         mode = 'burst'
                         notes.append('Disc image used burst mode')
+                    if test_crc and copy_crc:
+                        crc_note = (
+                            f'Image Test CRC {test_crc.upper()} / '
+                            f'Copy CRC {copy_crc.upper()}'
+                            + (
+                                ' — matched'
+                                if test_crc == copy_crc
+                                else ' — MISMATCH'
+                            )
+                        )
+                        notes.append(crc_note)
+                        if rip_log is not None:
+                            rip_log.notes.append(crc_note)
                     self._unlink_quiet(test_wav)
                     use_wav = copy_wav
 
@@ -3473,10 +3496,11 @@ class RipEngine:
                         rip_log.notes.append(f'Image: {line}')
                     if mode == 'burst':
                         if job.burst_mode:
-                            rip_log.notes.append('Image: burst mode (-Z)')
+                            rip_log.notes.append('Image: burst mode (-Z) for disc image')
                         else:
                             rip_log.notes.append(
-                                'Image: secure paranoia failed — burst (-Z) used'
+                                'Image: secure paranoia failed — '
+                                'burst (-Z) used for disc image'
                             )
 
                 if self._cancelled:
@@ -3784,6 +3808,14 @@ class RipEngine:
                     ar_results=ar_results,
                     ctdb_results=ctdb_results,
                     burst_tracks=burst_tracks,
+                    ar_lookup_error=(
+                        ar_verifier.fetch_error if ar_verifier is not None else None
+                    ),
+                    ctdb_lookup_error=(
+                        ctdb_verifier.lookup_error
+                        if ctdb_verifier is not None
+                        else None
+                    ),
                 )
                 apply_burst_notes(job, burst_tracks=burst_tracks, notes=notes)
                 for reason in fail_reasons:
@@ -4131,6 +4163,52 @@ class RipEngine:
                 with self._proc_lock:
                     self._procs.discard(proc)
 
+    @staticmethod
+    def _record_image_verify_load_failure(
+        disc: DiscInfo,
+        *,
+        message: str,
+        extract_mode: str,
+        ar_verifier: AccurateRipVerifier | None,
+        ctdb_verifier: CtdbVerifier | None,
+        ar_results: list[AccurateRipResult],
+        ctdb_results: list[CtdbResult],
+        rip_log: RipLog | None,
+    ) -> None:
+        """Append per-track ERROR results when Copy Image PCM cannot be loaded."""
+        mode_label = f'{extract_mode} (copy image)'
+        for track in disc.tracks:
+            entry = None
+            if rip_log is not None:
+                entry = rip_log.begin_track(
+                    track.number,
+                    title=title_for_track(rip_log.album, track.number),
+                    length_label=track.duration_label,
+                    start_sector=track.start_sector,
+                    length_sectors=track.length_sectors,
+                )
+                entry.extract_mode = mode_label
+                entry.status = 'verify failed'
+                entry.had_errors = True
+            if ar_verifier is not None:
+                ar = AccurateRipResult(
+                    track.number,
+                    AccurateRipConfidence.ERROR,
+                    message=message,
+                )
+                ar_results.append(ar)
+                if entry is not None:
+                    entry.accuraterip = ar
+            if ctdb_verifier is not None:
+                ctdb = CtdbResult(
+                    track.number,
+                    CtdbConfidence.ERROR,
+                    message=message,
+                )
+                ctdb_results.append(ctdb)
+                if entry is not None:
+                    entry.ctdb = ctdb
+
     def _verify_image_databases(
         self,
         wav_path: Path,
@@ -4170,6 +4248,17 @@ class RipEngine:
             msg = f'Image PCM load failed: {exc}'
             log.warning('%s', msg)
             notes.append(msg)
+            # Fail closed: empty results would otherwise skip archival checks.
+            self._record_image_verify_load_failure(
+                disc,
+                message=msg,
+                extract_mode=extract_mode,
+                ar_verifier=ar_verifier,
+                ctdb_verifier=ctdb_verifier,
+                ar_results=ar_results,
+                ctdb_results=ctdb_results,
+                rip_log=rip_log,
+            )
             return
 
         mode_label = f'{extract_mode} (copy image)'
@@ -4216,7 +4305,27 @@ class RipEngine:
                 notes.append(msg)
                 if log_entry is not None:
                     log_entry.status = 'ERROR'
+                    log_entry.had_errors = True
                     log_entry.notes.append(msg)
+                # Fail closed: do not skip AR/CTDB result lists.
+                if ar_verifier is not None:
+                    ar = AccurateRipResult(
+                        track.number,
+                        AccurateRipConfidence.ERROR,
+                        message=msg,
+                    )
+                    ar_results.append(ar)
+                    if log_entry is not None:
+                        log_entry.accuraterip = ar
+                if ctdb_verifier is not None:
+                    ctdb = CtdbResult(
+                        track.number,
+                        CtdbConfidence.ERROR,
+                        message=msg,
+                    )
+                    ctdb_results.append(ctdb)
+                    if log_entry is not None:
+                        log_entry.ctdb = ctdb
                 continue
             if expected and len(pcm) < expected:
                 msg = (
@@ -4318,6 +4427,29 @@ class RipEngine:
             self._unlink_quiet(wav)
 
     @staticmethod
+    def _m4a_is_alac(path: Path) -> bool:
+        """True when *path* is ALAC (lossless); False for AAC / unknown."""
+        try:
+            from mutagen.mp4 import MP4
+
+            info = MP4(path).info
+            for entry in getattr(info, 'codec_list', None) or ():
+                name = str(entry).lower()
+                if 'alac' in name:
+                    return True
+                if 'aac' in name or name in {'mp4a', 'mp4a-40-2'}:
+                    return False
+            codec = str(getattr(info, 'codec', '') or '').lower()
+            if 'alac' in codec:
+                return True
+            if 'aac' in codec:
+                return False
+            return False
+        except Exception as exc:
+            log.debug('ALAC probe failed for %s: %s', path, exc)
+            return False
+
+    @staticmethod
     def _decode_existing_to_wav(src: Path, dest: Path) -> bool:
         """Decode a lossless (or WAV) file to 16-bit stereo 44.1 kHz WAV."""
         suffix = src.suffix.lower()
@@ -4332,8 +4464,27 @@ class RipEngine:
             if not flac:
                 return False
             cmd = [flac, '-d', '-f', '-o', str(dest), str(src)]
-        elif suffix in {'.aiff', '.aif', '.wv', '.m4a'}:
-            # ALAC .m4a is lossless; AAC .m4a still decodes but is non-archival.
+        elif suffix in {'.aiff', '.aif', '.wv'}:
+            ffmpeg = shutil.which('ffmpeg')
+            if not ffmpeg:
+                return False
+            cmd = [
+                ffmpeg,
+                '-y',
+                '-i',
+                str(src),
+                '-acodec',
+                'pcm_s16le',
+                '-ar',
+                '44100',
+                '-ac',
+                '2',
+                str(dest),
+            ]
+        elif suffix == '.m4a':
+            # Only ALAC is archival; AAC .m4a must not count as re-verified.
+            if not RipEngine._m4a_is_alac(src):
+                return False
             ffmpeg = shutil.which('ffmpeg')
             if not ffmpeg:
                 return False
@@ -4351,7 +4502,7 @@ class RipEngine:
                 str(dest),
             ]
         else:
-            # Lossy companions (mp3/opus) — cannot re-verify for archival.
+            # Lossy companions (mp3/opus/aac) — cannot re-verify for archival.
             return False
         try:
             completed = subprocess.run(

@@ -165,7 +165,22 @@ def _freedb_from_lba(offsets_lba: list[int], leadout_lba: int) -> str | None:
     return f'{disc_id:08x}'
 
 
-def fetch_database(ids: AccurateRipDiscIds, timeout: float = 15.0) -> AccurateRipDatabase | None:
+@dataclass
+class AccurateRipFetchResult:
+    """Outcome of an AccurateRip database download.
+
+    Distinguishes a confirmed miss (HTTP 404) from transport/parse failures so
+    callers never treat offline/errors as “disc not in database”.
+    """
+
+    database: AccurateRipDatabase | None = None
+    not_in_db: bool = False
+    error: str | None = None
+
+
+def fetch_database(
+    ids: AccurateRipDiscIds, timeout: float = 15.0
+) -> AccurateRipFetchResult:
     """Download and parse AccurateRip binary data for *ids*."""
     dir_ = f'{ids.ar_id1[-1]}/{ids.ar_id1[-2]}/{ids.ar_id1[-3]}/'
     file_ = (
@@ -177,7 +192,7 @@ def fetch_database(ids: AccurateRipDiscIds, timeout: float = 15.0) -> AccurateRi
 
     if not is_safe_http_url(url):
         log.warning('Refusing non-http(s) AccurateRip URL: %s', url)
-        return None
+        return AccurateRipFetchResult(error='refused unsafe AccurateRip URL')
     request = urllib.request.Request(
         url,
         headers={'User-Agent': USER_AGENT},
@@ -188,24 +203,24 @@ def fetch_database(ids: AccurateRipDiscIds, timeout: float = 15.0) -> AccurateRi
             final = response.geturl()
             if final and not is_safe_http_url(final):
                 log.warning('Refusing AccurateRip redirect to unsafe URL: %s', final)
-                return None
+                return AccurateRipFetchResult(error='refused unsafe AccurateRip redirect')
             raw = read_limited(response)
     except urllib.error.HTTPError as exc:
+        drain_http_error(exc)
         if exc.code == 404:
             log.info('Disc not in AccurateRip database: %s', ids.disc_id_string)
-        else:
-            log.warning('AccurateRip HTTP %s: %s', exc.code, url)
-        drain_http_error(exc)
-        return None
+            return AccurateRipFetchResult(not_in_db=True)
+        log.warning('AccurateRip HTTP %s: %s', exc.code, url)
+        return AccurateRipFetchResult(error=f'HTTP {exc.code}')
     except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         log.warning('AccurateRip fetch failed: %s', exc)
-        return None
+        return AccurateRipFetchResult(error=str(exc) or 'lookup failed')
 
     try:
-        return _parse_dbar(raw, ids)
+        return AccurateRipFetchResult(database=_parse_dbar(raw, ids))
     except (struct.error, ValueError) as exc:
         log.warning('AccurateRip parse failed: %s', exc)
-        return None
+        return AccurateRipFetchResult(error=f'parse failed: {exc}')
 
 
 def _parse_dbar(raw: bytes, ids: AccurateRipDiscIds) -> AccurateRipDatabase:
@@ -322,17 +337,28 @@ class AccurateRipVerifier:
         self._ids: AccurateRipDiscIds | None = None
         self._db: AccurateRipDatabase | None = None
         self._total_tracks = 0
+        # Transport/parse failure — verify returns ERROR, not NOT_IN_DB.
+        self._fetch_error: str | None = None
 
     def prepare(self, info: DiscInfo) -> str:
         """Compute IDs and fetch the database. Returns a short status string."""
         self._ids = disc_ids_from_info(info)
         self._total_tracks = info.track_count
+        self._db = None
+        self._fetch_error = None
         if self._ids is None:
-            self._db = None
+            self._fetch_error = 'could not compute disc IDs'
             return 'AccurateRip: could not compute disc IDs'
-        self._db = fetch_database(self._ids)
-        if self._db is None:
+        fetched = fetch_database(self._ids)
+        if fetched.error:
+            self._fetch_error = fetched.error
+            return (
+                f'AccurateRip: lookup failed ({fetched.error}) '
+                f'[{self._ids.disc_id_string}]'
+            )
+        if fetched.not_in_db or fetched.database is None:
             return f'AccurateRip: disc not in database ({self._ids.disc_id_string})'
+        self._db = fetched.database
         return (
             f'AccurateRip: {self._db.response_count} response(s) '
             f'for {self._ids.disc_id_string}'
@@ -342,6 +368,11 @@ class AccurateRipVerifier:
         """Override disc track count used for first/last AR sample skip rules."""
         if total > 0:
             self._total_tracks = total
+
+    @property
+    def fetch_error(self) -> str | None:
+        """Transport/parse failure from :meth:`prepare`, if any."""
+        return self._fetch_error
 
     def verify_wav(self, path: Path, track_number: int) -> AccurateRipResult:
         try:
@@ -366,11 +397,17 @@ class AccurateRipVerifier:
     def verify_samples(
         self, samples: memoryview, track_number: int
     ) -> AccurateRipResult:
+        if self._fetch_error:
+            return AccurateRipResult(
+                track_number=track_number,
+                confidence=AccurateRipConfidence.ERROR,
+                message=f'AccurateRip lookup failed: {self._fetch_error}',
+            )
         if self._db is None:
             return AccurateRipResult(
                 track_number=track_number,
                 confidence=AccurateRipConfidence.NOT_IN_DB,
-                message='AccurateRip database unavailable',
+                message='Track not in AccurateRip database',
             )
         try:
             v1, v2 = compute_checksums_samples(

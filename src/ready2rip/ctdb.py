@@ -876,6 +876,8 @@ class CtdbVerifier:
         self._track_crcs: dict[int, int] = {}
         self._next_encode_track = 1
         self._encode_error: str | None = None
+        # Network/parse failure from prepare (distinct from empty DB).
+        self._lookup_error: str | None = None
 
     def prepare(self, info: DiscInfo) -> str:
         self._toc = toc_string_from_info(info)
@@ -886,6 +888,7 @@ class CtdbVerifier:
         self._next_encode_track = 1
         self._encode_error = None
         self._encoder = None
+        self._lookup_error = None
         if self._total_samples > 0:
             try:
                 self._encoder = CdRepairEncode(self._total_samples)
@@ -894,13 +897,20 @@ class CtdbVerifier:
                 log.info("CTDB parity encoder unavailable: %s", exc)
         if not self._toc:
             self._db = None
+            self._lookup_error = 'could not build TOC'
             return "CTDB: could not build TOC"
         self._db = fetch_database(self._toc)
         if self._db is None:
+            self._lookup_error = f'toc={self._toc}'
             return f"CTDB: lookup failed (toc={self._toc})"
         if not self._db.entries:
             return f"CTDB: disc not in database (toc={self._toc})"
         return f"CTDB: {len(self._db.entries)} entry(ies) for toc={self._toc}"
+
+    @property
+    def lookup_error(self) -> str | None:
+        """Transport/parse failure from :meth:`prepare`, if any."""
+        return self._lookup_error
 
     def set_totals(self, *, total_tracks: int, total_samples: int) -> None:
         if total_tracks > 0:

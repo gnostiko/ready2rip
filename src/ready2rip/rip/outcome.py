@@ -35,6 +35,8 @@ def archival_fail_reasons(
     ctdb_results: list[CtdbResult],
     burst_tracks: list[int],
     skipped_unverified: list[int] | None = None,
+    ar_lookup_error: str | None = None,
+    ctdb_lookup_error: str | None = None,
 ) -> list[str]:
     """Reasons a finished rip is not archival-grade (fail closed)."""
     reasons: list[str] = []
@@ -50,62 +52,83 @@ def archival_fail_reasons(
         reasons.append(
             f'Skipped existing track(s) {tracks_txt} without re-verification'
         )
-    if job.verify_accuraterip and ar_results:
-        bad = [
-            r.track_number
-            for r in ar_results
-            if r.confidence == AccurateRipConfidence.MISMATCH
-        ]
-        if bad:
-            reasons.append(
-                f'AccurateRip mismatch on track(s) {", ".join(str(n) for n in bad)}'
-            )
-        errors = [
-            r.track_number
-            for r in ar_results
-            if r.confidence == AccurateRipConfidence.ERROR
-        ]
-        if errors:
-            reasons.append(
-                f'AccurateRip error on track(s) {", ".join(str(n) for n in errors)}'
-            )
-        if getattr(job, 'require_db_match', False):
+    expect_verify = bool(job.track_numbers) or bool(job.copy_image)
+    if job.verify_accuraterip:
+        # Lookup failure with no per-track results (verify never ran).
+        if ar_lookup_error and not ar_results:
+            reasons.append(f'AccurateRip lookup failed: {ar_lookup_error}')
+        if ar_results:
+            bad = [
+                r.track_number
+                for r in ar_results
+                if r.confidence == AccurateRipConfidence.MISMATCH
+            ]
+            if bad:
+                reasons.append(
+                    f'AccurateRip mismatch on track(s) '
+                    f'{", ".join(str(n) for n in bad)}'
+                )
+            errors = [
+                r.track_number
+                for r in ar_results
+                if r.confidence == AccurateRipConfidence.ERROR
+            ]
+            if errors:
+                reasons.append(
+                    f'AccurateRip error on track(s) '
+                    f'{", ".join(str(n) for n in errors)}'
+                )
+        elif expect_verify:
+            # Verify was on but no per-track results (e.g. abort before
+            # verify, or a path that skipped appending ERROR entries).
+            reasons.append('AccurateRip: verification produced no results')
+        if job.require_db_match:
             matches = [
                 r
                 for r in ar_results
                 if r.confidence == AccurateRipConfidence.MATCH
             ]
-            if not matches:
+            if not ar_results:
                 reasons.append(
-                    'AccurateRip: no tracks matched (require DB match is on)'
+                    'AccurateRip: no verify results (require ≥1 MATCH is on)'
                 )
-    if job.verify_ctdb and ctdb_results:
-        # Soft CTDB misses are NOT_IN_DB (fuzzy neighbors). Hard MISMATCH is
-        # exact-TOC CRC conflict — still defer to AccurateRip when it matched.
-        ar_matched = {
-            r.track_number
-            for r in ar_results
-            if r.confidence == AccurateRipConfidence.MATCH
-        }
-        bad = [
-            r.track_number
-            for r in ctdb_results
-            if r.confidence == CtdbConfidence.MISMATCH
-            and r.track_number not in ar_matched
-        ]
-        if bad:
-            reasons.append(
-                f'CTDB mismatch on track(s) {", ".join(str(n) for n in bad)}'
-            )
-        errors = [
-            r.track_number
-            for r in ctdb_results
-            if r.confidence == CtdbConfidence.ERROR
-        ]
-        if errors:
-            reasons.append(
-                f'CTDB error on track(s) {", ".join(str(n) for n in errors)}'
-            )
+            elif not matches:
+                reasons.append(
+                    'AccurateRip: no tracks matched (require ≥1 MATCH is on)'
+                )
+    if job.verify_ctdb:
+        if ctdb_lookup_error and not ctdb_results:
+            reasons.append(f'CTDB lookup failed: {ctdb_lookup_error}')
+        if ctdb_results:
+            # Soft CTDB misses are NOT_IN_DB (fuzzy neighbors). Hard MISMATCH
+            # is exact-TOC CRC conflict — still defer to AccurateRip when it
+            # matched.
+            ar_matched = {
+                r.track_number
+                for r in ar_results
+                if r.confidence == AccurateRipConfidence.MATCH
+            }
+            bad = [
+                r.track_number
+                for r in ctdb_results
+                if r.confidence == CtdbConfidence.MISMATCH
+                and r.track_number not in ar_matched
+            ]
+            if bad:
+                reasons.append(
+                    f'CTDB mismatch on track(s) {", ".join(str(n) for n in bad)}'
+                )
+            errors = [
+                r.track_number
+                for r in ctdb_results
+                if r.confidence == CtdbConfidence.ERROR
+            ]
+            if errors:
+                reasons.append(
+                    f'CTDB error on track(s) {", ".join(str(n) for n in errors)}'
+                )
+        elif expect_verify:
+            reasons.append('CTDB: verification produced no results')
     return reasons
 
 
@@ -289,8 +312,11 @@ def format_done_message(
     if ctdb_summary:
         done_msg = f'{done_msg} · {ctdb_summary}'
     if burst_tracks:
-        tracks_txt = ', '.join(str(n) for n in burst_tracks)
-        done_msg = f'{done_msg} · burst (-Z) on track(s) {tracks_txt}'
+        if copy_image and burst_tracks == [0]:
+            done_msg = f'{done_msg} · burst (-Z) on disc image'
+        else:
+            tracks_txt = ', '.join(str(n) for n in burst_tracks)
+            done_msg = f'{done_msg} · burst (-Z) on track(s) {tracks_txt}'
     mismatches = test_copy_mismatches or []
     if job.test_and_copy and not job.burst_mode:
         if mismatches:
@@ -343,8 +369,15 @@ def finish_result(
     from ready2rip.rip.engine import RipResult
 
     log_path: Path | None = None
+    ok_archival = success if archival_ok is None else archival_ok
     if rip_log is not None:
         rip_log.notes.extend(n for n in notes if n not in rip_log.notes)
+        rip_log.set_outcome(
+            secure_ok=secure_ok,
+            db_verified=db_verified,
+            archival_ok=ok_archival,
+            summary=outcome_summary,
+        )
         rip_log.finish(error=error, cancelled=cancelled)
         dest = log_dir or album_dir
         if dest is None and outputs:
@@ -357,7 +390,6 @@ def finish_result(
             except OSError as exc:
                 log.warning('Could not write rip log: %s', exc)
                 notes.append(f'Rip log not written: {exc}')
-    ok_archival = success if archival_ok is None else archival_ok
     return RipResult(
         success=success,
         output_files=outputs,
@@ -389,15 +421,19 @@ def apply_burst_notes(
     """Append human-readable burst notes (idempotent-ish via membership)."""
     if not burst_tracks:
         return
-    tracks_txt = ', '.join(str(n) for n in burst_tracks)
+    # Copy Image uses track number 0 as a sentinel for the whole disc image.
+    if job.copy_image and burst_tracks == [0]:
+        subject = 'disc image'
+    else:
+        subject = f'track(s) {", ".join(str(n) for n in burst_tracks)}'
     if job.burst_mode:
         msg = (
-            f'Burst mode (-Z) on track(s) {tracks_txt} '
+            f'Burst mode (-Z) on {subject} '
             '(paranoia disabled; not archival-grade)'
         )
     else:
         msg = (
-            f'Insecure burst extraction on track(s) {tracks_txt} '
+            f'Insecure burst extraction on {subject} '
             '(not archival-grade; rip marked failed)'
         )
     if msg not in notes:

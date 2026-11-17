@@ -129,14 +129,24 @@ def calibrate_drive_offset(
         )
 
     progress(f'Looking up AccurateRip ({ids.disc_id_string})', 0.10)
-    db = fetch_database(ids)
+    fetched = fetch_database(ids)
     if cancelled():
         return CalibrationResult(
             success=False,
             message='Detection cancelled.',
             disc_id=ids.disc_id_string,
         )
-    if db is None:
+    if fetched.error:
+        return CalibrationResult(
+            success=False,
+            message=(
+                f'AccurateRip lookup failed ({fetched.error}). '
+                'Check the network and try again.'
+            ),
+            disc_id=ids.disc_id_string,
+        )
+    db = fetched.database
+    if fetched.not_in_db or db is None:
         return CalibrationResult(
             success=False,
             message=(

@@ -6,6 +6,7 @@ from __future__ import annotations
 from ready2rip.accuraterip import (
     AccurateRipConfidence,
     AccurateRipDatabase,
+    AccurateRipVerifier,
     compute_checksums_samples,
     disc_ids_from_info,
 )
@@ -50,3 +51,25 @@ def test_accurate_rip_database_best_match() -> None:
     assert miss.confidence == AccurateRipConfidence.MISMATCH
     missing = db.best_match(2, 1, 2)
     assert missing.confidence == AccurateRipConfidence.NOT_IN_DB
+
+
+def test_verifier_fetch_error_is_not_not_in_db() -> None:
+    """Transport/parse failures must not look like an uncatalogued disc."""
+    verifier = AccurateRipVerifier(sample_offset=0)
+    verifier._db = None
+    verifier._fetch_error = 'timed out'
+    verifier._total_tracks = 1
+    silence = memoryview(b'\x00\x00\x00\x00' * (12 * 588)).cast('I')
+    result = verifier.verify_samples(silence, 1)
+    assert result.confidence == AccurateRipConfidence.ERROR
+    assert 'lookup failed' in result.message.lower()
+
+
+def test_verifier_true_not_in_db() -> None:
+    verifier = AccurateRipVerifier(sample_offset=0)
+    verifier._db = None
+    verifier._fetch_error = None
+    verifier._total_tracks = 1
+    silence = memoryview(b'\x00\x00\x00\x00' * (12 * 588)).cast('I')
+    result = verifier.verify_samples(silence, 1)
+    assert result.confidence == AccurateRipConfidence.NOT_IN_DB

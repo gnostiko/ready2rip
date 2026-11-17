@@ -1224,7 +1224,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 '_require_db_match_row',
                 self.verify_group,
                 'Require AccurateRip match',
-                'Fail archival when AccurateRip is on but no tracks match',
+                'Fail archival unless at least one track MATCHES AccurateRip',
                 settings.require_db_match,
                 self._on_require_db_match_toggled,
             ),
