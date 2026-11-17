@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Archival fail-closed reasons for finished rips."""
+"""Archival fail-closed reasons and outcome tiers for finished rips."""
 
 from __future__ import annotations
 
@@ -7,7 +7,11 @@ from pathlib import Path
 
 from ready2rip.accuraterip import AccurateRipConfidence, AccurateRipResult
 from ready2rip.ctdb import CtdbConfidence, CtdbResult
-from ready2rip.rip.engine import RipJob, _archival_fail_reasons
+from ready2rip.rip.engine import RipJob
+from ready2rip.rip.outcome import (
+    archival_fail_reasons,
+    compute_tiers,
+)
 
 
 def _job(**kwargs) -> RipJob:
@@ -23,7 +27,7 @@ def _job(**kwargs) -> RipJob:
 
 
 def test_archival_fail_on_burst() -> None:
-    reasons = _archival_fail_reasons(
+    reasons = archival_fail_reasons(
         _job(),
         ar_results=[],
         ctdb_results=[],
@@ -33,7 +37,7 @@ def test_archival_fail_on_burst() -> None:
 
 
 def test_archival_ok_on_intentional_burst_mode() -> None:
-    reasons = _archival_fail_reasons(
+    reasons = archival_fail_reasons(
         _job(burst_mode=True),
         ar_results=[],
         ctdb_results=[],
@@ -43,7 +47,7 @@ def test_archival_ok_on_intentional_burst_mode() -> None:
 
 
 def test_archival_fail_ar_mismatch_even_in_burst_mode() -> None:
-    reasons = _archival_fail_reasons(
+    reasons = archival_fail_reasons(
         _job(burst_mode=True),
         ar_results=[AccurateRipResult(1, AccurateRipConfidence.MISMATCH)],
         ctdb_results=[],
@@ -53,7 +57,7 @@ def test_archival_fail_ar_mismatch_even_in_burst_mode() -> None:
 
 
 def test_archival_fail_on_ar_mismatch() -> None:
-    reasons = _archival_fail_reasons(
+    reasons = archival_fail_reasons(
         _job(),
         ar_results=[
             AccurateRipResult(1, AccurateRipConfidence.MATCH),
@@ -66,7 +70,7 @@ def test_archival_fail_on_ar_mismatch() -> None:
 
 
 def test_archival_ok_when_not_in_db() -> None:
-    reasons = _archival_fail_reasons(
+    reasons = archival_fail_reasons(
         _job(),
         ar_results=[AccurateRipResult(1, AccurateRipConfidence.NOT_IN_DB)],
         ctdb_results=[CtdbResult(1, CtdbConfidence.NOT_IN_DB)],
@@ -75,8 +79,62 @@ def test_archival_ok_when_not_in_db() -> None:
     assert reasons == []
 
 
+def test_archival_fail_on_ar_error() -> None:
+    reasons = archival_fail_reasons(
+        _job(),
+        ar_results=[AccurateRipResult(1, AccurateRipConfidence.ERROR)],
+        ctdb_results=[],
+        burst_tracks=[],
+    )
+    assert any('AccurateRip error' in r for r in reasons)
+
+
+def test_archival_fail_on_ctdb_error() -> None:
+    reasons = archival_fail_reasons(
+        _job(),
+        ar_results=[],
+        ctdb_results=[CtdbResult(2, CtdbConfidence.ERROR)],
+        burst_tracks=[],
+    )
+    assert any('CTDB error' in r for r in reasons)
+
+
+def test_archival_fail_require_db_match_when_zero_matches() -> None:
+    reasons = archival_fail_reasons(
+        _job(require_db_match=True),
+        ar_results=[
+            AccurateRipResult(1, AccurateRipConfidence.NOT_IN_DB),
+            AccurateRipResult(2, AccurateRipConfidence.NOT_IN_DB),
+        ],
+        ctdb_results=[],
+        burst_tracks=[],
+    )
+    assert any('require DB match' in r for r in reasons)
+
+
+def test_archival_ok_require_db_match_when_matched() -> None:
+    reasons = archival_fail_reasons(
+        _job(require_db_match=True),
+        ar_results=[AccurateRipResult(1, AccurateRipConfidence.MATCH)],
+        ctdb_results=[],
+        burst_tracks=[],
+    )
+    assert reasons == []
+
+
+def test_archival_fail_skipped_unverified() -> None:
+    reasons = archival_fail_reasons(
+        _job(),
+        ar_results=[],
+        ctdb_results=[],
+        burst_tracks=[],
+        skipped_unverified=[1, 3],
+    )
+    assert any('Skipped existing' in r for r in reasons)
+
+
 def test_archival_skips_ar_when_verify_off() -> None:
-    reasons = _archival_fail_reasons(
+    reasons = archival_fail_reasons(
         _job(verify_accuraterip=False, verify_ctdb=False),
         ar_results=[AccurateRipResult(1, AccurateRipConfidence.MISMATCH)],
         ctdb_results=[CtdbResult(1, CtdbConfidence.MISMATCH)],
@@ -86,7 +144,7 @@ def test_archival_skips_ar_when_verify_off() -> None:
 
 
 def test_archival_fail_on_ctdb_mismatch_without_ar_match() -> None:
-    reasons = _archival_fail_reasons(
+    reasons = archival_fail_reasons(
         _job(),
         ar_results=[AccurateRipResult(1, AccurateRipConfidence.NOT_IN_DB)],
         ctdb_results=[CtdbResult(1, CtdbConfidence.MISMATCH)],
@@ -97,7 +155,7 @@ def test_archival_fail_on_ctdb_mismatch_without_ar_match() -> None:
 
 def test_archival_ok_ctdb_mismatch_when_ar_matched() -> None:
     """AccurateRip match outweighs a CTDB exact-TOC conflict (pressing noise)."""
-    reasons = _archival_fail_reasons(
+    reasons = archival_fail_reasons(
         _job(),
         ar_results=[AccurateRipResult(1, AccurateRipConfidence.MATCH)],
         ctdb_results=[CtdbResult(1, CtdbConfidence.MISMATCH)],
@@ -107,7 +165,7 @@ def test_archival_ok_ctdb_mismatch_when_ar_matched() -> None:
 
 
 def test_archival_ok_on_ctdb_soft_unverified() -> None:
-    reasons = _archival_fail_reasons(
+    reasons = archival_fail_reasons(
         _job(),
         ar_results=[],
         ctdb_results=[
@@ -120,3 +178,55 @@ def test_archival_ok_on_ctdb_soft_unverified() -> None:
         burst_tracks=[],
     )
     assert reasons == []
+
+
+def test_tiers_secure_ok_not_db_verified() -> None:
+    ar = [AccurateRipResult(1, AccurateRipConfidence.NOT_IN_DB)]
+    ctdb = [CtdbResult(1, CtdbConfidence.NOT_IN_DB)]
+    reasons = archival_fail_reasons(
+        _job(), ar_results=ar, ctdb_results=ctdb, burst_tracks=[]
+    )
+    tiers = compute_tiers(
+        _job(),
+        ar_results=ar,
+        ctdb_results=ctdb,
+        burst_tracks=[],
+        fail_reasons=reasons,
+    )
+    assert tiers.secure_ok
+    assert not tiers.db_verified
+    assert tiers.archival_ok
+    assert 'Secure OK' in tiers.summary
+    assert 'not in AccurateRip/CTDB' in tiers.summary
+
+
+def test_tiers_db_verified() -> None:
+    ar = [AccurateRipResult(1, AccurateRipConfidence.MATCH)]
+    ctdb = [CtdbResult(1, CtdbConfidence.MATCH)]
+    reasons = archival_fail_reasons(
+        _job(), ar_results=ar, ctdb_results=ctdb, burst_tracks=[]
+    )
+    tiers = compute_tiers(
+        _job(),
+        ar_results=ar,
+        ctdb_results=ctdb,
+        burst_tracks=[],
+        fail_reasons=reasons,
+    )
+    assert tiers.secure_ok
+    assert tiers.db_verified
+    assert tiers.archival_ok
+    assert 'DB verified' in tiers.summary
+
+
+def test_tiers_burst_mode_not_secure() -> None:
+    tiers = compute_tiers(
+        _job(burst_mode=True),
+        ar_results=[],
+        ctdb_results=[],
+        burst_tracks=[1],
+        fail_reasons=[],
+    )
+    assert not tiers.secure_ok
+    assert tiers.archival_ok
+    assert 'Burst mode' in tiers.summary

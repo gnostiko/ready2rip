@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 from pathlib import Path
 
-from ready2rip.accuraterip import AccurateRipConfidence, AccurateRipResult, AccurateRipVerifier
+from ready2rip.accuraterip import AccurateRipResult, AccurateRipVerifier
 from ready2rip.artwork.fetch import ArtworkFetcher, ArtworkImage
 from ready2rip.ctdb import (
     CtdbConfidence,
@@ -78,6 +78,15 @@ from ready2rip.rip.encode_dest import (
     is_lossless_format,
     is_lossy_format,
     should_embed_artwork_for_format,
+)
+from ready2rip.rip.outcome import (
+    apply_burst_notes,
+    archival_fail_reasons,
+    compute_tiers,
+    finish_result,
+    format_done_message,
+    summarize_ar,
+    summarize_ctdb,
 )
 from ready2rip.rip.paranoia_run import run_paranoia_streaming
 from ready2rip.rip.paranoia_stats import FRAMES_PER_SECTOR, ParanoiaStats
@@ -149,6 +158,12 @@ class RipResult:
     cover_path: Path | None = None
     htoa_ripped: bool = False
     test_copy_mismatches: list[int] = field(default_factory=list)
+    # Tiered outcome: secure CRC ≠ online DB confirm ≠ archival pass.
+    secure_ok: bool = True
+    db_verified: bool = False
+    archival_ok: bool = True
+    outcome_summary: str = ''
+    skipped_existing: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -195,6 +210,8 @@ class RipJob:
     verify_accuraterip: bool = True
     verify_ctdb: bool = True
     submit_ctdb: bool = False
+    # When AccurateRip is on, fail archival if zero tracks MATCH (strict).
+    require_db_match: bool = False
     sample_offset: int = 0
     # True after Detect or manual save in drive setup (offset may still be 0).
     offset_configured: bool = False
@@ -445,6 +462,7 @@ class RipEngine:
         ctdb_results: list[CtdbResult] = []
         notes: list[str] = list(layout_notes)
         burst_tracks: list[int] = []
+        skipped_unverified: list[int] = []
         test_copy_mismatches: list[int] = []
         cover_path: Path | None = None
         htoa_ripped = False
@@ -709,13 +727,14 @@ class RipEngine:
                         burst_tracks=burst_tracks,
                         test_copy_mismatches=test_copy_mismatches,
                         rip_log=rip_log,
+                        skipped_unverified=skipped_unverified,
                     )
                 except _CrcMismatch as crc_exc:
                     if crc_exc.track_number not in test_copy_mismatches:
                         test_copy_mismatches.append(crc_exc.track_number)
                     raise RuntimeError(crc_exc.message) from crc_exc
                 if self._cancelled:
-                    return _finish_result(
+                    return finish_result(
                         success=False,
                         cancelled=True,
                         error='Cancelled',
@@ -730,6 +749,8 @@ class RipEngine:
                         htoa_ripped=htoa_ripped,
                         test_copy_mismatches=test_copy_mismatches,
                         log_dir=primary_audio_dir,
+                        archival_ok=False,
+                        skipped_existing=skipped_unverified,
                     )
 
                 data_index = float(len(tracks) + (1 if htoa_info else 0))
@@ -850,7 +871,7 @@ class RipEngine:
 
         except Exception as exc:
             log.exception('Rip failed')
-            return _finish_result(
+            return finish_result(
                 success=False,
                 error=str(exc),
                 outputs=outputs,
@@ -864,10 +885,12 @@ class RipEngine:
                 htoa_ripped=htoa_ripped,
                 test_copy_mismatches=test_copy_mismatches,
                 log_dir=primary_audio_dir,
+                archival_ok=False,
+                skipped_existing=skipped_unverified,
             )
 
         if self._cancelled:
-            return _finish_result(
+            return finish_result(
                 success=False,
                 cancelled=True,
                 error='Cancelled',
@@ -882,6 +905,8 @@ class RipEngine:
                 htoa_ripped=htoa_ripped,
                 test_copy_mismatches=test_copy_mismatches,
                 log_dir=primary_audio_dir,
+                archival_ok=False,
+                skipped_existing=skipped_unverified,
             )
 
         if job.submit_ctdb and ctdb_verifier is not None and ctdb_results:
@@ -934,56 +959,39 @@ class RipEngine:
                 except Exception as exc:
                     log.warning('CTDB repair probe failed: %s', exc)
 
-        ar_summary = _summarize_ar(ar_results)
-        ctdb_summary = _summarize_ctdb(ctdb_results)
-        fail_reasons = _archival_fail_reasons(
+        fail_reasons = archival_fail_reasons(
             job,
             ar_results=ar_results,
             ctdb_results=ctdb_results,
             burst_tracks=burst_tracks,
+            skipped_unverified=skipped_unverified,
         )
-        archival_ok = not fail_reasons
-        done_msg = (
-            f'Done — {len(outputs)} file(s)'
-            if archival_ok
-            else f'Rip failed archival checks — {len(outputs)} file(s) kept'
-        )
-        if htoa_ripped:
-            done_msg = f'{done_msg} (incl. HTOA)'
-        if data_output_pairs:
-            done_msg = f'{done_msg} · {len(data_output_pairs)} data'
-        if ar_summary:
-            done_msg = f'{done_msg} · {ar_summary}'
-        if ctdb_summary:
-            done_msg = f'{done_msg} · {ctdb_summary}'
-        if burst_tracks:
-            tracks_txt = ', '.join(str(n) for n in burst_tracks)
-            done_msg = f'{done_msg} · burst (-Z) on track(s) {tracks_txt}'
-            if job.burst_mode:
-                notes.append(
-                    f'Burst mode (-Z) on track(s) {tracks_txt} '
-                    '(paranoia disabled; not archival-grade)'
-                )
-            else:
-                notes.append(
-                    f'Insecure burst extraction on track(s) {tracks_txt} '
-                    '(not archival-grade; rip marked failed)'
-                )
+        apply_burst_notes(job, burst_tracks=burst_tracks, notes=notes)
         for reason in fail_reasons:
             if reason not in notes:
                 notes.append(reason)
-        if job.test_and_copy and not job.burst_mode:
-            if test_copy_mismatches:
-                tracks_txt = ', '.join(str(n) for n in test_copy_mismatches)
-                done_msg = (
-                    f'{done_msg} · test & copy mismatch on track(s) {tracks_txt} (burst recovery)'
-                )
-            else:
-                done_msg = f'{done_msg} · test & copy OK'
+        tiers = compute_tiers(
+            job,
+            ar_results=ar_results,
+            ctdb_results=ctdb_results,
+            burst_tracks=burst_tracks,
+            fail_reasons=fail_reasons,
+        )
+        done_msg = format_done_message(
+            job=job,
+            outputs=outputs,
+            tiers=tiers,
+            ar_results=ar_results,
+            ctdb_results=ctdb_results,
+            burst_tracks=burst_tracks,
+            htoa_ripped=htoa_ripped,
+            data_count=len(data_output_pairs),
+            test_copy_mismatches=test_copy_mismatches,
+        )
 
         error = '; '.join(fail_reasons) if fail_reasons else None
-        result = _finish_result(
-            success=archival_ok,
+        result = finish_result(
+            success=tiers.archival_ok,
             outputs=outputs,
             album_dir=album_dir,
             ar_results=ar_results,
@@ -996,6 +1004,11 @@ class RipEngine:
             test_copy_mismatches=test_copy_mismatches,
             log_dir=primary_audio_dir,
             error=error,
+            secure_ok=tiers.secure_ok,
+            db_verified=tiers.db_verified,
+            archival_ok=tiers.archival_ok,
+            outcome_summary=tiers.summary,
+            skipped_existing=skipped_unverified,
         )
         if result.log_path is not None:
             done_msg = f'{done_msg} · log saved'
@@ -1790,12 +1803,14 @@ class RipEngine:
         burst_tracks: list[int],
         test_copy_mismatches: list[int],
         rip_log: RipLog | None,
+        skipped_unverified: list[int] | None = None,
     ) -> Path | None:
         """Process every selected track with secure test & copy.
 
         Encode of track N overlaps extraction of track N+1 (drive-bound rip
         with CPU-bound encode). AccurateRip and CTDB share one PCM load.
         """
+        skipped_unverified = skipped_unverified if skipped_unverified is not None else []
         pending: _PendingEncode | None = None
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix='r2r-enc') as pool:
 
@@ -1924,21 +1939,54 @@ class RipEngine:
                 expected = expected_sizes.get(track_no)
 
                 # Skip-existing: avoid extract when every destination is present.
+                # Re-verify from the existing primary lossless when possible so
+                # the album cannot "succeed" with unverified leftover files.
                 early_dests = self._destinations_for_track(job, track_no)
                 if (
                     normalize_existing_files_policy(job.existing_files) == 'skip'
                     and not early_dests
                 ):
                     finish_pending()
-                    notes.append(f'Skipped track {track_no} (output already exists)')
-                    if log_entry is not None:
-                        log_entry.status = 'skipped (exists)'
+                    re_ok = self._reverify_existing_track(
+                        job=job,
+                        track_no=track_no,
+                        tmp_path=tmp_path,
+                        ar_verifier=ar_verifier,
+                        ctdb_verifier=ctdb_verifier,
+                        ar_results=ar_results,
+                        ctdb_results=ctdb_results,
+                        log_entry=log_entry,
+                        idx=idx,
+                        total_units=total_units,
+                        report=report,
+                        outputs=outputs,
+                        track_output_pairs=track_output_pairs,
+                        notes=notes,
+                    )
+                    if not re_ok:
+                        if track_no not in skipped_unverified:
+                            skipped_unverified.append(track_no)
+                        notes.append(
+                            f'Skipped track {track_no} '
+                            '(exists; not re-verified — non-archival)'
+                        )
+                        if log_entry is not None:
+                            log_entry.status = 'skipped (exists, unverified)'
+                    else:
+                        notes.append(
+                            f'Skipped track {track_no} (exists; re-verified from file)'
+                        )
+                        if log_entry is not None:
+                            log_entry.status = 'skipped (exists, re-verified)'
                     report(
                         track_no,
                         RipState.DONE,
                         index=idx,
                         sub=1.0,
-                        message=f'Skipped track {track_no} (exists)',
+                        message=(
+                            f'Skipped track {track_no} (exists'
+                            + ('; re-verified)' if re_ok else '; unverified)')
+                        ),
                         total_units=total_units,
                     )
                     continue
@@ -2040,17 +2088,34 @@ class RipEngine:
 
                 dests = self._destinations_for_track(job, track_no)
                 if not dests:
-                    # Skip-existing: every destination already present.
-                    notes.append(f'Skipped track {track_no} (output already exists)')
+                    # Skip-existing after extract: destinations appeared; keep
+                    # the just-verified WAV results (already in ar/ctdb lists).
+                    notes.append(
+                        f'Skipped encode for track {track_no} '
+                        '(output already exists; extract was verified)'
+                    )
                     if log_entry is not None:
-                        log_entry.status = 'skipped (exists)'
+                        log_entry.status = 'skipped (exists, verified from extract)'
+                    # Attach existing primary path so the album still lists a file.
+                    probe = replace(job, existing_files='overwrite')
+                    existing = self._destinations_for_track(probe, track_no)
+                    if existing:
+                        primary = next((d for d in existing if d.primary), existing[0])
+                        if primary.out_path.is_file():
+                            outputs.append(primary.out_path)
+                            if primary.primary:
+                                track_output_pairs.append((track_no, primary.out_path))
+                                album_dir = primary.meta_dir
+                            if log_entry is not None:
+                                log_entry.output_path = primary.out_path
+                                log_entry.filename = primary.out_path.name
                     self._unlink_quiet(extracted.test_wav, extracted.copy_wav)
                     report(
                         track_no,
                         RipState.DONE,
                         index=idx,
                         sub=1.0,
-                        message=f'Skipped track {track_no} (exists)',
+                        message=f'Skipped encode track {track_no} (exists)',
                         total_units=total_units,
                     )
                     continue
@@ -3087,7 +3152,19 @@ class RipEngine:
                 copy_wav = tmp_path / 'image_copy.wav'
 
                 if self._cancelled:
-                    return RipResult(success=False, cancelled=True, notes=notes)
+                    return finish_result(
+                        success=False,
+                        cancelled=True,
+                        error='Cancelled',
+                        outputs=[],
+                        album_dir=album_dir,
+                        ar_results=[],
+                        ctdb_results=[],
+                        notes=notes,
+                        burst_tracks=[],
+                        rip_log=rip_log,
+                        archival_ok=False,
+                    )
 
                 report(
                     RipState.RIPPING,
@@ -3364,15 +3441,22 @@ class RipEngine:
                                 f'({test_crc} ≠ {copy_crc}); recovered in burst'
                             )
                         else:
-                            return RipResult(
+                            return finish_result(
                                 success=False,
                                 error=(
                                     f'Image test/copy CRC mismatch '
                                     f'({test_crc} ≠ {copy_crc}); '
                                     f'secure retries exhausted'
                                 ),
-                                notes=notes,
+                                outputs=[],
                                 album_dir=album_dir,
+                                ar_results=[],
+                                ctdb_results=[],
+                                notes=notes,
+                                burst_tracks=[],
+                                rip_log=rip_log,
+                                archival_ok=False,
+                                secure_ok=False,
                             )
                     if copy_mode == 'burst':
                         mode = 'burst'
@@ -3396,8 +3480,18 @@ class RipEngine:
                             )
 
                 if self._cancelled:
-                    return RipResult(
-                        success=False, cancelled=True, notes=notes, album_dir=album_dir
+                    return finish_result(
+                        success=False,
+                        cancelled=True,
+                        error='Cancelled',
+                        outputs=[],
+                        album_dir=album_dir,
+                        ar_results=[],
+                        ctdb_results=[],
+                        notes=notes,
+                        burst_tracks=[],
+                        rip_log=rip_log,
+                        archival_ok=False,
                     )
 
                 ar_results: list[AccurateRipResult] = []
@@ -3452,14 +3546,18 @@ class RipEngine:
                     )
 
                 if self._cancelled:
-                    return RipResult(
+                    return finish_result(
                         success=False,
                         cancelled=True,
-                        notes=notes,
+                        error='Cancelled',
+                        outputs=[],
                         album_dir=album_dir,
-                        accuraterip=ar_results,
-                        ctdb=ctdb_results,
+                        ar_results=ar_results,
+                        ctdb_results=ctdb_results,
+                        notes=notes,
                         burst_tracks=burst_tracks,
+                        rip_log=rip_log,
+                        archival_ok=False,
                     )
 
                 dests = self._destinations_for_track(job, 1, filename=basename)
@@ -3503,20 +3601,34 @@ class RipEngine:
                         on_activity=_img_encode_activity,
                     )
                 except Exception as enc_exc:
-                    return RipResult(
+                    return finish_result(
                         success=False,
                         error=str(enc_exc),
-                        notes=notes,
+                        outputs=[],
                         album_dir=dests[0].meta_dir if dests else album_dir,
+                        ar_results=ar_results,
+                        ctdb_results=ctdb_results,
+                        notes=notes,
+                        burst_tracks=burst_tracks,
+                        rip_log=rip_log,
+                        archival_ok=False,
+                        secure_ok=not burst_tracks and not job.burst_mode,
                     )
 
                 for dest, this_out in zip(dests, output_files, strict=True):
                     if not this_out.is_file() or this_out.stat().st_size < 1000:
-                        return RipResult(
+                        return finish_result(
                             success=False,
                             error='Image encode produced no output',
-                            notes=notes,
+                            outputs=output_files,
                             album_dir=dest.meta_dir,
+                            ar_results=ar_results,
+                            ctdb_results=ctdb_results,
+                            notes=notes,
+                            burst_tracks=burst_tracks,
+                            rip_log=rip_log,
+                            archival_ok=False,
+                            secure_ok=not burst_tracks and not job.burst_mode,
                         )
 
                 album_dirs = _unique_album_dirs(output_files, dests[0].meta_dir)
@@ -3662,69 +3774,78 @@ class RipEngine:
                         except Exception as exc:
                             log.warning('CTDB repair probe failed: %s', exc)
 
-                log_path = None
-                if rip_log is not None:
-                    try:
-                        rip_log.finish()
-                        # Always beside the first (primary) encode.
-                        log_path = rip_log.write(primary_album)
-                        notes.append(f'Rip log written to {log_path}')
-                    except Exception as exc:
-                        notes.append(f'Rip log warning: {exc}')
-
                 done_label = primary_out.name if primary_out else 'image'
                 if job.write_cue_file and primary_out is not None:
                     done_label = f'{primary_out.name} + {basename}.cue'
                 if len(dests) > 1:
                     done_label = f'{done_label} · {len(dests)} encodes'
-                if ar_results:
-                    ar_ok = sum(
-                        1 for r in ar_results if r.confidence == AccurateRipConfidence.MATCH
-                    )
-                    done_label = f'{done_label} · AR {ar_ok}/{len(ar_results)}'
-                if ctdb_results:
-                    ctdb_ok = sum(1 for r in ctdb_results if r.confidence == CtdbConfidence.MATCH)
-                    done_label = f'{done_label} · CTDB {ctdb_ok}/{len(ctdb_results)}'
-                fail_reasons = _archival_fail_reasons(
+                fail_reasons = archival_fail_reasons(
                     job,
                     ar_results=ar_results,
                     ctdb_results=ctdb_results,
                     burst_tracks=burst_tracks,
                 )
+                apply_burst_notes(job, burst_tracks=burst_tracks, notes=notes)
                 for reason in fail_reasons:
                     if reason not in notes:
                         notes.append(reason)
-                archival_ok = not fail_reasons
-                report(
-                    RipState.DONE,
-                    1.0,
-                    (
-                        f'Copy Image complete → {done_label}'
-                        if archival_ok
-                        else f'Copy Image failed archival checks → {done_label}'
-                    ),
+                tiers = compute_tiers(
+                    job,
+                    ar_results=ar_results,
+                    ctdb_results=ctdb_results,
+                    burst_tracks=burst_tracks,
+                    fail_reasons=fail_reasons,
                 )
-                return RipResult(
-                    success=archival_ok,
-                    output_files=output_files,
+                done_msg = format_done_message(
+                    job=job,
+                    outputs=output_files,
+                    tiers=tiers,
+                    ar_results=ar_results,
+                    ctdb_results=ctdb_results,
+                    burst_tracks=burst_tracks,
+                    htoa_ripped=htoa_in_image,
+                    data_count=len(data_pairs),
+                    test_copy_mismatches=([] if image_test_copy_ok else [0]),
+                    copy_image=True,
+                    image_label=done_label,
+                )
+                result = finish_result(
+                    success=tiers.archival_ok,
+                    outputs=output_files,
                     album_dir=primary_album,
+                    ar_results=ar_results,
+                    ctdb_results=ctdb_results,
                     notes=notes,
-                    log_path=log_path,
+                    burst_tracks=burst_tracks,
+                    rip_log=rip_log,
                     cover_path=cover_path,
                     htoa_ripped=htoa_in_image,
-                    accuraterip=ar_results,
-                    ctdb=ctdb_results,
-                    burst_tracks=burst_tracks,
                     error=('; '.join(fail_reasons) if fail_reasons else None),
+                    secure_ok=tiers.secure_ok,
+                    db_verified=tiers.db_verified,
+                    archival_ok=tiers.archival_ok,
+                    outcome_summary=tiers.summary,
+                    log_dir=primary_album,
                 )
+                if result.log_path is not None:
+                    done_msg = f'{done_msg} · log saved'
+                report(RipState.DONE, 1.0, done_msg)
+                return result
         except Exception as exc:
             log.exception('Copy Image failed')
-            return RipResult(
+            return finish_result(
                 success=False,
                 error=str(exc),
-                notes=notes,
+                outputs=[],
                 album_dir=album_dir,
+                ar_results=[],
+                ctdb_results=[],
+                notes=notes,
+                burst_tracks=[],
+                rip_log=rip_log,
                 cancelled=self._cancelled,
+                archival_ok=False,
+                secure_ok=False,
             )
 
     def _paranoia_cmd_base(
@@ -4128,6 +4249,128 @@ class RipEngine:
                 if log_entry is not None:
                     log_entry.ctdb = ctdb
 
+    def _reverify_existing_track(
+        self,
+        *,
+        job: RipJob,
+        track_no: int,
+        tmp_path: Path,
+        ar_verifier: AccurateRipVerifier | None,
+        ctdb_verifier: CtdbVerifier | None,
+        ar_results: list[AccurateRipResult],
+        ctdb_results: list[CtdbResult],
+        log_entry: TrackLogEntry | None,
+        idx: float,
+        total_units: float,
+        report: TrackReportFn,
+        outputs: list[Path],
+        track_output_pairs: list[tuple[int, Path]],
+        notes: list[str],
+    ) -> bool:
+        """Decode an existing primary encode and run AR/CTDB when possible.
+
+        Returns True when the track was re-verified (or verify is off).
+        """
+        probe = replace(job, existing_files='overwrite')
+        existing = self._destinations_for_track(probe, track_no)
+        if not existing:
+            return not (job.verify_accuraterip or job.verify_ctdb)
+        primary = next((d for d in existing if d.primary), existing[0])
+        if not primary.out_path.is_file():
+            return False
+        outputs.append(primary.out_path)
+        if primary.primary:
+            track_output_pairs.append((track_no, primary.out_path))
+        if log_entry is not None:
+            log_entry.output_path = primary.out_path
+            log_entry.filename = primary.out_path.name
+
+        need_verify = ar_verifier is not None or ctdb_verifier is not None
+        if not need_verify:
+            return True
+
+        wav = tmp_path / f'track{track_no:02d}_existing.wav'
+        try:
+            if not self._decode_existing_to_wav(primary.out_path, wav):
+                notes.append(
+                    f'Could not decode existing {primary.out_path.name} '
+                    f'for track {track_no} re-verify'
+                )
+                return False
+            self._verify_track_databases(
+                wav,
+                track_no,
+                ar_verifier=ar_verifier,
+                ctdb_verifier=ctdb_verifier,
+                ar_results=ar_results,
+                ctdb_results=ctdb_results,
+                log_entry=log_entry,
+                idx=idx,
+                total_units=total_units,
+                report=report,
+            )
+            return True
+        except Exception as exc:
+            log.warning('Re-verify existing track %s failed: %s', track_no, exc)
+            notes.append(f'Re-verify failed for existing track {track_no}: {exc}')
+            return False
+        finally:
+            self._unlink_quiet(wav)
+
+    @staticmethod
+    def _decode_existing_to_wav(src: Path, dest: Path) -> bool:
+        """Decode a lossless (or WAV) file to 16-bit stereo 44.1 kHz WAV."""
+        suffix = src.suffix.lower()
+        if suffix == '.wav':
+            try:
+                shutil.copy2(src, dest)
+                return dest.is_file() and dest.stat().st_size > 1000
+            except OSError:
+                return False
+        if suffix == '.flac':
+            flac = shutil.which('flac')
+            if not flac:
+                return False
+            cmd = [flac, '-d', '-f', '-o', str(dest), str(src)]
+        elif suffix in {'.aiff', '.aif', '.wv', '.m4a'}:
+            # ALAC .m4a is lossless; AAC .m4a still decodes but is non-archival.
+            ffmpeg = shutil.which('ffmpeg')
+            if not ffmpeg:
+                return False
+            cmd = [
+                ffmpeg,
+                '-y',
+                '-i',
+                str(src),
+                '-acodec',
+                'pcm_s16le',
+                '-ar',
+                '44100',
+                '-ac',
+                '2',
+                str(dest),
+            ]
+        else:
+            # Lossy companions (mp3/opus) — cannot re-verify for archival.
+            return False
+        try:
+            completed = subprocess.run(
+                cmd,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=600,
+                env=subprocess_env_for(cmd),
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            log.debug('Decode existing failed (%s): %s', src, exc)
+            return False
+        if completed.returncode != 0 or not dest.is_file() or dest.stat().st_size < 1000:
+            detail = (completed.stderr or completed.stdout or '').strip()
+            log.debug('Decode existing failed (%s): %s', src, detail[:200])
+            return False
+        return True
+
     def _verify_track_databases(
         self,
         wav_path: Path,
@@ -4436,105 +4679,11 @@ def _unique_album_dirs(outputs: list[Path], album_dir: Path | None) -> list[Path
     return dirs
 
 
-def _archival_fail_reasons(
-    job: RipJob,
-    *,
-    ar_results: list[AccurateRipResult],
-    ctdb_results: list[CtdbResult],
-    burst_tracks: list[int],
-) -> list[str]:
-    """Reasons a finished rip is not archival-grade (fail closed)."""
-    reasons: list[str] = []
-    # Intentional Burst mode already opted out of secure extract — do not
-    # fail solely because every track used -Z. Fallback burst still fails.
-    if burst_tracks and not job.burst_mode:
-        tracks_txt = ', '.join(str(n) for n in burst_tracks)
-        reasons.append(
-            f'Insecure burst (-Z) extraction on track(s) {tracks_txt}'
-        )
-    if job.verify_accuraterip and ar_results:
-        bad = [
-            r.track_number
-            for r in ar_results
-            if r.confidence == AccurateRipConfidence.MISMATCH
-        ]
-        if bad:
-            reasons.append(
-                f'AccurateRip mismatch on track(s) {", ".join(str(n) for n in bad)}'
-            )
-    if job.verify_ctdb and ctdb_results:
-        # Soft CTDB misses are NOT_IN_DB (fuzzy neighbors). Hard MISMATCH is
-        # exact-TOC CRC conflict — still defer to AccurateRip when it matched.
-        ar_matched = {
-            r.track_number
-            for r in ar_results
-            if r.confidence == AccurateRipConfidence.MATCH
-        }
-        bad = [
-            r.track_number
-            for r in ctdb_results
-            if r.confidence == CtdbConfidence.MISMATCH
-            and r.track_number not in ar_matched
-        ]
-        if bad:
-            reasons.append(
-                f'CTDB mismatch on track(s) {", ".join(str(n) for n in bad)}'
-            )
-    return reasons
-
-
-def _finish_result(
-    *,
-    success: bool,
-    outputs: list[Path],
-    album_dir: Path | None,
-    ar_results: list[AccurateRipResult],
-    notes: list[str],
-    burst_tracks: list[int],
-    rip_log: RipLog | None,
-    error: str | None = None,
-    cancelled: bool = False,
-    cover_path: Path | None = None,
-    htoa_ripped: bool = False,
-    test_copy_mismatches: list[int] | None = None,
-    log_dir: Path | None = None,
-    ctdb_results: list[CtdbResult] | None = None,
-) -> RipResult:
-    """Build a RipResult; write the rip log beside the *first* encode only.
-
-    *log_dir* / *album_dir* should be the primary encode album folder. Falls
-    back to the first output's parent when needed.
-    """
-    log_path: Path | None = None
-    if rip_log is not None:
-        rip_log.notes.extend(n for n in notes if n not in rip_log.notes)
-        rip_log.finish(error=error, cancelled=cancelled)
-        dest = log_dir or album_dir
-        if dest is None and outputs:
-            dest = outputs[0].parent
-        if dest is not None:
-            try:
-                dest.mkdir(parents=True, exist_ok=True)
-                log_path = rip_log.write(dest)
-                notes.append(f'Rip log written to {log_path}')
-            except OSError as exc:
-                log.warning('Could not write rip log: %s', exc)
-                notes.append(f'Rip log not written: {exc}')
-    return RipResult(
-        success=success,
-        output_files=outputs,
-        album_dir=album_dir,
-        error=error,
-        cancelled=cancelled,
-        accuraterip=ar_results,
-        ctdb=ctdb_results or [],
-        notes=notes,
-        burst_tracks=burst_tracks,
-        log_path=log_path,
-        cover_path=cover_path,
-        htoa_ripped=htoa_ripped,
-        test_copy_mismatches=test_copy_mismatches or [],
-    )
+# Compat aliases (tests / older imports).
+_archival_fail_reasons = archival_fail_reasons
+_finish_result = finish_result
+_summarize_ar = summarize_ar
+_summarize_ctdb = summarize_ctdb
 
 
 def _image_track_pcm(
@@ -4551,33 +4700,3 @@ def _image_track_pcm(
     if length <= 0 or start >= len(image_pcm):
         return b''
     return image_pcm[start : min(start + length, len(image_pcm))]
-
-
-def _summarize_ar(results: list[AccurateRipResult]) -> str:
-    if not results:
-        return ''
-    matches = sum(1 for r in results if r.confidence == AccurateRipConfidence.MATCH)
-    mismatches = sum(1 for r in results if r.confidence == AccurateRipConfidence.MISMATCH)
-    missing = sum(1 for r in results if r.confidence == AccurateRipConfidence.NOT_IN_DB)
-    parts = [f'AR {matches}/{len(results)} match']
-    if mismatches:
-        parts.append(f'{mismatches} mismatch')
-    if missing:
-        parts.append(f'{missing} not in DB')
-    return ', '.join(parts)
-
-
-def _summarize_ctdb(results: list[CtdbResult]) -> str:
-    if not results:
-        return ''
-    matches = sum(1 for r in results if r.confidence == CtdbConfidence.MATCH)
-    mismatches = sum(1 for r in results if r.confidence == CtdbConfidence.MISMATCH)
-    missing = sum(1 for r in results if r.confidence == CtdbConfidence.NOT_IN_DB)
-    if matches == len(results):
-        return f'CTDB {matches}/{len(results)} match'
-    parts = [f'CTDB {matches}/{len(results)} match']
-    if mismatches:
-        parts.append(f'{mismatches} mismatch')
-    if missing:
-        parts.append(f'{missing} unverified')
-    return ', '.join(parts)

@@ -331,6 +331,16 @@
       <description>After extraction, compare track CRCs to the AccurateRip database.</description>
     </key>
 
+    <key name="require-db-match" type="b">
+      <default>false</default>
+      <summary>Require AccurateRip match</summary>
+      <description>
+        When AccurateRip verification is enabled, fail the archival check if
+        no tracks match the database (uncatalogued discs or network errors).
+        Off by default — Secure OK rips of unknown discs still succeed.
+      </description>
+    </key>
+
     <key name="verify-ctdb" type="b">
       <default>true</default>
       <summary>Verify rips with CTDB</summary>

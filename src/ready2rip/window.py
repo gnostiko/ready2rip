@@ -301,7 +301,9 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         # Preferences pages: Ripping / Encoding / Metadata / Drive
         self.verify_group = Adw.PreferencesGroup(
             title='Verify',
-            description='CRC checks and verification databases',
+            description=(
+                'Secure = local CRC; AccurateRip/CTDB = online confirm'
+            ),
         )
         self.extras_group = Adw.PreferencesGroup(
             title='Extras',
@@ -1219,6 +1221,14 @@ class Ready2RipWindow(Adw.ApplicationWindow):
                 self._on_ar_toggled,
             ),
             (
+                '_require_db_match_row',
+                self.verify_group,
+                'Require AccurateRip match',
+                'Fail archival when AccurateRip is on but no tracks match',
+                settings.require_db_match,
+                self._on_require_db_match_toggled,
+            ),
+            (
                 '_ctdb_row',
                 self.verify_group,
                 'CTDB',
@@ -1314,6 +1324,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             setattr(self, attr, row)
             self._add_pref(group, row)
         self._sync_burst_mode_sensitivity(bool(settings.burst_mode))
+        self._sync_require_db_match_sensitivity(bool(settings.verify_accuraterip))
 
     def _build_embed_size_expander(
         self,
@@ -1516,6 +1527,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             (self._data_tracks_row, self._on_data_tracks_toggled),
             (self._copy_image_row, self._on_copy_image_toggled),
             (self._ar_row, self._on_ar_toggled),
+            (self._require_db_match_row, self._on_require_db_match_toggled),
             (self._ctdb_row, self._on_ctdb_toggled),
             (self._submit_ctdb_row, self._on_submit_ctdb_toggled),
             (self._burst_mode_row, self._on_burst_mode_toggled),
@@ -1601,6 +1613,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._data_tracks_row.set_active(settings.rip_data_tracks)
             self._copy_image_row.set_active(settings.copy_image)
             self._ar_row.set_active(settings.verify_accuraterip)
+            self._require_db_match_row.set_active(settings.require_db_match)
+            self._sync_require_db_match_sensitivity(settings.verify_accuraterip)
             self._ctdb_row.set_active(settings.verify_ctdb)
             self._submit_ctdb_row.set_active(settings.submit_ctdb)
             self._burst_mode_row.set_active(settings.burst_mode)
@@ -2265,7 +2279,15 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self.store.update(lyrics_save_mode=self._lyrics_save_modes[idx])
 
     def _on_ar_toggled(self, row: Adw.SwitchRow, *_args) -> None:
-        self.store.update(verify_accuraterip=row.get_active())
+        enabled = bool(row.get_active())
+        self.store.update(verify_accuraterip=enabled)
+        self._sync_require_db_match_sensitivity(enabled)
+
+    def _on_require_db_match_toggled(self, row: Adw.SwitchRow, *_args) -> None:
+        self.store.update(require_db_match=row.get_active())
+
+    def _sync_require_db_match_sensitivity(self, verify_ar: bool) -> None:
+        self._require_db_match_row.set_sensitive(bool(verify_ar))
 
     def _on_ctdb_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(verify_ctdb=row.get_active())
@@ -2691,6 +2713,7 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             verify_accuraterip=settings.verify_accuraterip,
             verify_ctdb=settings.verify_ctdb,
             submit_ctdb=settings.submit_ctdb,
+            require_db_match=settings.require_db_match,
             sample_offset=settings.drive_sample_offset,
             offset_configured=bool(settings.drive_offset_configured),
             disc_info=self._disc,
@@ -3017,17 +3040,31 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             self._toast('Rip cancelled')
             return
 
+        # Per-track AR/CTDB rows matter most on archival fail.
+        if result.accuraterip or result.ctdb:
+            self._apply_verify_results_to_rows(
+                ar_results=result.accuraterip,
+                ctdb_results=result.ctdb,
+            )
+
+        n = len(result.output_files)
         if not result.success:
+            err = result.error or 'Rip failed'
+            if n:
+                status = f'{err} · {n} file(s) kept'
+                toast = f'Archival checks failed · {n} file(s) kept'
+            else:
+                status = err
+                toast = err
             self.rip_title_label.set_label('Ripping disc')
-            self.rip_status_label.set_label(result.error or 'Rip failed')
-            self._set_progress_fraction(0.0)
+            self.rip_status_label.set_label(status)
+            self._set_progress_fraction(1.0 if n else 0.0)
             self._show_progress_panel(title='Ripping disc')
             self._flash_error()
             self._hide_progress_panel(delay_ms=8000)
-            self._toast(result.error or 'Rip failed')
+            self._toast(toast, timeout=6)
             return
 
-        n = len(result.output_files)
         dest_dirs = sorted(
             {str(p.parent) for p in result.output_files if p.suffix.lower() != '.cue'}
         )
@@ -3039,18 +3076,22 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             else (f'{len(dest_dirs)} folders' if dest_dirs else 'output folder')
         )
         ar_bits = []
+        if result.outcome_summary:
+            ar_bits.append(result.outcome_summary)
+        elif result.secure_ok:
+            ar_bits.append('Secure OK')
         if result.htoa_ripped:
             ar_bits.append('HTOA')
         if any(p.suffix.lower() == '.bin' for p in result.output_files):
             ar_bits.append('data')
         if result.cover_path is not None:
             ar_bits.append('cover saved')
-        if result.accuraterip:
+        if result.accuraterip and 'AR ' not in (result.outcome_summary or ''):
             matches = sum(
                 1 for r in result.accuraterip if r.confidence == AccurateRipConfidence.MATCH
             )
             ar_bits.append(f'AR {matches}/{len(result.accuraterip)}')
-        if result.ctdb:
+        if result.ctdb and 'CTDB ' not in (result.outcome_summary or ''):
             matches = sum(1 for r in result.ctdb if r.confidence == CtdbConfidence.MATCH)
             hard_miss = sum(
                 1 for r in result.ctdb if r.confidence == CtdbConfidence.MISMATCH
@@ -3064,16 +3105,11 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             else:
                 ar_bits.append('CTDB unverified')
         intentional_burst = bool(self.store.get().burst_mode)
-        if result.burst_tracks:
+        if result.burst_tracks and intentional_burst:
             n_burst = len(result.burst_tracks)
-            if intentional_burst:
+            if 'Burst mode' not in (result.outcome_summary or ''):
                 ar_bits.append(
                     f'burst mode (-Z) · {n_burst} track{"s" if n_burst != 1 else ""}'
-                )
-            else:
-                ar_bits.append(
-                    f'WARNING: insecure burst (-Z) on '
-                    f'{n_burst} track{"s" if n_burst != 1 else ""}'
                 )
         if result.log_path is not None:
             ar_bits.append('log saved')
@@ -3088,34 +3124,38 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self.toolbar_view.set_reveal_bottom_bars(True)
         self.rip_revealer.set_reveal_child(True)
         GLib.timeout_add(560, self._release_banner)
-        if result.burst_tracks:
-            n_burst = len(result.burst_tracks)
-            if intentional_burst:
-                self._toast(
-                    f'Rip complete · {n} file(s) · burst mode '
-                    f'({n_burst} track{"s" if n_burst != 1 else ""})',
-                    timeout=4,
-                )
-            else:
-                self._toast(
-                    f'Rip complete · {n} file(s) · WARNING: insecure burst on '
-                    f'{n_burst} track{"s" if n_burst != 1 else ""} '
-                    f'(not archival-grade)',
-                    timeout=5,
-                )
-        else:
-            self._toast(f'Rip complete · {n} file(s)', timeout=4)
-        # Show per-track AR/CTDB outcome in the track list subtitles when available.
-        if result.accuraterip or result.ctdb:
-            self._apply_verify_results_to_rows(
-                ar_results=result.accuraterip,
-                ctdb_results=result.ctdb,
-            )
+        toast = self._rip_success_toast(result, n=n, intentional_burst=intentional_burst)
+        self._toast(toast, timeout=5 if 'not in' in toast else 4)
 
         if self.store.get().auto_eject:
             # Give the kernel a moment to release the optical device after the
             # rip thread finishes; eject_drive also retries on “busy”.
             GLib.timeout_add(2000, self._do_auto_eject)
+
+    @staticmethod
+    def _rip_success_toast(
+        result: RipResult,
+        *,
+        n: int,
+        intentional_burst: bool,
+    ) -> str:
+        """Toast that distinguishes Secure OK from DB-verified."""
+        summary = (result.outcome_summary or '').strip()
+        if summary:
+            return f'{summary} · {n} file(s)'
+        if intentional_burst and result.burst_tracks:
+            n_burst = len(result.burst_tracks)
+            return (
+                f'Burst mode · {n} file(s) · '
+                f'{n_burst} track{"s" if n_burst != 1 else ""} (-Z)'
+            )
+        if result.secure_ok and not result.db_verified:
+            if result.accuraterip or result.ctdb:
+                return f'Secure OK · not DB-verified · {n} file(s)'
+            return f'Secure OK · {n} file(s)'
+        if result.db_verified:
+            return f'Secure OK · DB verified · {n} file(s)'
+        return f'Rip complete · {n} file(s)'
 
     def _eject_disc(self) -> None:
         """Open the tray / eject media on the configured optical device."""

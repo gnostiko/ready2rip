@@ -108,11 +108,23 @@ def _flush_via_data_or_seek(
             if target >= avoid_start and target < avoid_end:
                 # Still inside — jump toward disc start or just past avoid_end.
                 target = 0 if avoid_start > 0 else max(0, avoid_end)
+        # Dual SEEK + dwell: heavily caching drives often keep the just-read
+        # audio window hot after a single seek (Copy Image / full-disc avoid).
+        alt = 0 if target > 0 else max(0, int(avoid_end or 0))
         if mmc.seek_lba(target):
-            time.sleep(0.05)
+            time.sleep(0.12)
             # Best-effort one-sector read at the seek point (may fail at lead-out).
             mmc.read_raw_sectors(target, 1)
-            log.debug('Cache flush via SCSI SEEK to LBA %s', target)
+            if alt != target:
+                time.sleep(0.05)
+                if mmc.seek_lba(alt):
+                    time.sleep(0.12)
+                    mmc.read_raw_sectors(alt, 1)
+            log.debug(
+                'Cache flush via dual SCSI SEEK to LBA %s then %s',
+                target,
+                alt,
+            )
             return True
     except Exception as exc:
         log.debug('MMC cache flush failed: %s', exc)
