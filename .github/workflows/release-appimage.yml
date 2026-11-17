@@ -1,9 +1,10 @@
-# Build portable AppImages (x86_64 + aarch64) on Ubuntu 24.04 (glibc 2.39),
+# Build portable AppImages (x86_64 + aarch64) on Ubuntu 26.04 (glibc 2.43),
 # GPG-sign them, and attach to the GitHub Release for the matching tag.
 #
-# Why 24.04: balances a modern toolchain / system Python 3.12 with a still-
-# reasonable glibc floor (2.39). Older hosts (Ubuntu 22.04 / glibc 2.35) need
-# the distro package or an older AppImage release.
+# Why 26.04: matches current GitHub Actions GA runners and ships a current
+# toolchain / system Python with flac 1.5+. Hosts need glibc ≥ 2.43 (Ubuntu
+# 26.04+ / recent rolling). Older hosts should use deb/rpm or an older
+# AppImage release built on 24.04.
 #
 # Modern GTK 4 / libadwaita are built into a cached GNOME_PREFIX via
 # appimage/build-gnome-prefix.sh so the AppImage stack stays pinned.
@@ -51,16 +52,17 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: ubuntu-24.04
+            runner: ubuntu-26.04
           - arch: aarch64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-26.04-arm
 
     name: AppImage ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
 
     env:
       GNOME_PREFIX: ${{ github.workspace }}/build-appimage/gnome-prefix
-      PYTHON: python3.12
+      # Resolute system Python (3.13+/3.14); AppRun already probes 3.11–3.14.
+      PYTHON: python3
 
     steps:
       - uses: actions/checkout@v4
@@ -69,6 +71,11 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
+          # libfuse2 is needed by appimagetool; package name varies by series.
+          fuse_pkg=libfuse2t64
+          if ! apt-cache show libfuse2t64 >/dev/null 2>&1; then
+            fuse_pkg=libfuse2
+          fi
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential \
             curl \
@@ -88,7 +95,7 @@ jobs:
             python3-wheel \
             python3-venv \
             ca-certificates \
-            libfuse2t64 \
+            "$fuse_pkg" \
             desktop-file-utils \
             gnupg \
             zsync \
@@ -143,9 +150,8 @@ jobs:
             libgirepository-2.0-dev \
             sassc \
             cmake
-          # Noble system Python is 3.12 (project requires >=3.11).
-          # PEP 668 marks the system interpreter as externally managed on 24.04.
-          python3.12 -m pip install --user --break-system-packages --upgrade \
+          # PEP 668: system Python is externally managed on recent Ubuntu.
+          python3 -m pip install --user --break-system-packages --upgrade \
             'meson>=1.3,<2' \
             'pycairo>=1.20' \
             'PyGObject>=3.42'
@@ -156,10 +162,11 @@ jobs:
           set -euo pipefail
           echo "runner arch=$(uname -m) expected=${{ matrix.arch }}"
           test "$(uname -m)" = "${{ matrix.arch }}"
-          for t in python3.12 meson ninja gcc curl cdparanoia flac lame ffmpeg opusenc zsyncmake gpg; do
+          for t in python3 meson ninja gcc curl cdparanoia flac lame ffmpeg opusenc zsyncmake gpg; do
             command -v "$t"
           done
-          python3.12 --version
+          python3 --version
+          flac --version | head -1
           meson --version
           ldd --version | head -1
 
@@ -169,8 +176,8 @@ jobs:
           path: |
             build-appimage/gnome-prefix
             build-appimage/gnome-src
-          # v1 on 24.04: new glibc floor; keep pin aligned with build-gnome-prefix.sh
-          key: gnome-prefix-24.04-${{ matrix.arch }}-v1-glib2.78.6-gi1.78.1-gtk4.14.5-adw1.5.3
+          # v1 on 26.04: new glibc floor; keep pin aligned with build-gnome-prefix.sh
+          key: gnome-prefix-26.04-${{ matrix.arch }}-v1-glib2.78.6-gi1.78.1-gtk4.14.5-adw1.5.3
 
       - name: Build GNOME prefix
         run: |

@@ -29,6 +29,15 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-17">
       <description>
         <p>
+          0.4.60: Build AppImages on Ubuntu 26.04 (glibc ≥ 2.43) with
+          system Python and current flac; update install docs for the
+          new glibc floor.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.59" date="2026-11-17">
+      <description>
+        <p>
           0.4.59: Fail closed on AccurateRip lookup/transport errors and
           empty verify results; treat Copy Image PCM load/slice failures
           as archival ERROR; put Outcome first in the rip log; clarify

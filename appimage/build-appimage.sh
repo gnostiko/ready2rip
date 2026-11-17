@@ -12,9 +12,9 @@
 #   PyGObject + GTK 4 + libadwaita (bundled into the image)
 #   cdparanoia or cd-paranoia, flac, lame, ffmpeg (recommended; bundled)
 #
-# Preferred build host: Ubuntu 24.04 (glibc 2.39). Set GNOME_PREFIX to a prefix
+# Preferred build host: Ubuntu 26.04 (glibc 2.43). Set GNOME_PREFIX to a prefix
 # from appimage/build-gnome-prefix.sh so GLib/GTK/Adw stay pinned and portable.
-# Override the interpreter with PYTHON=python3.12 (noble) or python3.11.
+# Override the interpreter with PYTHON=python3 (resolute) or python3.12+.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -1074,7 +1074,7 @@ if command -v objdump >/dev/null 2>&1; then
     fi
   done
   echo "    → this AppImage needs host glibc >= ${MAX_GLIBC}"
-  echo "    (CI builds on Ubuntu 24.04 / glibc 2.39; use deb/rpm on older hosts)"
+  echo "    (CI builds on Ubuntu 26.04 / glibc 2.43; use deb/rpm on older hosts)"
 fi
 
 # ---------------------------------------------------------------------------
