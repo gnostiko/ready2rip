@@ -26,7 +26,18 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-11-16">
+    <release version="@APPLICATION_VERSION@" date="2026-11-17">
+      <description>
+        <p>
+          0.4.58: Distinguish Secure OK from AccurateRip/CTDB verification
+          with explicit result tiers; show per-track verify results and
+          files kept on archival fail; re-verify skipped existing files;
+          always write Copy Image rip logs; strengthen drive cache defeat;
+          optional require AccurateRip match.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.57" date="2026-11-16">
       <description>
         <p>
           0.4.57: Stack cover size bubbles vertically with separate lossy
