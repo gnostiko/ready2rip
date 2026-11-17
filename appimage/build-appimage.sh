@@ -194,7 +194,8 @@ PY
 # ---------------------------------------------------------------------------
 echo "==> bundling GObject Introspection typelibs"
 # When GNOME_PREFIX is set, GLib/Gio typelibs MUST come from that prefix so they
-# match the bundled libgio (jammy system Gio typelibs lack DEFAULT_FLAGS).
+# match the bundled libgio. On Ubuntu 26.04+ build-gnome-prefix.sh stages the
+# host typelibs there (GLib owns them; jammy hosts still rebuild).
 PREFIX_TYPELIB_DIRS=()
 SYSTEM_TYPELIB_DIRS=()
 for d in \

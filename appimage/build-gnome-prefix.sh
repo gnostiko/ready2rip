@@ -1,25 +1,26 @@
 #!/usr/bin/env bash
-# Build a relocatable GNOME prefix (GLib + GTK 4 + libadwaita) on an old base
-# system so AppImages keep a low glibc floor while still shipping modern Adw.
+# Prepare a GNOME prefix for AppImage builds (GLib/Gio typelibs + optional
+# rebuilt GTK 4 / libadwaita on older hosts).
 #
 # Usage:
 #   ./appimage/build-gnome-prefix.sh [/path/to/prefix]
 #
-# Intended for Ubuntu 26.04 AppImage CI (also builds on 24.04). Skips work when
-# the prefix already has a new enough libadwaita.
+# On Ubuntu 26.04+ the host already ships GLib ≥2.74 (Gio DEFAULT_FLAGS),
+# GTK 4, and libadwaita. GLib now owns GLib/Gio typelibs — building
+# gobject-introspection no longer installs Gio-2.0.typelib into the prefix.
+# In that case we stage host typelibs into PREFIX and skip source rebuilds.
+#
+# On older hosts (e.g. 24.04 without new enough Adw), falls back to building
+# pinned GLib / GI / GTK / libadwaita into PREFIX.
 set -euo pipefail
 
 PREFIX="${1:-${GNOME_PREFIX:-$HOME/.cache/ready2rip-gnome-prefix}}"
 SRC="${GNOME_SRC:-${PREFIX}.src}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 2)}"
 
-# Pin releases that provide Adw.Dialog / ToolbarView / AlertDialog / AboutDialog.
-# On Ubuntu 26.04 the host already ships modern GLib/GTK/Adw, so only GI is
-# typically built into the prefix (for Gio typelibs with DEFAULT_FLAGS).
+# Fallback pins when the host stack is too old to stage.
 # GI ≥ 1.82 is required for Python ≥ 3.12 (no distutils.msvccompiler).
 GLIB_VER="${GLIB_VER:-2.78.6}"
-# GLib does not install Gio/GLib typelibs itself — those come from
-# gobject-introspection built against this prefix (or the host GLib).
 GI_VER="${GI_VER:-1.86.0}"
 GTK_VER="${GTK_VER:-4.14.5}"
 ADW_VER="${ADW_VER:-1.5.3}"
@@ -48,10 +49,61 @@ have_adw() {
   pkg-config --exists "libadwaita-1 >= ${ADW_VER}" 2>/dev/null
 }
 
+host_gio_typelib() {
+  local t
+  for t in \
+    /usr/lib/girepository-1.0/Gio-2.0.typelib \
+    "/usr/lib/$(uname -m)-linux-gnu/girepository-1.0/Gio-2.0.typelib"
+  do
+    if [ -f "$t" ] && grep -a -q 'DEFAULT_FLAGS' "$t"; then
+      printf '%s\n' "$t"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# GLib ≥2.80 owns GLib/Gio typelibs; copy them into PREFIX so build-appimage.sh
+# can require prefix-backed Gio when GNOME_PREFIX is set.
+stage_host_glib_typelibs() {
+  local host_gio src_dir dest name
+  host_gio="$(host_gio_typelib)" || return 1
+  src_dir="$(dirname "$host_gio")"
+  dest="${PREFIX}/lib/girepository-1.0"
+  mkdir -p "$dest"
+  for name in \
+    GLib-2.0 GObject-2.0 Gio-2.0 GModule-2.0 GioUnix-2.0 \
+    GIRepository-3.0 GIRepository-2.0
+  do
+    if [ -f "${src_dir}/${name}.typelib" ]; then
+      cp -a "${src_dir}/${name}.typelib" "${dest}/"
+    fi
+  done
+  gio_typelib_ok
+}
+
+prefix_ready_msg() {
+  echo "==> GNOME prefix ready: ${PREFIX}"
+  pkg-config --modversion glib-2.0
+  pkg-config --modversion gtk4
+  pkg-config --modversion libadwaita-1
+  local gio_typelib
+  gio_typelib="$(find "${PREFIX}/lib" -name 'Gio-2.0.typelib' | head -1)"
+  echo "    Gio typelib: ${gio_typelib} (DEFAULT_FLAGS ok)"
+}
+
 if have_adw && gio_typelib_ok; then
   echo "==> GNOME prefix already OK at ${PREFIX} ($(pkg-config --modversion libadwaita-1))"
   exit 0
 fi
+
+# Modern host (Ubuntu 26.04+): stage system typelibs, do not rebuild GI/GTK/Adw.
+if have_adw && stage_host_glib_typelibs; then
+  echo "==> staged host GLib/Gio typelibs into ${PREFIX} (system stack is new enough)"
+  prefix_ready_msg
+  exit 0
+fi
+
 if have_adw && ! gio_typelib_ok; then
   echo "==> GNOME prefix has Adw but Gio typelib lacks DEFAULT_FLAGS — rebuilding GI stack"
 fi
@@ -126,16 +178,25 @@ fi
 
 # --- gobject-introspection (provides Gio/GLib typelibs matching PREFIX glib) ---
 if ! gio_typelib_ok; then
-  fetch_tar \
-    "https://download.gnome.org/sources/gobject-introspection/${GI_VER%.*}/gobject-introspection-${GI_VER}.tar.xz" \
-    "${SRC}/gobject-introspection-${GI_VER}"
-  # Prefer PREFIX glib over jammy's 2.72 when scanning.
-  meson_install "gobject-introspection-${GI_VER}" "${SRC}/gobject-introspection-${GI_VER}" \
-    -Dbuild_introspection_data=true \
-    -Dgtk_doc=false \
-    -Ddoctool=disabled
+  # Prefer staging host typelibs when GLib already owns them (GLib ≥2.80).
+  if stage_host_glib_typelibs; then
+    echo "==> staged host GLib/Gio typelibs (GI no longer installs them on modern GLib)"
+  else
+    fetch_tar \
+      "https://download.gnome.org/sources/gobject-introspection/${GI_VER%.*}/gobject-introspection-${GI_VER}.tar.xz" \
+      "${SRC}/gobject-introspection-${GI_VER}"
+    # Prefer PREFIX glib over jammy's 2.72 when scanning.
+    meson_install "gobject-introspection-${GI_VER}" "${SRC}/gobject-introspection-${GI_VER}" \
+      -Dbuild_introspection_data=true \
+      -Dgtk_doc=false \
+      -Ddoctool=disabled
+    # GLib ≥2.80: GI builds Gio typelibs but may not install them — stage host.
+    if ! gio_typelib_ok; then
+      stage_host_glib_typelibs || true
+    fi
+  fi
   if ! gio_typelib_ok; then
-    echo "error: gobject-introspection did not install Gio-2.0.typelib with DEFAULT_FLAGS" >&2
+    echo "error: no Gio-2.0.typelib with DEFAULT_FLAGS in prefix or host" >&2
     echo "       looked under ${PREFIX}/lib/girepository-1.0" >&2
     ls -la "${PREFIX}/lib/girepository-1.0" 2>/dev/null || true
     exit 1
@@ -172,9 +233,4 @@ if ! pkg-config --exists "libadwaita-1 >= ${ADW_VER}" 2>/dev/null && ! lib_prese
     -Dgtk_doc=false
 fi
 
-echo "==> GNOME prefix ready: ${PREFIX}"
-pkg-config --modversion glib-2.0
-pkg-config --modversion gtk4
-pkg-config --modversion libadwaita-1
-gio_typelib="$(find "${PREFIX}/lib" -name 'Gio-2.0.typelib' | head -1)"
-echo "    Gio typelib: ${gio_typelib} (DEFAULT_FLAGS ok)"
+prefix_ready_msg

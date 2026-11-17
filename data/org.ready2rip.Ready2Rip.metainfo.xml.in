@@ -29,6 +29,15 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-17">
       <description>
         <p>
+          0.4.63: On Ubuntu 26.04 AppImage builds, stage host GLib/Gio
+          typelibs instead of rebuilding gobject-introspection (GLib
+          owns those typelibs now).
+        </p>
+      </description>
+    </release>
+    <release version="0.4.62" date="2026-11-17">
+      <description>
+        <p>
           0.4.62: Build AppImage gobject-introspection 1.86 so Ubuntu
           26.04 CI works with system Python 3.14 (no distutils).
         </p>

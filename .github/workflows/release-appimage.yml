@@ -149,6 +149,11 @@ jobs:
             "$gdk_pixbuf_dev" \
             librsvg2-dev \
             librsvg2-common \
+            libgtk-4-dev \
+            libadwaita-1-dev \
+            gir1.2-glib-2.0 \
+            gir1.2-gtk-4.0 \
+            gir1.2-adw-1 \
             libappstream-dev \
             gobject-introspection \
             libgirepository1.0-dev \
@@ -181,9 +186,8 @@ jobs:
           path: |
             build-appimage/gnome-prefix
             build-appimage/gnome-src
-          # v2 on 26.04: GI 1.86 for Python 3.14 (no distutils); keep pin aligned
-          # with build-gnome-prefix.sh.
-          key: gnome-prefix-26.04-${{ matrix.arch }}-v2-glib2.78.6-gi1.86.0-gtk4.14.5-adw1.5.3
+          # v3 on 26.04: stage host GLib/Gio typelibs (GLib owns them; no GI rebuild).
+          key: gnome-prefix-26.04-${{ matrix.arch }}-v3-host-typelibs
 
       - name: Build GNOME prefix
         run: |
