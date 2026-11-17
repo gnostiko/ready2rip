@@ -26,7 +26,15 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-11-15">
+    <release version="@APPLICATION_VERSION@" date="2026-11-16">
+      <description>
+        <p>
+          0.4.57: Stack cover size bubbles vertically with separate lossy
+          and lossless embed pills under the source size.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.56" date="2026-11-15">
       <description>
         <p>
           0.4.56: Allow lossless embed covers up to 1200 px; encode tag
