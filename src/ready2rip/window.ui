@@ -235,8 +235,8 @@
                                                                 </child>
                                                                 <child>
                                                                   <object class="GtkBox" id="cover_meta_row">
-                                                                    <property name="orientation">horizontal</property>
-                                                                    <property name="spacing">6</property>
+                                                                    <property name="orientation">vertical</property>
+                                                                    <property name="spacing">4</property>
                                                                     <property name="halign">center</property>
                                                                     <child>
                                                                       <object class="GtkLabel" id="cover_size_label">
@@ -250,7 +250,18 @@
                                                                       </object>
                                                                     </child>
                                                                     <child>
-                                                                      <object class="GtkLabel" id="cover_embed_label">
+                                                                      <object class="GtkLabel" id="cover_embed_lossy_label">
+                                                                        <property name="visible">false</property>
+                                                                        <property name="halign">center</property>
+                                                                        <property name="xalign">0.5</property>
+                                                                        <style>
+                                                                          <class name="caption"/>
+                                                                          <class name="ready2rip-cover-bubble"/>
+                                                                        </style>
+                                                                      </object>
+                                                                    </child>
+                                                                    <child>
+                                                                      <object class="GtkLabel" id="cover_embed_lossless_label">
                                                                         <property name="visible">false</property>
                                                                         <property name="halign">center</property>
                                                                         <property name="xalign">0.5</property>

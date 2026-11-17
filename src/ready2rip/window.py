@@ -197,7 +197,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
     cover_hover = Gtk.Template.Child()
     cover_actions = Gtk.Template.Child()
     cover_size_label = Gtk.Template.Child()
-    cover_embed_label = Gtk.Template.Child()
+    cover_embed_lossy_label = Gtk.Template.Child()
+    cover_embed_lossless_label = Gtk.Template.Child()
     search_art_button = Gtk.Template.Child()
     choose_art_button = Gtk.Template.Child()
     clear_art_button = Gtk.Template.Child()
@@ -823,38 +824,45 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         if art is None:
             self.cover_size_label.set_visible(False)
             self.cover_size_label.set_text('')
-            self.cover_embed_label.set_visible(False)
-            self.cover_embed_label.set_text('')
+            self.cover_embed_lossy_label.set_visible(False)
+            self.cover_embed_lossy_label.set_text('')
+            self.cover_embed_lossless_label.set_visible(False)
+            self.cover_embed_lossless_label.set_text('')
             return
 
         self.cover_size_label.set_text(f'{art.width}×{art.height}')
         self.cover_size_label.set_tooltip_text('Source artwork size')
         self.cover_size_label.set_visible(True)
 
-        show_embed = False
         settings = self.store.get()
-        if settings.wants_embed_artwork():
-            if self._artwork_embed is None and self._artwork_embed_lossless is None:
-                self._prepare_embed_artwork()
-            bits: list[str] = []
-            tip_bits: list[str] = []
-            if settings.embed_artwork and self._artwork_embed is not None:
-                emb = self._artwork_embed
-                bits.append(f'lossy {emb.width}×{emb.height}')
-                tip_bits.append(f'lossy {emb.width}×{emb.height}')
-            if settings.embed_artwork_lossless and self._artwork_embed_lossless is not None:
-                emb_l = self._artwork_embed_lossless
-                bits.append(f'lossless {emb_l.width}×{emb_l.height}')
-                tip_bits.append(f'lossless {emb_l.width}×{emb_l.height}')
-            if bits:
-                self.cover_embed_label.set_text('Embed ' + ' · '.join(bits))
-                self.cover_embed_label.set_tooltip_text(
-                    'Embedded cover size: ' + ' / '.join(tip_bits)
-                )
-                show_embed = True
-        if not show_embed:
-            self.cover_embed_label.set_text('')
-        self.cover_embed_label.set_visible(show_embed)
+        if settings.wants_embed_artwork() and (
+            self._artwork_embed is None and self._artwork_embed_lossless is None
+        ):
+            self._prepare_embed_artwork()
+
+        if settings.embed_artwork and self._artwork_embed is not None:
+            emb = self._artwork_embed
+            self.cover_embed_lossy_label.set_text(f'Lossy {emb.width}×{emb.height}')
+            self.cover_embed_lossy_label.set_tooltip_text(
+                f'Lossy embed size ({emb.width}×{emb.height})'
+            )
+            self.cover_embed_lossy_label.set_visible(True)
+        else:
+            self.cover_embed_lossy_label.set_text('')
+            self.cover_embed_lossy_label.set_visible(False)
+
+        if settings.embed_artwork_lossless and self._artwork_embed_lossless is not None:
+            emb_l = self._artwork_embed_lossless
+            self.cover_embed_lossless_label.set_text(
+                f'Lossless {emb_l.width}×{emb_l.height}'
+            )
+            self.cover_embed_lossless_label.set_tooltip_text(
+                f'Lossless embed size ({emb_l.width}×{emb_l.height})'
+            )
+            self.cover_embed_lossless_label.set_visible(True)
+        else:
+            self.cover_embed_lossless_label.set_text('')
+            self.cover_embed_lossless_label.set_visible(False)
 
     # —— Settings groups (Preferences dialog) ——
 
