@@ -29,6 +29,16 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-17">
       <description>
         <p>
+          0.4.59: Fail closed on AccurateRip lookup/transport errors and
+          empty verify results; treat Copy Image PCM load/slice failures
+          as archival ERROR; put Outcome first in the rip log; clarify
+          require ≥1 AccurateRip MATCH.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.58" date="2026-11-17">
+      <description>
+        <p>
           0.4.58: Distinguish Secure OK from AccurateRip/CTDB verification
           with explicit result tiers; show per-track verify results and
           files kept on archival fail; re-verify skipped existing files;
