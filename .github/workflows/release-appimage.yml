@@ -76,6 +76,11 @@ jobs:
           if ! apt-cache show libfuse2t64 >/dev/null 2>&1; then
             fuse_pkg=libfuse2
           fi
+          # Ubuntu 26.04 renamed libgdk-pixbuf2.0-dev → libgdk-pixbuf-2.0-dev.
+          gdk_pixbuf_dev=libgdk-pixbuf-2.0-dev
+          if ! apt-cache show libgdk-pixbuf-2.0-dev >/dev/null 2>&1; then
+            gdk_pixbuf_dev=libgdk-pixbuf2.0-dev
+          fi
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential \
             curl \
@@ -141,7 +146,7 @@ jobs:
             libgbm-dev \
             libpango1.0-dev \
             libcairo2-dev \
-            libgdk-pixbuf2.0-dev \
+            "$gdk_pixbuf_dev" \
             librsvg2-dev \
             librsvg2-common \
             libappstream-dev \

@@ -29,6 +29,14 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-17">
       <description>
         <p>
+          0.4.61: Fix AppImage CI on Ubuntu 26.04 by installing the
+          renamed libgdk-pixbuf-2.0-dev package.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.60" date="2026-11-17">
+      <description>
+        <p>
           0.4.60: Build AppImages on Ubuntu 26.04 (glibc ≥ 2.43) with
           system Python and current flac; update install docs for the
           new glibc floor.
