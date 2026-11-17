@@ -13,12 +13,14 @@ PREFIX="${1:-${GNOME_PREFIX:-$HOME/.cache/ready2rip-gnome-prefix}}"
 SRC="${GNOME_SRC:-${PREFIX}.src}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 2)}"
 
-# Pin releases that provide Adw.Dialog / ToolbarView / AlertDialog / AboutDialog
-# while remaining reasonably buildable on jammy toolchains.
+# Pin releases that provide Adw.Dialog / ToolbarView / AlertDialog / AboutDialog.
+# On Ubuntu 26.04 the host already ships modern GLib/GTK/Adw, so only GI is
+# typically built into the prefix (for Gio typelibs with DEFAULT_FLAGS).
+# GI ≥ 1.82 is required for Python ≥ 3.12 (no distutils.msvccompiler).
 GLIB_VER="${GLIB_VER:-2.78.6}"
-# GLib 2.78 does not install Gio/GLib typelibs itself — those come from
-# gobject-introspection built against this prefix (must match GLIB_VER).
-GI_VER="${GI_VER:-1.78.1}"
+# GLib does not install Gio/GLib typelibs itself — those come from
+# gobject-introspection built against this prefix (or the host GLib).
+GI_VER="${GI_VER:-1.86.0}"
 GTK_VER="${GTK_VER:-4.14.5}"
 ADW_VER="${ADW_VER:-1.5.3}"
 

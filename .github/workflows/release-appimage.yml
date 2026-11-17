@@ -181,8 +181,9 @@ jobs:
           path: |
             build-appimage/gnome-prefix
             build-appimage/gnome-src
-          # v1 on 26.04: new glibc floor; keep pin aligned with build-gnome-prefix.sh
-          key: gnome-prefix-26.04-${{ matrix.arch }}-v1-glib2.78.6-gi1.78.1-gtk4.14.5-adw1.5.3
+          # v2 on 26.04: GI 1.86 for Python 3.14 (no distutils); keep pin aligned
+          # with build-gnome-prefix.sh.
+          key: gnome-prefix-26.04-${{ matrix.arch }}-v2-glib2.78.6-gi1.86.0-gtk4.14.5-adw1.5.3
 
       - name: Build GNOME prefix
         run: |
