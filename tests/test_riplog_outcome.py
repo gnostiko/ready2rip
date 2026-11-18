@@ -18,8 +18,7 @@ def test_riplog_outcome_footer() -> None:
     )
     log.finish()
     text = log.render()
-    assert 'Require AccurateRip match' in text
-    assert '≥1 track MATCH' in text
+    assert 'require AR match (≥1 MATCH)' in text
     assert 'Outcome: Archival OK · Secure OK · not DB-verified' in text
 
 

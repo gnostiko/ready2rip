@@ -26,7 +26,15 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-11-17">
+    <release version="@APPLICATION_VERSION@" date="2026-11-18">
+      <description>
+        <p>
+          0.4.66: Shorter rip log: one-line header, compact read/encode/tag
+          summary, single burst warning, per-track stats on one line.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.65" date="2026-11-17">
       <description>
         <p>
           0.4.65: Write Encoded by as ready2rip + version and Encoder
