@@ -226,10 +226,11 @@
 
     <key name="add-ripper-tag" type="b">
       <default>true</default>
-      <summary>Write ready2rip and version into the comment tag (Ripper tag)</summary>
+      <summary>Write ready2rip and version into Encoded by (Ripper tag)</summary>
       <description>
-        When enabled, COMMENT / ©cmt receives “ready2rip &lt;version&gt;”.
-        Encoded by / ENCODER / ©too always records the codec tool and its version.
+        When enabled, Encoded by (ENCODED-BY / TENC / ©enc) receives
+        “ready2rip &lt;version&gt;”. Encoder (ENCODER / TSSE / ©too) always
+        records the codec tool and its version.
       </description>
     </key>
 

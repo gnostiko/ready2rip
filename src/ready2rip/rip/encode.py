@@ -560,7 +560,7 @@ def _qaac_version_label() -> str:
 
 @lru_cache(maxsize=16)
 def encoder_tag_for_format(fmt: str) -> str:
-    """Encoded-by string: encoder name + version for *fmt* (always written)."""
+    """Encoder tag string: codec tool name + version for *fmt* (always written)."""
     key = (fmt or '').strip().lower()
     if key == 'flac':
         return _flac_version_label()

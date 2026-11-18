@@ -396,8 +396,10 @@ class RipLog:
             '(no gain, EQ, fade, remix, or forced resample before encode)'
         )
         lines.append('Add tags                        : Yes')
-        lines.append('Encoded by tag                   : Yes (codec tool + version)')
-        lines.append(f'Ripper tag (comment)             : {"Yes" if self.add_ripper_tag else "No"}')
+        lines.append('Encoder tag                      : Yes (codec tool + version)')
+        lines.append(
+            f'Encoded by tag (ready2rip)        : {"Yes" if self.add_ripper_tag else "No"}'
+        )
         if not self.embed_lyrics:
             lyrics_label = 'No'
         else:

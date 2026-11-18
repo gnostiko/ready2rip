@@ -235,8 +235,8 @@ class RipJob:
     write_rip_log: bool = True
     # Write multi-file (or image) CUE sheet after a secure rip (lossless only).
     write_cue_file: bool = True
-    # Write ready2rip + version into the comment field (Ripper tag preference).
-    # Encoded by / ENCODER / ©too always records the codec tool + version.
+    # Write ready2rip + version into Encoded by (Ripper tag preference).
+    # Encoder / ENCODER / TSSE / ©too always records the codec tool + version.
     add_ripper_tag: bool = True
     # Save lyrics with lossless encodes (master); mode chooses tags / sidecar / both.
     embed_lyrics: bool = True
@@ -1764,8 +1764,8 @@ class RipEngine:
                     artist_style=job.artist_style,
                     m4a_feat_artists=job.m4a_feat_artists,
                     image=tag_as_image,
-                    encoded_by=encoder_tag_for_format(dest.format),
-                    ripper_comment=(ripper_tag_value() if job.add_ripper_tag else None),
+                    encoder=encoder_tag_for_format(dest.format),
+                    encoded_by=(ripper_tag_value() if job.add_ripper_tag else None),
                     embed_lyrics=write_lyrics_tags,
                 )
                 if write_lyrics_files and track_number > 0:

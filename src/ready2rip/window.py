@@ -334,8 +334,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
         self.tags_group = Adw.PreferencesGroup(
             title='Tags',
             description=(
-                'Loudness, lyrics, and ripper comment. '
-                'Encoded by always names the codec'
+                'Loudness, lyrics, and Encoded by (ready2rip). '
+                'Encoder always names the codec'
             ),
         )
         self.disc_group = Adw.PreferencesGroup(title='Disc')
@@ -1452,8 +1452,8 @@ class Ready2RipWindow(Adw.ApplicationWindow):
             (
                 '_ripper_tag_row',
                 'Ripper tag',
-                'Write ready2rip and its version into the comment tag. '
-                'Encoded by always records the codec tool and version',
+                'Write ready2rip and its version into Encoded by. '
+                'Encoder always records the codec tool and version',
                 settings.add_ripper_tag,
                 self._on_ripper_tag_toggled,
             ),

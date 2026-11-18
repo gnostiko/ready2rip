@@ -29,6 +29,14 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-17">
       <description>
         <p>
+          0.4.65: Write Encoded by as ready2rip + version and Encoder
+          as the codec tool; stop putting the ripper identity in Comment.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.64" date="2026-11-17">
+      <description>
+        <p>
           0.4.64: Accept Ubuntu 26.04 SVG pixbuf loader name
           (libpixbufloader_svg.so) when bundling AppImages.
         </p>

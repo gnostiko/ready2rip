@@ -106,7 +106,7 @@ def test_apply_vorbis_writes_date_barcode_isrc() -> None:
     assert 'MUSICBRAINZ_DISCID' not in audio
 
 
-def test_apply_vorbis_encoder_and_ripper_comment() -> None:
+def test_apply_vorbis_encoder_and_encoded_by() -> None:
     audio: dict[str, list[str]] = {}
     TagWriter()._apply_vorbis(
         audio,
@@ -117,11 +117,12 @@ def test_apply_vorbis_encoder_and_ripper_comment() -> None:
         track_number=1,
         total_tracks=1,
         album_meta=AlbumMetadata(title='Album', artist='A'),
-        encoded_by='flac 1.4.3',
-        ripper_comment='ready2rip 0.4.38',
+        encoder='flac 1.4.3',
+        encoded_by='ready2rip 0.4.65',
     )
     assert audio['ENCODER'] == ['flac 1.4.3']
-    assert audio['COMMENT'] == ['ready2rip 0.4.38']
+    assert audio['ENCODED-BY'] == ['ready2rip 0.4.65']
+    assert 'COMMENT' not in audio
 
     TagWriter()._apply_vorbis(
         audio,
@@ -132,10 +133,11 @@ def test_apply_vorbis_encoder_and_ripper_comment() -> None:
         track_number=1,
         total_tracks=1,
         album_meta=AlbumMetadata(title='Album', artist='A'),
-        encoded_by='LAME 3.100',
-        ripper_comment=None,
+        encoder='LAME 3.100',
+        encoded_by=None,
     )
     assert audio['ENCODER'] == ['LAME 3.100']
+    assert 'ENCODED-BY' not in audio
     assert 'COMMENT' not in audio
 
 

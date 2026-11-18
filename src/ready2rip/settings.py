@@ -263,8 +263,8 @@ class AppSettings:
     apply_replaygain: bool = True
     # iTunNORM Sound Check on iPod-compatible formats (MP3/M4A/AIFF/WAV).
     write_sound_check: bool = True
-    # Write ready2rip + version into COMMENT / ©cmt (Ripper tag).
-    # Encoded by / ENCODER / ©too always uses the codec tool + version.
+    # Write ready2rip + version into Encoded by (Ripper tag).
+    # Encoder / ENCODER / TSSE / ©too always uses the codec tool + version.
     add_ripper_tag: bool = True
     # Fetch lyrics from LRCLIB after a successful album match.
     fetch_lyrics: bool = False
