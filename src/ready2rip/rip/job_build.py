@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ready2rip.rip.encode_dest import normalize_encode_format
 from ready2rip.rip.engine_types import RipJob
@@ -23,11 +23,10 @@ if TYPE_CHECKING:
     from ready2rip.artwork.fetch import ArtworkImage
     from ready2rip.disc.probe import DiscInfo
     from ready2rip.metadata.models import AlbumMetadata
-    from ready2rip.settings import AppSettings
 
 
 def job_from_settings(
-    settings: AppSettings,
+    settings: Any,
     *,
     track_numbers: list[int],
     device: str | None = None,

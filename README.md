@@ -103,8 +103,8 @@ Release assets for **x86_64** and **aarch64**:
 ### AppImage
 
 ```bash
-chmod +x ready2rip-0.4.67-x86_64.AppImage   # or …-aarch64.AppImage
-./ready2rip-0.4.67-x86_64.AppImage
+chmod +x ready2rip-0.4.68-x86_64.AppImage   # or …-aarch64.AppImage
+./ready2rip-0.4.68-x86_64.AppImage
 ```
 
 Needs a matching CPU arch, **glibc ≥ 2.43** (built on Ubuntu 26.04), `cdrom` group access, **fuse3** (`fusermount3`), and a normal graphics stack. Use [Gear Lever](https://github.com/mijorus/gearlever) for menu icons and updates. Older hosts should use the deb/rpm packages or a prior AppImage release.
@@ -116,20 +116,20 @@ sudo apt install fuse3
 If mount fails with `Permission denied` on Ubuntu 25.10+:
 
 ```bash
-./ready2rip-0.4.67-x86_64.AppImage --appimage-extract-and-run
+./ready2rip-0.4.68-x86_64.AppImage --appimage-extract-and-run
 # or: sudo aa-complain fusermount3
 ```
 
 ### Debian / Ubuntu
 
 ```bash
-sudo apt install ./ready2rip_0.4.67-1_amd64.deb   # or _arm64.deb
+sudo apt install ./ready2rip_0.4.68-1_amd64.deb   # or _arm64.deb
 ```
 
 ### Fedora / RPM
 
 ```bash
-sudo dnf install ./ready2rip-0.4.67-1.x86_64.rpm   # or .aarch64.rpm
+sudo dnf install ./ready2rip-0.4.68-1.x86_64.rpm   # or .aarch64.rpm
 ```
 
 ## Develop from source

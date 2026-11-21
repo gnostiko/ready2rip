@@ -1,9 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""SettingsStore snapshot cache behaviour."""
+"""SettingsStore snapshot cache behaviour (requires PyGObject)."""
 
 from __future__ import annotations
 
-from ready2rip.settings import SettingsStore
+import pytest
+
+gi = pytest.importorskip('gi')
+gi.require_version('Gio', '2.0')
+gi.require_version('GLib', '2.0')
+
+from ready2rip.settings import SettingsStore  # noqa: E402
 
 
 def test_settings_store_update_visible_on_next_get() -> None:

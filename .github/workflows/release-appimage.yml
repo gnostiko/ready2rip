@@ -62,14 +62,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: x86_64
-            runner: ubuntu-26.04
-          - arch: aarch64
-            runner: ubuntu-26.04-arm
-
-    # PRs: x86_64 smoke only (aarch64 is covered on tags/schedule).
-    if: github.event_name != 'pull_request' || matrix.arch == 'x86_64'
+        # PRs: x86_64 smoke only. Tags/schedule/manual also build aarch64.
+        # (Job-level ``if`` cannot use the matrix context.)
+        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"arch":"x86_64","runner":"ubuntu-26.04"}]') || fromJSON('[{"arch":"x86_64","runner":"ubuntu-26.04"},{"arch":"aarch64","runner":"ubuntu-26.04-arm"}]') }}
 
     name: AppImage ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
