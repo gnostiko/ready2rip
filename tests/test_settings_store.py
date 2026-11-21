@@ -9,7 +9,7 @@ gi = pytest.importorskip('gi')
 gi.require_version('Gio', '2.0')
 gi.require_version('GLib', '2.0')
 
-from ready2rip.settings import SettingsStore  # noqa: E402
+from ready2rip.settings import SettingsStore
 
 
 def test_settings_store_update_visible_on_next_get() -> None:
