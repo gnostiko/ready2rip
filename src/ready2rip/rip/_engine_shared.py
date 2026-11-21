@@ -139,6 +139,8 @@ from ready2rip.rip.secure import (
     SECURE_MIN_WAV_RATIO,
     SECURE_TEST_COPY_RETRIES,
     burst_paranoia_flags,
+    normal_paranoia_flags,
+    paranoia_flags_for_mode,
     secure_paranoia_flags,
     wav_size_minimum,
 )

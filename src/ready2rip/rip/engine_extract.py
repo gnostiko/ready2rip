@@ -898,8 +898,9 @@ class ExtractMixin:
         max_retries = max(0, int(job.test_copy_max_retries))
         attempts = 1 + max_retries if job.test_and_copy else 1
 
-        # Archival dual-pass uses secure; Normal uses repair-tolerant paranoia.
-        final_mode = 'secure' if job.test_and_copy else job_extract_mode(job)
+        # Archival dual-pass → secure (-X); Normal → repair-tolerant; Burst handled above.
+        extract_mode = job_extract_mode(job)
+        final_mode = 'secure' if job.test_and_copy else extract_mode
         test_mode = ''
         copy_mode = ''
         test_crc = ''
@@ -1044,7 +1045,8 @@ class ExtractMixin:
                     expected_bytes=expected,
                     min_ratio=job.min_wav_size_ratio,
                     burst_fallback=False if job.test_and_copy else job.burst_fallback,
-                    force_mode='secure' if job.test_and_copy else None,
+                    # Archival T&C stays secure-only; Normal/Burst use their own flags.
+                    force_mode='secure' if job.test_and_copy else extract_mode,
                     sample_offset=job.sample_offset,
                     on_burst=None
                     if job.test_and_copy
@@ -1295,6 +1297,8 @@ class ExtractMixin:
         if not test_and_copy or not extracted.dual_pass:
             if extracted.mode == 'burst':
                 return 'burst (-Z, no test & copy)'
+            if extracted.mode == 'normal':
+                return 'normal (paranoia, repair allowed)'
             return 'secure (single pass)'
         test_m = extracted.test_mode or 'secure'
         copy_m = extracted.copy_mode or extracted.mode or 'secure'
@@ -1394,10 +1398,14 @@ class ExtractMixin:
         from neighbors).
 
         *force_mode*:
-          - ``None`` — secure first, optional ``-Z`` on extract failure
-          - ``'burst'`` — burst only (used after test/copy CRC mismatch)
-          - ``'secure'`` — secure only (no burst)
+          - ``None`` — archival secure first, optional ``-Z`` on extract failure
+          - ``'burst'`` — burst only (``-Z``)
+          - ``'secure'`` — archival secure only (``-X``, no burst)
+          - ``'normal'`` — paranoia with repair (no ``-X``)
         """
+        primary_mode = (
+            force_mode if force_mode in ('secure', 'normal', 'burst') else 'secure'
+        )
         edge = _job_per_track_overread_span(job, track_number)
         if edge is not None:
             read_start, read_end, toc_expected = edge
@@ -1411,8 +1419,8 @@ class ExtractMixin:
                 expected_bytes=assert_expected,
                 progress_expected_bytes=progress_bytes,
                 min_ratio=min_ratio,
-                burst_fallback=burst_fallback and force_mode != 'secure',
-                force_mode=force_mode,
+                burst_fallback=burst_fallback and primary_mode != 'secure',
+                force_mode=primary_mode,
                 sample_offset=sample_offset,
                 on_burst=on_burst,
                 on_extract_progress=on_extract_progress,
@@ -1421,17 +1429,17 @@ class ExtractMixin:
                 trim_wav_to_expected(wav_path, int(assert_expected))
             return mode, stats
 
-        secure_timeout = _extract_timeout(expected_bytes, mode='secure')
+        primary_timeout = _extract_timeout(expected_bytes, mode=primary_mode)
         burst_timeout = _extract_timeout(expected_bytes, mode='burst')
         expected_frames = max(0, int(expected_sectors)) * FRAMES_PER_SECTOR
 
-        def run_secure() -> ParanoiaStats:
+        def run_primary() -> ParanoiaStats:
             return self._run_cdparanoia(
                 device,
                 track_number,
                 wav_path,
-                mode='secure',
-                timeout=secure_timeout,
+                mode=primary_mode if primary_mode != 'burst' else 'secure',
+                timeout=primary_timeout,
                 allow_nonzero=True,
                 sample_offset=sample_offset,
                 on_extract_progress=on_extract_progress,
@@ -1453,7 +1461,7 @@ class ExtractMixin:
                 expected_bytes=expected_bytes,
             )
 
-        if force_mode == 'burst':
+        if primary_mode == 'burst':
             if on_burst is not None:
                 on_burst()
             try:
@@ -1476,8 +1484,9 @@ class ExtractMixin:
             track_number=track_number,
             expected_bytes=expected_bytes,
             min_ratio=min_ratio,
-            burst_fallback=burst_fallback and force_mode != 'secure',
-            run_secure=run_secure,
+            burst_fallback=burst_fallback and primary_mode != 'secure',
+            primary_mode=primary_mode,
+            run_primary=run_primary,
             run_burst=run_burst,
             on_burst=on_burst,
             what=f'track {track_number}',
@@ -1549,8 +1558,11 @@ class ExtractMixin:
         *progress_expected_bytes* should match the actual read span when
         overread widens the extract (defaults to *expected_bytes*).
         """
+        primary_mode = (
+            force_mode if force_mode in ('secure', 'normal', 'burst') else 'secure'
+        )
         if timeout_secure is None:
-            timeout_secure = _extract_timeout(expected_bytes, mode='secure')
+            timeout_secure = _extract_timeout(expected_bytes, mode=primary_mode)
         if timeout_burst is None:
             timeout_burst = _extract_timeout(expected_bytes, mode='burst')
         expected_frames = max(0, int(end_sector) - int(start_sector)) * FRAMES_PER_SECTOR
@@ -1558,13 +1570,13 @@ class ExtractMixin:
             expected_bytes if progress_expected_bytes is None else progress_expected_bytes
         )
 
-        def run_secure() -> ParanoiaStats:
+        def run_primary() -> ParanoiaStats:
             return self._run_cdparanoia_span(
                 device,
                 start_sector,
                 end_sector,
                 wav_path,
-                mode='secure',
+                mode=primary_mode if primary_mode != 'burst' else 'secure',
                 timeout=timeout_secure,
                 allow_nonzero=True,
                 sample_offset=sample_offset,
@@ -1588,7 +1600,7 @@ class ExtractMixin:
                 expected_bytes=progress_bytes,
             )
 
-        if force_mode == 'burst':
+        if primary_mode == 'burst':
             if on_burst is not None:
                 on_burst()
             try:
@@ -1611,8 +1623,9 @@ class ExtractMixin:
             track_number=0,
             expected_bytes=expected_bytes,
             min_ratio=min_ratio,
-            burst_fallback=burst_fallback and force_mode != 'secure',
-            run_secure=run_secure,
+            burst_fallback=burst_fallback and primary_mode != 'secure',
+            primary_mode=primary_mode,
+            run_primary=run_primary,
             run_burst=run_burst,
             on_burst=on_burst,
             what=f'span [{start_sector}, {end_sector})',
@@ -1626,19 +1639,21 @@ class ExtractMixin:
         expected_bytes: int | None,
         min_ratio: float,
         burst_fallback: bool,
-        run_secure: Callable[[], ParanoiaStats],
+        primary_mode: str,
+        run_primary: Callable[[], ParanoiaStats],
         run_burst: Callable[[], ParanoiaStats],
         on_burst: Callable[[], None] | None,
         what: str,
     ) -> tuple[str, ParanoiaStats]:
-        """Secure extract first; on incomplete/failure, optional ``-Z`` burst."""
-        secure_err: str | None = None
-        secure_stats = ParanoiaStats()
+        """Primary extract first; on incomplete/failure, optional ``-Z`` burst."""
+        primary_err: str | None = None
+        primary_stats = ParanoiaStats()
+        mode_label = primary_mode if primary_mode in ('secure', 'normal') else 'secure'
 
-        # Prefer a complete secure WAV even when cdparanoia exits non-zero
+        # Prefer a complete primary WAV even when cdparanoia exits non-zero
         # (e.g. -X after exhausted retries — file may still be full length).
         try:
-            secure_stats = run_secure()
+            primary_stats = run_primary()
             self._assert_wav_ok(
                 wav_path,
                 track_number,
@@ -1647,19 +1662,20 @@ class ExtractMixin:
             )
             # -X abort / hard skip with incomplete recovery: treat as failure
             # even when the file is large enough to pass the size check.
-            if self._secure_pass_needs_burst(secure_stats, wav_path, expected_bytes):
+            if self._secure_pass_needs_burst(primary_stats, wav_path, expected_bytes):
                 raise RuntimeError(
-                    f'Secure pass aborted or incomplete after skips (exit {secure_stats.exit_code})'
+                    f'{mode_label.capitalize()} pass aborted or incomplete after skips '
+                    f'(exit {primary_stats.exit_code})'
                 )
-            return 'secure', secure_stats
+            return mode_label, primary_stats
         except Exception as exc:
             if self._cancelled:
                 raise
-            secure_err = str(exc)
-            log.warning('Secure rip failed for %s: %s', what, secure_err)
-            # Keep a full-size secure file if we already have one *and*
+            primary_err = str(exc)
+            log.warning('%s rip failed for %s: %s', mode_label.capitalize(), what, primary_err)
+            # Keep a full-size primary file if we already have one *and*
             # paranoia did not report an abort-with-skips situation.
-            if not self._secure_pass_needs_burst(secure_stats, wav_path, expected_bytes):
+            if not self._secure_pass_needs_burst(primary_stats, wav_path, expected_bytes):
                 try:
                     self._assert_wav_ok(
                         wav_path,
@@ -1668,15 +1684,16 @@ class ExtractMixin:
                         min_ratio=min_ratio,
                     )
                     log.info(
-                        '%s: accepting secure WAV despite cdparanoia error',
+                        '%s: accepting %s WAV despite cdparanoia error',
                         what,
+                        mode_label,
                     )
-                    return 'secure', secure_stats
+                    return mode_label, primary_stats
                 except Exception:
                     pass
 
         if not burst_fallback:
-            raise RuntimeError(f'Secure rip failed for {what}: {secure_err}')
+            raise RuntimeError(f'{mode_label.capitalize()} rip failed for {what}: {primary_err}')
 
         if on_burst is not None:
             on_burst()
@@ -1698,11 +1715,12 @@ class ExtractMixin:
             )
         except Exception as exc:
             raise RuntimeError(
-                f'Secure and burst rip both failed for {what}. Secure: {secure_err}; burst: {exc}'
+                f'{mode_label.capitalize()} and burst rip both failed for {what}. '
+                f'{mode_label.capitalize()}: {primary_err}; burst: {exc}'
             ) from exc
 
         log.info('%s recovered via burst mode (-Z)', what)
-        combined = secure_stats.merge(burst_stats) if secure_stats.reads else burst_stats
+        combined = primary_stats.merge(burst_stats) if primary_stats.reads else burst_stats
         return 'burst', combined
 
     @staticmethod

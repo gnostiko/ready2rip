@@ -204,7 +204,8 @@ class CopyImageMixin:
                     )
 
                 image_burst_recovered = False
-                if job.burst_mode:
+                image_primary = job_extract_mode(job)
+                if job.burst_mode or image_primary == 'burst':
                     report(RipState.RIPPING, 0.15, 'Burst extracting disc image…')
                     mode, img_stats = _img_span(
                         test_wav,
@@ -216,7 +217,9 @@ class CopyImageMixin:
                     report(RipState.RIPPING, 0.15, 'Extracting disc image…')
                     try:
                         mode, img_stats = _img_span(
-                            test_wav, on_extract_progress=_img_extract_progress
+                            test_wav,
+                            force_mode=image_primary,
+                            on_extract_progress=_img_extract_progress,
                         )
                     except Exception as first_exc:
                         if not job.burst_fallback or self._cancelled:
@@ -289,6 +292,7 @@ class CopyImageMixin:
 
                             mode, retry_stats = _img_span(
                                 test_wav,
+                                force_mode='secure',
                                 on_extract_progress=_img_retry_progress,
                             )
                             img_stats.merge(retry_stats)
@@ -347,7 +351,9 @@ class CopyImageMixin:
                             'Copy pass for disc image…',
                         )
                         copy_mode, copy_stats = _img_span(
-                            copy_wav, on_extract_progress=_img_copy_progress
+                            copy_wav,
+                            force_mode='secure',
+                            on_extract_progress=_img_copy_progress,
                         )
                         img_stats.merge(copy_stats)
                         report(

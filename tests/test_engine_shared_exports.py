@@ -16,6 +16,10 @@ _REQUIRED = (
     '_retag_title',
     '_track_avoid_span',
     '_job_per_track_overread_span',
+    'paranoia_flags_for_mode',
+    'secure_paranoia_flags',
+    'normal_paranoia_flags',
+    'burst_paranoia_flags',
 )
 
 
@@ -23,3 +27,10 @@ def test_extract_mixin_globals_include_private_shared_names() -> None:
     ns = ExtractMixin._extract_track_burst.__globals__
     missing = [name for name in _REQUIRED if name not in ns]
     assert missing == []
+
+
+def test_paranoia_mixin_has_paranoia_flags_for_mode() -> None:
+    from ready2rip.rip.engine_paranoia import ParanoiaMixin
+
+    ns = ParanoiaMixin._paranoia_cmd_base.__globals__
+    assert 'paranoia_flags_for_mode' in ns

@@ -83,10 +83,10 @@ def _extract_timeout(expected_bytes: int | None, *, mode: str) -> int:
         audio_sec = max(1.0, (expected_bytes - 44) / 176400.0)
     else:
         audio_sec = 300.0
-    if mode == 'secure':
-        # Paranoia retries; allow up to ~10× realtime, min 10 min, max 90 min.
+    if mode in ('secure', 'normal', 'archival'):
+        # Full / repair paranoia; allow up to ~10× realtime, min 10 min, max 90 min.
         return int(min(5400, max(600, audio_sec * 10 + 120)))
-    # Burst is faster; still bound by slow drives.
+    # Burst (-Z) is faster; still bound by slow drives.
     return int(min(2400, max(300, audio_sec * 4 + 60)))
 
 
