@@ -61,3 +61,6 @@ from ready2rip.util import validate_device_path
 from ready2rip.window_styles import banner_fill_css
 
 log = logging.getLogger(__name__)
+
+# ``import *`` omits leading-underscore names unless listed in ``__all__``.
+__all__ = [name for name in globals() if not name.startswith('__')]
