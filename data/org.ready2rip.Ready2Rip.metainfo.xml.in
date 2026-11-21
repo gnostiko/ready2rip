@@ -29,6 +29,15 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-21">
       <description>
         <p>
+          0.4.70: Fix Archival/Normal/Burst extract paths (paranoia flags,
+          mixin exports, HTOA mode alignment) so each rip mode uses the
+          correct cdparanoia options.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.69" date="2026-11-21">
+      <description>
+        <p>
           0.4.69: Fixed some bugs.
         </p>
       </description>
