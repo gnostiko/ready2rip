@@ -219,3 +219,23 @@ def eject_drive(
             break
 
     return False, last_err
+
+
+def empty_tray_copy(state: DriveTrayState, device: str) -> tuple[str, str] | None:
+    """Status-page title and description for an empty or missing drive."""
+    if state is DriveTrayState.TRAY_OPEN:
+        return (
+            'Tray open',
+            f'The drive tray is open on {device}. Insert a disc and close the tray.',
+        )
+    if state is DriveTrayState.NO_DISC:
+        return (
+            'No disc',
+            f'Tray is closed but no disc is in {device}. Insert an audio CD.',
+        )
+    if state is DriveTrayState.MISSING:
+        return (
+            'Drive not found',
+            f'Cannot open {device}. Check the optical device path in Settings.',
+        )
+    return None

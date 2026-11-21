@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
+from ready2rip.metadata.models import AlbumMetadata, TrackMetadata
 from ready2rip.tags.writer import (
     TagWriter,
     _album_barcode,

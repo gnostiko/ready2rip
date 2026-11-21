@@ -32,6 +32,7 @@ from ready2rip.settings_defs import (
     DEFAULT_ARTWORK_MAX_SIZE,
     DEFAULT_EXISTING_FILES_POLICY,
     DEFAULT_LYRICS_SAVE_MODE,
+    DEFAULT_RIP_MODE,
     ENCODER_IDS,
     ENCODERS,
     EXISTING_FILE_POLICIES,
@@ -44,12 +45,16 @@ from ready2rip.settings_defs import (
     OPUS_BITRATES,
     QAAC_QUALITIES,
     QAAC_QUALITY_IDS,
+    RIP_MODE_IDS,
+    RIP_MODES,
     WAVPACK_LEVEL_IDS,
     WAVPACK_LEVELS,
     aac_quality_from_bitrate,
+    derive_extract_flags,
     lame_args_for_mp3_quality,
     lyrics_mode_writes_sidecar,
     lyrics_mode_writes_tags,
+    migrate_rip_mode_from_legacy,
     mp3_quality_from_bitrate,
     normalize_aac_quality,
     normalize_also_encode_folder,
@@ -60,6 +65,7 @@ from ready2rip.settings_defs import (
     normalize_lyrics_save_mode,
     normalize_mp3_quality,
     normalize_qaac_quality,
+    normalize_rip_mode,
     normalize_wavpack_level,
     opus_bitrate_label,
     rip_log_aac_quality,
@@ -88,6 +94,7 @@ __all__ = [
     'DEFAULT_ARTWORK_MAX_SIZE',
     'DEFAULT_EXISTING_FILES_POLICY',
     'DEFAULT_LYRICS_SAVE_MODE',
+    'DEFAULT_RIP_MODE',
     'ENCODERS',
     'ENCODER_IDS',
     'EXISTING_FILE_POLICIES',
@@ -100,6 +107,8 @@ __all__ = [
     'OPUS_BITRATES',
     'QAAC_QUALITIES',
     'QAAC_QUALITY_IDS',
+    'RIP_MODES',
+    'RIP_MODE_IDS',
     'SCHEMA_ID',
     'WAVPACK_LEVELS',
     'WAVPACK_LEVEL_IDS',
@@ -108,9 +117,11 @@ __all__ = [
     'aac_quality_from_bitrate',
     'default_music_directory',
     'default_output_directory',
+    'derive_extract_flags',
     'lame_args_for_mp3_quality',
     'lyrics_mode_writes_sidecar',
     'lyrics_mode_writes_tags',
+    'migrate_rip_mode_from_legacy',
     'mp3_quality_from_bitrate',
     'normalize_aac_quality',
     'normalize_also_encode_folder',
@@ -122,6 +133,7 @@ __all__ = [
     'normalize_lyrics_save_mode',
     'normalize_mp3_quality',
     'normalize_qaac_quality',
+    'normalize_rip_mode',
     'normalize_wavpack_level',
     'opus_bitrate_label',
     'rip_log_aac_quality',
@@ -134,6 +146,65 @@ log = logging.getLogger(__name__)
 
 SCHEMA_ID = 'org.ready2rip.Ready2Rip'
 _SCHEMA_XML = 'org.ready2rip.Ready2Rip.gschema.xml'
+
+# attr → (gschema-key, kind) — single map for SettingsStore.update().
+SETTINGS_KEY_MAP: dict[str, tuple[str, str]] = {
+    'device': ('device', 'string'),
+    'color_scheme': ('color-scheme', 'string'),
+    'output_directory': ('output-directory', 'string'),
+    'encode_format': ('encode-format', 'string'),
+    'flac_compression': ('flac-compression', 'int'),
+    'wavpack_compression': ('wavpack-compression', 'string'),
+    'mp3_quality': ('mp3-quality', 'string'),
+    'aac_quality': ('aac-quality', 'string'),
+    'aac_bitrate': ('aac-bitrate', 'int'),
+    'qaac_quality': ('qaac-quality', 'string'),
+    'opus_bitrate': ('opus-bitrate', 'int'),
+    'also_encode': ('also-encode', 'bool'),
+    'also_encode_format': ('also-encode-format', 'string'),
+    'also_encode_folder': ('also-encode-folder', 'string'),
+    'also_encode_directory': ('also-encode-directory', 'string'),
+    'apply_replaygain': ('apply-replaygain', 'bool'),
+    'write_sound_check': ('write-sound-check', 'bool'),
+    'add_ripper_tag': ('add-ripper-tag', 'bool'),
+    'fetch_lyrics': ('fetch-lyrics', 'bool'),
+    'embed_lyrics': ('embed-lyrics', 'bool'),
+    'lyrics_save_mode': ('lyrics-save-mode', 'string'),
+    'embed_artwork': ('embed-artwork', 'bool'),
+    'embed_artwork_lossless': ('embed-artwork-lossless', 'bool'),
+    'fetch_artwork': ('fetch-artwork', 'bool'),
+    'artwork_source_itunes': ('artwork-source-itunes', 'bool'),
+    'artwork_source_caa': ('artwork-source-caa', 'bool'),
+    'artwork_max_size': ('artwork-max-size', 'int'),
+    'artwork_max_size_lossless': ('artwork-max-size-lossless', 'int'),
+    'use_musicbrainz': ('use-musicbrainz', 'bool'),
+    'use_freedb': ('use-freedb', 'bool'),
+    'auto_lookup_metadata': ('auto-lookup-metadata', 'bool'),
+    'filename_template': ('filename-template', 'string'),
+    'album_folder_template': ('album-folder-template', 'string'),
+    'artist_style': ('artist-style', 'string'),
+    'm4a_feat_artists': ('m4a-feat-artists', 'bool'),
+    'verify_accuraterip': ('verify-accuraterip', 'bool'),
+    'verify_ctdb': ('verify-ctdb', 'bool'),
+    'submit_ctdb': ('submit-ctdb', 'bool'),
+    'require_db_match': ('require-db-match', 'bool'),
+    'archival_strict': ('archival-strict', 'bool'),
+    'drive_sample_offset': ('drive-sample-offset', 'int'),
+    'drive_offset_configured': ('drive-offset-configured', 'bool'),
+    'drive_offset_device': ('drive-offset-device', 'string'),
+    'rip_mode': ('rip-mode', 'string'),
+    'burst_mode': ('burst-mode', 'bool'),
+    'burst_fallback': ('burst-fallback', 'bool'),
+    'write_rip_log': ('write-rip-log', 'bool'),
+    'write_cue_file': ('write-cue-file', 'bool'),
+    'test_and_copy': ('test-and-copy', 'bool'),
+    'rip_htoa': ('rip-htoa', 'bool'),
+    'rip_data_tracks': ('rip-data-tracks', 'bool'),
+    'copy_image': ('copy-image', 'bool'),
+    'existing_files': ('existing-files', 'string'),
+    'auto_rip': ('auto-rip', 'bool'),
+    'auto_eject': ('auto-eject', 'bool'),
+}
 
 
 def _get_bool(settings: Gio.Settings, key: str, default: bool) -> bool:
@@ -299,15 +370,20 @@ class AppSettings:
     submit_ctdb: bool = False
     # Fail archival when AccurateRip is enabled but zero tracks MATCH.
     require_db_match: bool = False
+    # Fail archival on AccurateRip/CTDB mismatches (default: soft / notes only).
+    archival_strict: bool = False
     drive_sample_offset: int = 0
     drive_offset_configured: bool = False
     drive_offset_device: str = ''
-    # Full-disc -Z extract (no secure paranoia / test & copy).
+    # archival | normal | burst — derived flags below stay for engine/compat.
+    rip_mode: str = DEFAULT_RIP_MODE
+    # Full-disc -Z extract (no secure paranoia / test & copy). Legacy/derived.
     burst_mode: bool = False
     burst_fallback: bool = False
     write_rip_log: bool = True
     # Multi-file .cue sheet for secure/accurate rips.
     write_cue_file: bool = True
+    # Dual-pass CRC. Legacy/derived from rip_mode=archival.
     test_and_copy: bool = True
     rip_htoa: bool = True
     # Raw 2352-byte .bin for mixed-mode / CD-Extra data tracks.
@@ -406,12 +482,56 @@ def _schema_source() -> Gio.SettingsSchemaSource | None:
     return default
 
 
+def _normalize_string_setting(
+    attr: str, value: str, current: AppSettings
+) -> tuple[str, AppSettings]:
+    """Normalize a string preference and mirror related fields on *current*."""
+    if attr == 'mp3_quality':
+        value = normalize_mp3_quality(value)
+        current = replace(current, mp3_quality=value)
+    elif attr == 'wavpack_compression':
+        value = normalize_wavpack_level(value)
+        current = replace(current, wavpack_compression=value)
+    elif attr == 'aac_quality':
+        value = normalize_aac_quality(value)
+        current = replace(current, aac_quality=value)
+        if value.startswith('cbr') and value[3:].isdigit():
+            current = replace(current, aac_bitrate=int(value[3:]))
+    elif attr == 'qaac_quality':
+        value = normalize_qaac_quality(value)
+        current = replace(current, qaac_quality=value)
+    elif attr == 'artist_style':
+        value = normalize_artist_style(value)
+        current = replace(current, artist_style=value)
+    elif attr == 'encode_format':
+        value = normalize_encode_format(value)
+        current = replace(current, encode_format=value)
+    elif attr == 'also_encode_format':
+        value = normalize_also_encode_format(value)
+        current = replace(current, also_encode_format=value)
+    elif attr == 'also_encode_folder':
+        value = normalize_also_encode_folder(value)
+        current = replace(current, also_encode_folder=value)
+    elif attr == 'lyrics_save_mode':
+        value = normalize_lyrics_save_mode(value)
+        current = replace(current, lyrics_save_mode=value)
+    elif attr == 'existing_files':
+        value = normalize_existing_files_policy(value)
+        current = replace(current, existing_files=value)
+    elif attr == 'rip_mode':
+        value = normalize_rip_mode(value)
+        current = replace(current, rip_mode=value)
+    return value, current
+
+
 class SettingsStore:
     """Read/write GSettings when the schema is available; else memory defaults."""
 
     def __init__(self) -> None:
         self._settings = self._open_settings()
         self._memory = AppSettings()
+        # Cached snapshot; invalidated by update() (and rebuilt after migrations).
+        self._snapshot: AppSettings | None = None
 
     @staticmethod
     def _open_settings() -> Gio.Settings | None:
@@ -423,7 +543,15 @@ class SettingsStore:
             return None
         return Gio.Settings.new_full(schema, None, None)
 
+    def _cache_snapshot(self, snap: AppSettings) -> AppSettings:
+        """Store an immutable-ish copy and return a caller-owned copy."""
+        self._snapshot = replace(snap)
+        return replace(self._snapshot)
+
     def get(self) -> AppSettings:
+        if self._snapshot is not None:
+            return replace(self._snapshot)
+
         s = self._settings
         if s is None:
             snap = replace(self._memory)
@@ -489,9 +617,15 @@ class SettingsStore:
                 verify_ctdb=_get_bool(s, 'verify-ctdb', True),
                 submit_ctdb=_get_bool(s, 'submit-ctdb', False),
                 require_db_match=_get_bool(s, 'require-db-match', False),
+                archival_strict=_get_bool(s, 'archival-strict', False),
                 drive_sample_offset=s.get_int('drive-sample-offset'),
                 drive_offset_configured=s.get_boolean('drive-offset-configured'),
                 drive_offset_device=s.get_string('drive-offset-device'),
+                rip_mode=migrate_rip_mode_from_legacy(
+                    burst_mode=_get_bool(s, 'burst-mode', False),
+                    test_and_copy=_get_bool(s, 'test-and-copy', True),
+                    stored=_get_string(s, 'rip-mode', ''),
+                ),
                 burst_mode=_get_bool(s, 'burst-mode', False),
                 burst_fallback=s.get_boolean('burst-fallback'),
                 write_rip_log=s.get_boolean('write-rip-log'),
@@ -510,8 +644,30 @@ class SettingsStore:
         if not snap.output_directory.strip():
             snap.output_directory = default_output_directory()
 
+        # Keep derived extract flags aligned with rip_mode.
+        snap.rip_mode, snap.burst_mode, snap.test_and_copy = derive_extract_flags(
+            snap.rip_mode
+        )
+
         # Persist migrated naming defaults / primary format when legacy.
         if s is not None:
+            try:
+                stored_mode = (s.get_string('rip-mode') or '').strip().lower()
+            except Exception:
+                stored_mode = ''
+            if snap.rip_mode != stored_mode:
+                try:
+                    s.set_string('rip-mode', snap.rip_mode)
+                except Exception:
+                    pass
+            # Mirror derived legacy keys so older readers stay consistent.
+            try:
+                if s.get_boolean('burst-mode') != snap.burst_mode:
+                    s.set_boolean('burst-mode', snap.burst_mode)
+                if s.get_boolean('test-and-copy') != snap.test_and_copy:
+                    s.set_boolean('test-and-copy', snap.test_and_copy)
+            except Exception:
+                pass
             stored_folder = (s.get_string('album-folder-template') or '').strip()
             if snap.album_folder_template != stored_folder:
                 s.set_string('album-folder-template', snap.album_folder_template)
@@ -548,122 +704,63 @@ class SettingsStore:
                 )
             except Exception:
                 pass
-        return snap
+        return self._cache_snapshot(snap)
 
     def update(self, **kwargs) -> AppSettings:
+        # Force a fresh read before applying changes (migrations / external edits).
+        self._snapshot = None
         known = {f.name for f in fields(AppSettings)}
         clean = {k: v for k, v in kwargs.items() if k in known}
+        # Legacy extract bools are mirrors of rip_mode — never accept them alone.
+        legacy_burst = clean.pop('burst_mode', None)
+        legacy_tac = clean.pop('test_and_copy', None)
+        if 'rip_mode' not in clean:
+            if legacy_burst is True:
+                clean['rip_mode'] = 'burst'
+            elif legacy_tac is False:
+                clean['rip_mode'] = 'normal'
+            elif legacy_tac is True:
+                clean['rip_mode'] = 'archival'
         current = replace(self.get(), **clean)
+        mode, burst, tac = derive_extract_flags(current.rip_mode)
+        current = replace(
+            current, rip_mode=mode, burst_mode=burst, test_and_copy=tac
+        )
+        # Always persist the triad together when any extract setting changes.
+        if (
+            'rip_mode' in clean
+            or legacy_burst is not None
+            or legacy_tac is not None
+        ):
+            clean = {
+                **clean,
+                'rip_mode': mode,
+                'burst_mode': burst,
+                'test_and_copy': tac,
+            }
 
         s = self._settings
         if s is None:
             self._memory = current
-            return current
+            return self._cache_snapshot(current)
 
-        key_map = {
-            'device': ('device', 'string'),
-            'color_scheme': ('color-scheme', 'string'),
-            'output_directory': ('output-directory', 'string'),
-            'encode_format': ('encode-format', 'string'),
-            'flac_compression': ('flac-compression', 'int'),
-            'wavpack_compression': ('wavpack-compression', 'string'),
-            'mp3_quality': ('mp3-quality', 'string'),
-            'aac_quality': ('aac-quality', 'string'),
-            'aac_bitrate': ('aac-bitrate', 'int'),
-            'qaac_quality': ('qaac-quality', 'string'),
-            'opus_bitrate': ('opus-bitrate', 'int'),
-            'also_encode': ('also-encode', 'bool'),
-            'also_encode_format': ('also-encode-format', 'string'),
-            'also_encode_folder': ('also-encode-folder', 'string'),
-            'also_encode_directory': ('also-encode-directory', 'string'),
-            'apply_replaygain': ('apply-replaygain', 'bool'),
-            'write_sound_check': ('write-sound-check', 'bool'),
-            'add_ripper_tag': ('add-ripper-tag', 'bool'),
-            'fetch_lyrics': ('fetch-lyrics', 'bool'),
-            'embed_lyrics': ('embed-lyrics', 'bool'),
-            'lyrics_save_mode': ('lyrics-save-mode', 'string'),
-            'embed_artwork': ('embed-artwork', 'bool'),
-            'embed_artwork_lossless': ('embed-artwork-lossless', 'bool'),
-            'fetch_artwork': ('fetch-artwork', 'bool'),
-            'artwork_source_itunes': ('artwork-source-itunes', 'bool'),
-            'artwork_source_caa': ('artwork-source-caa', 'bool'),
-            'artwork_max_size': ('artwork-max-size', 'int'),
-            'artwork_max_size_lossless': ('artwork-max-size-lossless', 'int'),
-            'use_musicbrainz': ('use-musicbrainz', 'bool'),
-            'use_freedb': ('use-freedb', 'bool'),
-            'auto_lookup_metadata': ('auto-lookup-metadata', 'bool'),
-            'filename_template': ('filename-template', 'string'),
-            'album_folder_template': ('album-folder-template', 'string'),
-            'artist_style': ('artist-style', 'string'),
-            'm4a_feat_artists': ('m4a-feat-artists', 'bool'),
-            'verify_accuraterip': ('verify-accuraterip', 'bool'),
-            'verify_ctdb': ('verify-ctdb', 'bool'),
-            'submit_ctdb': ('submit-ctdb', 'bool'),
-            'require_db_match': ('require-db-match', 'bool'),
-            'drive_sample_offset': ('drive-sample-offset', 'int'),
-            'drive_offset_configured': ('drive-offset-configured', 'bool'),
-            'drive_offset_device': ('drive-offset-device', 'string'),
-            'burst_mode': ('burst-mode', 'bool'),
-            'burst_fallback': ('burst-fallback', 'bool'),
-            'write_rip_log': ('write-rip-log', 'bool'),
-            'write_cue_file': ('write-cue-file', 'bool'),
-            'test_and_copy': ('test-and-copy', 'bool'),
-            'rip_htoa': ('rip-htoa', 'bool'),
-            'rip_data_tracks': ('rip-data-tracks', 'bool'),
-            'copy_image': ('copy-image', 'bool'),
-            'existing_files': ('existing-files', 'string'),
-            'auto_rip': ('auto-rip', 'bool'),
-            'auto_eject': ('auto-eject', 'bool'),
-        }
-        # Only write keys that were actually changed (and always-safe full sync
-        # for those attributes).
-        attrs = clean.keys() if clean else key_map.keys()
+        # Only write keys that were actually changed.
+        attrs = clean.keys() if clean else SETTINGS_KEY_MAP.keys()
         for attr in attrs:
-            if attr not in key_map:
+            if attr not in SETTINGS_KEY_MAP:
                 continue
-            gkey, kind = key_map[attr]
+            gkey, kind = SETTINGS_KEY_MAP[attr]
             value = getattr(current, attr)
             if kind == 'string':
-                if attr == 'mp3_quality':
-                    value = normalize_mp3_quality(str(value))
-                    current = replace(current, mp3_quality=value)
-                elif attr == 'wavpack_compression':
-                    value = normalize_wavpack_level(str(value))
-                    current = replace(current, wavpack_compression=value)
-                elif attr == 'aac_quality':
-                    value = normalize_aac_quality(str(value))
-                    current = replace(current, aac_quality=value)
-                    # Keep legacy int in sync for CBR presets.
-                    if value.startswith('cbr') and value[3:].isdigit():
-                        current = replace(current, aac_bitrate=int(value[3:]))
-                        try:
-                            s.set_int('aac-bitrate', int(value[3:]))
-                        except Exception:
-                            pass
-                elif attr == 'qaac_quality':
-                    value = normalize_qaac_quality(str(value))
-                    current = replace(current, qaac_quality=value)
-                elif attr == 'artist_style':
-                    value = normalize_artist_style(str(value))
-                    current = replace(current, artist_style=value)
-                elif attr == 'encode_format':
-                    value = normalize_encode_format(str(value))
-                    current = replace(current, encode_format=value)
-                elif attr == 'also_encode_format':
-                    value = normalize_also_encode_format(str(value))
-                    current = replace(current, also_encode_format=value)
-                elif attr == 'also_encode_folder':
-                    value = normalize_also_encode_folder(str(value))
-                    current = replace(current, also_encode_folder=value)
-                elif attr == 'lyrics_save_mode':
-                    value = normalize_lyrics_save_mode(str(value))
-                    current = replace(current, lyrics_save_mode=value)
-                elif attr == 'existing_files':
-                    value = normalize_existing_files_policy(str(value))
-                    current = replace(current, existing_files=value)
+                value, current = _normalize_string_setting(attr, str(value), current)
+                if attr == 'aac_quality' and value.startswith('cbr') and value[3:].isdigit():
+                    try:
+                        s.set_int('aac-bitrate', int(value[3:]))
+                    except Exception:
+                        pass
                 s.set_string(gkey, str(value))
             elif kind == 'int':
                 s.set_int(gkey, int(value))
             elif kind == 'bool':
                 s.set_boolean(gkey, bool(value))
-        return current
+        return self._cache_snapshot(current)

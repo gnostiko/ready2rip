@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from ready2rip.metadata.providers import (
+from ready2rip.metadata.cddb_parse import (
     _disc_fields_from_cddb_text,
     _parse_cddb_entry,
 )

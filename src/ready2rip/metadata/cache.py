@@ -14,7 +14,7 @@ from pathlib import Path
 from ready2rip.artwork.fetch import ArtworkImage, image_size
 from ready2rip.disc.discid_util import DiscIdentifiers
 from ready2rip.disc.probe import DiscInfo
-from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
+from ready2rip.metadata.models import AlbumMetadata, TrackMetadata
 from ready2rip.util import ensure_path_under
 
 log = logging.getLogger(__name__)

@@ -35,7 +35,7 @@ def wav_size_minimum(expected_bytes: int, min_ratio: float) -> int:
 
 
 def secure_paranoia_flags() -> list[str]:
-    """cdparanoia argv flags for a secure pass (no span/track)."""
+    """cdparanoia argv flags for archival secure pass (no span/track)."""
     return [
         # One token — "-z" "500" is misparsed as track 500.
         f'--never-skip={SECURE_NEVER_SKIP}',
@@ -47,6 +47,26 @@ def secure_paranoia_flags() -> list[str]:
     ]
 
 
+def normal_paranoia_flags() -> list[str]:
+    """Paranoia with repair/interpolation allowed (no abort-on-skip)."""
+    return [
+        f'--never-skip={SECURE_NEVER_SKIP}',
+        '-o',
+        str(SECURE_MIN_OVERLAP),
+        '-e',
+    ]
+
+
 def burst_paranoia_flags() -> list[str]:
     """Insecure -Z pass (optional recovery only)."""
     return ['-Z', '-e']
+
+
+def paranoia_flags_for_mode(mode: str) -> list[str]:
+    """Flags for extract *mode*: ``secure``, ``normal``, or ``burst``."""
+    key = (mode or '').strip().lower()
+    if key == 'burst':
+        return burst_paranoia_flags()
+    if key == 'normal':
+        return normal_paranoia_flags()
+    return secure_paranoia_flags()

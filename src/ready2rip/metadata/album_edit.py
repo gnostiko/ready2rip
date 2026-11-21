@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
+from ready2rip.metadata.models import AlbumMetadata, TrackMetadata
 
 
 def mark_album_edited(album: AlbumMetadata) -> None:

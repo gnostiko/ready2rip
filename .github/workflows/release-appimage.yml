@@ -32,6 +32,14 @@ name: Release AppImage
 on:
   push:
     tags: ['v*']
+  pull_request:
+    paths:
+      - 'appimage/**'
+      - 'src/**'
+      - 'data/**'
+      - 'meson.build'
+      - 'subprojects/**'
+      - '.github/workflows/release-appimage.yml'
   schedule:
     # Daily 06:00 UTC — AppImage artifact smoke; does not publish a release.
     - cron: '0 6 * * *'
@@ -45,6 +53,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: appimage-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   appimage:
     strategy:
@@ -55,6 +67,9 @@ jobs:
             runner: ubuntu-26.04
           - arch: aarch64
             runner: ubuntu-26.04-arm
+
+    # PRs: x86_64 smoke only (aarch64 is covered on tags/schedule).
+    if: github.event_name != 'pull_request' || matrix.arch == 'x86_64'
 
     name: AppImage ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}

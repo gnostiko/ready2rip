@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
+from ready2rip.metadata.models import AlbumMetadata, TrackMetadata
 from ready2rip.metadata.picker_text import disc_label, subtitle, track_count_mismatch
-from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
 
 
 def test_disc_label_only_for_multi_disc() -> None:

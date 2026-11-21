@@ -12,10 +12,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
 from typing import Any
 
 from ready2rip import config
+from ready2rip.metadata.cddb_parse import (
+    _parse_cddb_entry,
+    _parse_cddb_query_matches,
+)
+from ready2rip.metadata.mb_parse import _mb_primary_genre
+from ready2rip.metadata.models import AlbumMetadata, TrackMetadata
 from ready2rip.util import (
     drain_http_error,
     is_safe_http_url,
@@ -57,60 +62,21 @@ _MB_RELEASE_ID_RE = re.compile(
     re.IGNORECASE,
 )
 
-
-@dataclass
-class TrackMetadata:
-    number: int
-    title: str = ''
-    artist: str = ''
-    musicbrainz_recording_id: str = ''
-    isrc: str = ''
-    # Unsynced lyrics (plain text) and optional LRC; filled by LRCLIB / manual.
-    lyrics: str = ''
-    lyrics_synced: str = ''
-    lyrics_source: str = ''
-
-
-@dataclass
-class AlbumMetadata:
-    """Normalized album/release metadata used by the tagger."""
-
-    title: str = ''
-    artist: str = ''
-    date: str = ''
-    genre: str = ''
-    barcode: str = ''
-    label: str = ''
-    catalog_number: str = ''
-    musicbrainz_release_id: str = ''
-    musicbrainz_release_group_id: str = ''
-    discid: str = ''
-    tracks: list[TrackMetadata] = field(default_factory=list)
-    cover_url: str = ''
-    source: str = ''  # musicbrainz | gnudb | freedb | manual
-    country: str = ''
-    status: str = ''
-    disambiguation: str = ''
-    medium_count: int = 1
-    medium_position: int = 1
-
-    @property
-    def display_label(self) -> str:
-        bits = [self.artist or 'Unknown Artist', self.title or 'Unknown Album']
-        extra = []
-        if self.date:
-            extra.append(self.date[:4] if len(self.date) >= 4 else self.date)
-        if self.genre:
-            extra.append(self.genre)
-        if self.country:
-            extra.append(self.country)
-        if self.disambiguation:
-            extra.append(self.disambiguation)
-        if self.status and self.status.lower() != 'official':
-            extra.append(self.status)
-        if extra:
-            return f'{" – ".join(bits)} ({", ".join(extra)})'
-        return ' – '.join(bits)
+# Re-exported for ``from ready2rip.metadata.providers import …``.
+__all__ = [
+    'GNUDB_BASE',
+    'GNUDB_CGI_URLS',
+    'GNUDB_REST_URLS',
+    'USER_AGENT',
+    'AlbumMetadata',
+    'FreeDBProvider',
+    'MetadataProvider',
+    'MusicBrainzProvider',
+    'TrackMetadata',
+    'fetch_album_from_musicbrainz_link',
+    'lookup_metadata',
+    'parse_musicbrainz_release_id',
+]
 
 
 class MetadataProvider(ABC):
@@ -655,53 +621,6 @@ def _short_network_error(exc: BaseException) -> str:
     return str(exc)
 
 
-def _mb_primary_genre(entity: dict[str, Any] | None) -> str:
-    """Return the single highest-voted MusicBrainz genre name, or empty.
-
-    Prefers official ``genres``; falls back to ``tags`` when genres are absent
-    (skipping year-like tags). MusicBrainz stores names lowercase; we
-    title-case for tags/UI (e.g. ``indie rock`` → ``Indie Rock``).
-    """
-    if not entity:
-        return ''
-    best = _mb_best_named_count(entity.get('genres') or [])
-    if not best:
-        best = _mb_best_named_count(
-            entity.get('tags') or [],
-            skip_years=True,
-        )
-    return best.title() if best else ''
-
-
-def _mb_best_named_count(
-    entries: Any,
-    *,
-    skip_years: bool = False,
-) -> str:
-    """Highest-count ``name`` from a MusicBrainz genres/tags list."""
-    if not isinstance(entries, list):
-        return ''
-    best_name = ''
-    best_count = -1
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        name = str(entry.get('name') or '').strip()
-        if not name:
-            continue
-        if skip_years and re.fullmatch(r'\d{4}', name):
-            continue
-        try:
-            count = int(entry.get('count') or 0)
-        except (TypeError, ValueError):
-            count = 0
-        # Highest vote wins; alphabetical tie-break for stability.
-        if count > best_count or (count == best_count and name < best_name):
-            best_count = count
-            best_name = name
-    return best_name
-
-
 def _artist_credit(credit: Any) -> str:
     """Build a multi-artist string from MusicBrainz artist-credit.
 
@@ -740,158 +659,6 @@ def _is_connection_refused(exc: Exception | None) -> bool:
     return 'connection refused' in text or 'errno 111' in text
 
 
-def _parse_cddb_query_matches(
-    text: str,
-    *,
-    fallback_id: str,
-) -> list[tuple[str, str]]:
-    """Parse ``cddb query`` status lines into ``(category, discid)`` pairs."""
-    matches: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith('#') or line == '.':
-            continue
-        parts = line.split()
-        if parts and parts[0].isdigit():
-            parts = parts[1:]
-        if len(parts) < 2:
-            continue
-        category, disc_id = parts[0].lower(), parts[1].lower()
-        if not re.fullmatch(r'[a-z]+', category):
-            continue
-        if not re.fullmatch(r'[0-9a-f]{8}', disc_id):
-            disc_id = fallback_id.lower()
-            if not re.fullmatch(r'[0-9a-f]{8}', disc_id):
-                continue
-        key = (category, disc_id)
-        if key in seen:
-            continue
-        seen.add(key)
-        matches.append(key)
-    return matches
-
-
-def _parse_cddb_entry(
-    text: str,
-    source: str = 'gnudb',
-    *,
-    category: str = '',
-) -> AlbumMetadata | None:
-    """Parse a classic CDDB/FreeDB entry body into AlbumMetadata."""
-    if not text or 'DTITLE=' not in text:
-        return None
-
-    dtitle = ''
-    dyear = ''
-    dgenre = ''
-    extd = ''
-    tracks: dict[int, str] = {}
-
-    for raw in text.splitlines():
-        line = raw.strip()
-        if line.startswith('#'):
-            continue
-        if line.startswith('DTITLE='):
-            dtitle += line[7:]
-        elif line.startswith('DYEAR='):
-            dyear = normalize_release_date(line[6:].strip())
-        elif line.startswith('DGENRE='):
-            dgenre = line[7:].strip()
-        elif line.startswith('EXTD='):
-            extd += line[5:]
-        else:
-            match = re.match(r'TTITLE(\d+)=(.*)', line)
-            if match:
-                idx = int(match.group(1))
-                tracks[idx] = tracks.get(idx, '') + match.group(2)
-
-    artist = ''
-    title = dtitle
-    if ' / ' in dtitle:
-        artist, title = dtitle.split(' / ', 1)
-
-    title = title.strip()
-    medium_position, medium_count, title = _disc_fields_from_cddb_text(
-        title, extd
-    )
-
-    track_list = [
-        TrackMetadata(number=i + 1, title=tracks[i], artist=artist)
-        for i in sorted(tracks)
-    ]
-    if not title and not track_list:
-        return None
-
-    # Prefer DGENRE; fall back to the CDDB category (rock, jazz, …).
-    raw_genre = (dgenre or category or '').strip()
-    genre = raw_genre.title() if raw_genre else ''
-
-    return AlbumMetadata(
-        title=title.strip(),
-        artist=artist.strip(),
-        date=dyear,
-        genre=genre,
-        tracks=track_list,
-        source=source,
-        medium_position=medium_position,
-        medium_count=medium_count,
-    )
-
-
-# FreeDB has no native disc-number field; multi-disc sets encode it in DTITLE/EXTD.
-# Escape \# — (?x) treats bare # as a comment to end-of-line.
-_DISC_MARK_RE = re.compile(
-    r'(?i)'
-    r'[\(\[{]?\s*'
-    r'(?:disc|disk|cd|dvd)\s*(?:#\s*)?'
-    r'(?P<pos>\d{1,2})'
-    r'(?:\s*(?:of|/)\s*(?P<total>\d{1,2}))?'
-    r'\s*[)\]}]?'
-    r'|'
-    r'[\(\[]\s*(?P<pos2>\d{1,2})\s*/\s*(?P<total2>\d{1,2})\s*[)\]]'
-)
-
-
-def _disc_fields_from_cddb_text(
-    title: str, extd: str = ''
-) -> tuple[int, int, str]:
-    """Extract disc N[/M] from a FreeDB title or EXTD blob.
-
-    Returns ``(medium_position, medium_count, cleaned_title)``. Defaults to
-    ``(1, 1, title)`` when no disc marker is found.
-    """
-    position = 1
-    total = 1
-    cleaned = (title or '').strip()
-
-    def _apply(match: re.Match[str], *, strip_from_title: bool) -> None:
-        nonlocal position, total, cleaned
-        pos_raw = match.group('pos') or match.group('pos2')
-        tot_raw = match.group('total') or match.group('total2')
-        if not pos_raw:
-            return
-        pos = int(pos_raw)
-        tot = int(tot_raw) if tot_raw else max(pos, 1)
-        if pos < 1:
-            return
-        position = pos
-        total = max(tot, pos)
-        if strip_from_title:
-            cleaned = (cleaned[: match.start()] + cleaned[match.end() :]).strip()
-            cleaned = re.sub(r'[\s\-–—:/]+$', '', cleaned).strip()
-
-    title_match = _DISC_MARK_RE.search(cleaned)
-    if title_match is not None:
-        _apply(title_match, strip_from_title=True)
-    elif extd:
-        extd_match = _DISC_MARK_RE.search(extd)
-        if extd_match is not None:
-            _apply(extd_match, strip_from_title=False)
-
-    return position, total, cleaned or (title or '').strip()
-
-
 def parse_musicbrainz_release_id(text: str) -> str | None:
     """Extract a MusicBrainz *release* UUID from a URL or bare id.
 
@@ -908,9 +675,10 @@ def parse_musicbrainz_release_id(text: str) -> str | None:
         return None
     raw = str(text).strip()
     # Refuse release-group-only links (different entity).
-    if re.search(r'musicbrainz\.org/release-group/', raw, re.I):
-        if not re.search(r'musicbrainz\.org/release/[0-9a-f-]{36}', raw, re.I):
-            return None
+    if re.search(r'musicbrainz\.org/release-group/', raw, re.I) and not re.search(
+        r'musicbrainz\.org/release/[0-9a-f-]{36}', raw, re.I
+    ):
+        return None
     match = _MB_RELEASE_ID_RE.search(raw)
     if not match:
         return None

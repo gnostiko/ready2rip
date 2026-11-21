@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
+from ready2rip.metadata.models import AlbumMetadata, TrackMetadata
 from ready2rip.paths import (
     DEFAULT_ALBUM_FOLDER_TEMPLATE,
     DEFAULT_FILENAME_TEMPLATE,

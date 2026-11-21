@@ -12,7 +12,7 @@ import logging
 import re
 from dataclasses import dataclass, field, replace
 
-from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
+from ready2rip.metadata.models import AlbumMetadata, TrackMetadata
 
 log = logging.getLogger(__name__)
 

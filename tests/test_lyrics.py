@@ -15,7 +15,7 @@ from ready2rip.metadata.lyrics import (
     plain_from_lrc,
     sectors_to_duration_seconds,
 )
-from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
+from ready2rip.metadata.models import AlbumMetadata, TrackMetadata
 from ready2rip.tags.writer import TagWriter
 
 

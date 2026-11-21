@@ -26,7 +26,17 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-11-18">
+    <release version="@APPLICATION_VERSION@" date="2026-11-21">
+      <description>
+        <p>
+          0.4.67: Archival/Normal/Burst rip modes with lenient Secure OK by
+          default and optional Strict archival; SettingsStore snapshot cache;
+          modular engine/window prefs; job_from_settings; mmap copy-image
+          verify; parallel also-encode; rip scratch dir and AppImage smoke CI.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.66" date="2026-11-18">
       <description>
         <p>
           0.4.66: Shorter rip log: one-line header, compact read/encode/tag

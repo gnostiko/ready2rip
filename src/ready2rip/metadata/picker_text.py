@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from ready2rip.metadata.providers import AlbumMetadata
+from ready2rip.metadata.models import AlbumMetadata
 
 
 def disc_label(album: AlbumMetadata) -> str | None:

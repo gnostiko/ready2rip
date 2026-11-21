@@ -5,12 +5,11 @@ Import cache from ``ready2rip.metadata.cache`` separately to avoid cycles with
 artwork packages.
 """
 
+from ready2rip.metadata.models import AlbumMetadata, TrackMetadata
 from ready2rip.metadata.providers import (
-    AlbumMetadata,
     FreeDBProvider,
     MetadataProvider,
     MusicBrainzProvider,
-    TrackMetadata,
     fetch_album_from_musicbrainz_link,
     lookup_metadata,
     parse_musicbrainz_release_id,

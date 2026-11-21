@@ -31,7 +31,7 @@ and modern tagging.
 2. **Insert an audio CD.** ready2rip detects the disc and shows tracks.
 3. **Drive setup** (first run, or new drive): calibrate **sample offset**. With AccurateRip or CTDB on, ripping is blocked until calibrated.
 4. **Metadata** (optional): auto-lookup, or **Lookup → By disc ID** / paste a MusicBrainz release URL. Edit fields and cover art as needed.
-5. **Settings**: encoder, test & copy, CUE/log, Copy image, HTOA, Existing files, and related options.
+5. **Settings**: encoder, rip mode (Archival / Normal / Burst), CUE/log, Copy image, HTOA, Existing files, and related options.
 6. Press **Rip**. Files land under your output folder using the album/track templates.
 
 ### Secure rip (summary)
@@ -74,15 +74,16 @@ Default layout: `{album_artist}/{dated_album}/{disc_folder}` / `{track:02d} - {t
 
 | Option | Default | Notes |
 |--------|---------|-------|
-| **Test and copy** | On | Two secure passes; matching CRCs required |
+| **Rip mode** | Archival | Archival = secure + test & copy; Normal = paranoia with repair; Burst = `-Z` |
 | **Copy image** | Off | One continuous image; AR + CTDB still verify per track |
 | **Pregap / HTOA** | On | Longer non-silent track-1 pregap → track `00` |
 | **Data tracks** | On | Mixed-mode / CD-Extra as raw `.bin` |
 | **AccurateRip / CTDB** | On | Require calibrated sample offset |
+| **Strict archival** | Off | Fail archival on DB mismatches; off keeps Secure OK with partial AR notes |
 | **Submit to CTDB** | Off | Confirm match or submit new parity |
-| **Burst fallback** | Off | Insecure `-Z` after secure retries fail |
+| **Burst fallback** | Off | Insecure `-Z` after Archival retries fail |
 | **Write rip log / CUE** | On | Log and CUE in the album folder |
-| **Auto-rip / Auto-eject** | Off | Start after detect / eject after success |
+| **Auto-rip / Auto-eject** | Off | Start after detect / eject when a rip finishes |
 
 ### Metadata & art
 
@@ -102,8 +103,8 @@ Release assets for **x86_64** and **aarch64**:
 ### AppImage
 
 ```bash
-chmod +x ready2rip-0.4.66-x86_64.AppImage   # or …-aarch64.AppImage
-./ready2rip-0.4.66-x86_64.AppImage
+chmod +x ready2rip-0.4.67-x86_64.AppImage   # or …-aarch64.AppImage
+./ready2rip-0.4.67-x86_64.AppImage
 ```
 
 Needs a matching CPU arch, **glibc ≥ 2.43** (built on Ubuntu 26.04), `cdrom` group access, **fuse3** (`fusermount3`), and a normal graphics stack. Use [Gear Lever](https://github.com/mijorus/gearlever) for menu icons and updates. Older hosts should use the deb/rpm packages or a prior AppImage release.
@@ -115,20 +116,20 @@ sudo apt install fuse3
 If mount fails with `Permission denied` on Ubuntu 25.10+:
 
 ```bash
-./ready2rip-0.4.66-x86_64.AppImage --appimage-extract-and-run
+./ready2rip-0.4.67-x86_64.AppImage --appimage-extract-and-run
 # or: sudo aa-complain fusermount3
 ```
 
 ### Debian / Ubuntu
 
 ```bash
-sudo apt install ./ready2rip_0.4.66-1_amd64.deb   # or _arm64.deb
+sudo apt install ./ready2rip_0.4.67-1_amd64.deb   # or _arm64.deb
 ```
 
 ### Fedora / RPM
 
 ```bash
-sudo dnf install ./ready2rip-0.4.66-1.x86_64.rpm   # or .aarch64.rpm
+sudo dnf install ./ready2rip-0.4.67-1.x86_64.rpm   # or .aarch64.rpm
 ```
 
 ## Develop from source

@@ -12,7 +12,7 @@ from ready2rip.accuraterip import AccurateRipConfidence, AccurateRipResult
 from ready2rip.ctdb import CtdbConfidence, CtdbResult
 
 if TYPE_CHECKING:
-    from ready2rip.rip.engine import RipJob, RipResult
+    from ready2rip.rip.engine_types import RipJob, RipResult
     from ready2rip.rip.riplog import RipLog
 
 log = logging.getLogger(__name__)
@@ -28,6 +28,76 @@ class OutcomeTiers:
     summary: str = ''
 
 
+def _tracks_csv(nums: list[int]) -> str:
+    return ', '.join(str(n) for n in nums)
+
+
+def _ar_mismatch_tracks(ar_results: list[AccurateRipResult]) -> list[int]:
+    return [
+        r.track_number
+        for r in ar_results
+        if r.confidence == AccurateRipConfidence.MISMATCH
+    ]
+
+
+def _ar_error_tracks(ar_results: list[AccurateRipResult]) -> list[int]:
+    return [
+        r.track_number
+        for r in ar_results
+        if r.confidence == AccurateRipConfidence.ERROR
+    ]
+
+
+def _ctdb_mismatch_tracks(
+    *,
+    ar_results: list[AccurateRipResult],
+    ctdb_results: list[CtdbResult],
+) -> list[int]:
+    """Exact-TOC CTDB conflicts, deferred when AccurateRip already matched."""
+    ar_matched = {
+        r.track_number
+        for r in ar_results
+        if r.confidence == AccurateRipConfidence.MATCH
+    }
+    return [
+        r.track_number
+        for r in ctdb_results
+        if r.confidence == CtdbConfidence.MISMATCH
+        and r.track_number not in ar_matched
+    ]
+
+
+def _ctdb_error_tracks(ctdb_results: list[CtdbResult]) -> list[int]:
+    return [
+        r.track_number
+        for r in ctdb_results
+        if r.confidence == CtdbConfidence.ERROR
+    ]
+
+
+def archival_db_warnings(
+    job: RipJob,
+    *,
+    ar_results: list[AccurateRipResult],
+    ctdb_results: list[CtdbResult],
+) -> list[str]:
+    """Pressing/DB mismatch notes (soft unless ``archival_strict``)."""
+    warnings: list[str] = []
+    if job.verify_accuraterip and ar_results:
+        bad = _ar_mismatch_tracks(ar_results)
+        if bad:
+            warnings.append(
+                f'AccurateRip mismatch on track(s) {_tracks_csv(bad)}'
+            )
+    if job.verify_ctdb and ctdb_results:
+        bad = _ctdb_mismatch_tracks(
+            ar_results=ar_results, ctdb_results=ctdb_results
+        )
+        if bad:
+            warnings.append(f'CTDB mismatch on track(s) {_tracks_csv(bad)}')
+    return warnings
+
+
 def archival_fail_reasons(
     job: RipJob,
     *,
@@ -38,49 +108,36 @@ def archival_fail_reasons(
     ar_lookup_error: str | None = None,
     ctdb_lookup_error: str | None = None,
 ) -> list[str]:
-    """Reasons a finished rip is not archival-grade (fail closed)."""
+    """Reasons a finished rip is not archival-grade.
+
+    Default (lenient): hard-fail on insecure extract / verify infrastructure
+    errors only. AccurateRip/CTDB *mismatches* are soft unless
+    ``job.archival_strict`` is on. ``require_db_match`` still requires ≥1 MATCH.
+    """
     reasons: list[str] = []
     # Intentional Burst mode already opted out of secure extract — do not
     # fail solely because every track used -Z. Fallback burst still fails.
     if burst_tracks and not job.burst_mode:
-        tracks_txt = ', '.join(str(n) for n in burst_tracks)
         reasons.append(
-            f'Insecure burst (-Z) extraction on track(s) {tracks_txt}'
+            f'Insecure burst (-Z) extraction on track(s) '
+            f'{_tracks_csv(burst_tracks)}'
         )
     if skipped_unverified:
-        tracks_txt = ', '.join(str(n) for n in skipped_unverified)
         reasons.append(
-            f'Skipped existing track(s) {tracks_txt} without re-verification'
+            f'Skipped existing track(s) {_tracks_csv(list(skipped_unverified))} '
+            'without re-verification'
         )
     expect_verify = bool(job.track_numbers) or bool(job.copy_image)
     if job.verify_accuraterip:
-        # Lookup failure with no per-track results (verify never ran).
         if ar_lookup_error and not ar_results:
             reasons.append(f'AccurateRip lookup failed: {ar_lookup_error}')
         if ar_results:
-            bad = [
-                r.track_number
-                for r in ar_results
-                if r.confidence == AccurateRipConfidence.MISMATCH
-            ]
-            if bad:
-                reasons.append(
-                    f'AccurateRip mismatch on track(s) '
-                    f'{", ".join(str(n) for n in bad)}'
-                )
-            errors = [
-                r.track_number
-                for r in ar_results
-                if r.confidence == AccurateRipConfidence.ERROR
-            ]
+            errors = _ar_error_tracks(ar_results)
             if errors:
                 reasons.append(
-                    f'AccurateRip error on track(s) '
-                    f'{", ".join(str(n) for n in errors)}'
+                    f'AccurateRip error on track(s) {_tracks_csv(errors)}'
                 )
         elif expect_verify:
-            # Verify was on but no per-track results (e.g. abort before
-            # verify, or a path that skipped appending ERROR entries).
             reasons.append('AccurateRip: verification produced no results')
         if job.require_db_match:
             matches = [
@@ -100,35 +157,17 @@ def archival_fail_reasons(
         if ctdb_lookup_error and not ctdb_results:
             reasons.append(f'CTDB lookup failed: {ctdb_lookup_error}')
         if ctdb_results:
-            # Soft CTDB misses are NOT_IN_DB (fuzzy neighbors). Hard MISMATCH
-            # is exact-TOC CRC conflict — still defer to AccurateRip when it
-            # matched.
-            ar_matched = {
-                r.track_number
-                for r in ar_results
-                if r.confidence == AccurateRipConfidence.MATCH
-            }
-            bad = [
-                r.track_number
-                for r in ctdb_results
-                if r.confidence == CtdbConfidence.MISMATCH
-                and r.track_number not in ar_matched
-            ]
-            if bad:
-                reasons.append(
-                    f'CTDB mismatch on track(s) {", ".join(str(n) for n in bad)}'
-                )
-            errors = [
-                r.track_number
-                for r in ctdb_results
-                if r.confidence == CtdbConfidence.ERROR
-            ]
+            errors = _ctdb_error_tracks(ctdb_results)
             if errors:
-                reasons.append(
-                    f'CTDB error on track(s) {", ".join(str(n) for n in errors)}'
-                )
+                reasons.append(f'CTDB error on track(s) {_tracks_csv(errors)}')
         elif expect_verify:
             reasons.append('CTDB: verification produced no results')
+    if job.archival_strict:
+        reasons.extend(
+            archival_db_warnings(
+                job, ar_results=ar_results, ctdb_results=ctdb_results
+            )
+        )
     return reasons
 
 
@@ -179,7 +218,15 @@ def compute_tiers(
     fail_reasons: list[str],
 ) -> OutcomeTiers:
     """Derive secure / DB / archival tiers and a short summary label."""
-    secure_ok = not bool(burst_tracks) and not bool(job.burst_mode)
+    from ready2rip.settings_defs import normalize_rip_mode
+
+    rip_mode = normalize_rip_mode(job.rip_mode)
+    # Secure OK only for archival dual-pass without burst recovery.
+    secure_ok = (
+        rip_mode == 'archival'
+        and not bool(burst_tracks)
+        and not bool(job.burst_mode)
+    )
     db_verified = _db_verified(job, ar_results=ar_results, ctdb_results=ctdb_results)
     archival_ok = not fail_reasons
     summary = _tier_summary(
@@ -251,10 +298,15 @@ def _tier_summary(
     if not archival_ok:
         return 'Archival fail'
     parts: list[str] = []
+    from ready2rip.settings_defs import normalize_rip_mode
+
+    rip_mode = normalize_rip_mode(job.rip_mode)
     if secure_ok:
         parts.append('Secure OK')
-    elif job.burst_mode:
+    elif job.burst_mode or rip_mode == 'burst':
         parts.append('Burst mode')
+    elif rip_mode == 'normal':
+        parts.append('Normal')
     elif burst_tracks:
         parts.append('Insecure burst')
     if db_verified:
@@ -366,7 +418,7 @@ def finish_result(
     *log_dir* / *album_dir* should be the primary encode album folder. Falls
     back to the first output's parent when needed.
     """
-    from ready2rip.rip.engine import RipResult
+    from ready2rip.rip.engine_types import RipResult
 
     log_path: Path | None = None
     ok_archival = success if archival_ok is None else archival_ok
@@ -425,7 +477,7 @@ def apply_burst_notes(
     if job.copy_image and burst_tracks == [0]:
         subject = 'disc image'
     else:
-        subject = f'track(s) {", ".join(str(n) for n in burst_tracks)}'
+        subject = f'track(s) {_tracks_csv(burst_tracks)}'
     if job.burst_mode:
         msg = (
             f'Burst mode (-Z) on {subject} '
@@ -438,3 +490,60 @@ def apply_burst_notes(
         )
     if msg not in notes:
         notes.append(msg)
+
+
+def append_archival_notes(
+    notes: list[str],
+    *,
+    fail_reasons: list[str],
+    soft_warnings: list[str],
+) -> None:
+    """Merge fail reasons and soft DB warnings into *notes* (idempotent)."""
+    for reason in fail_reasons:
+        if reason not in notes:
+            notes.append(reason)
+    hard = set(fail_reasons)
+    for warn in soft_warnings:
+        if warn in hard:
+            continue
+        note = f'{warn} (archival still OK)'
+        if note not in notes and warn not in notes:
+            notes.append(note)
+
+
+def evaluate_archival(
+    job: RipJob,
+    *,
+    ar_results: list[AccurateRipResult],
+    ctdb_results: list[CtdbResult],
+    burst_tracks: list[int],
+    notes: list[str],
+    skipped_unverified: list[int] | None = None,
+    ar_lookup_error: str | None = None,
+    ctdb_lookup_error: str | None = None,
+) -> tuple[list[str], OutcomeTiers]:
+    """Compute fail reasons + tiers and append notes (burst + archival)."""
+    fail_reasons = archival_fail_reasons(
+        job,
+        ar_results=ar_results,
+        ctdb_results=ctdb_results,
+        burst_tracks=burst_tracks,
+        skipped_unverified=skipped_unverified,
+        ar_lookup_error=ar_lookup_error,
+        ctdb_lookup_error=ctdb_lookup_error,
+    )
+    soft = archival_db_warnings(
+        job, ar_results=ar_results, ctdb_results=ctdb_results
+    )
+    apply_burst_notes(job, burst_tracks=burst_tracks, notes=notes)
+    append_archival_notes(
+        notes, fail_reasons=fail_reasons, soft_warnings=soft
+    )
+    tiers = compute_tiers(
+        job,
+        ar_results=ar_results,
+        ctdb_results=ctdb_results,
+        burst_tracks=burst_tracks,
+        fail_reasons=fail_reasons,
+    )
+    return fail_reasons, tiers

@@ -271,6 +271,46 @@ def normalize_existing_files_policy(value: str | None) -> str:
     return DEFAULT_EXISTING_FILES_POLICY
 
 
+# Extraction profile: archival (secure+test&copy), normal (paranoia+repair), burst (-Z).
+RIP_MODES = (
+    ('archival', 'Archival'),
+    ('normal', 'Normal'),
+    ('burst', 'Burst'),
+)
+RIP_MODE_IDS = frozenset(m[0] for m in RIP_MODES)
+DEFAULT_RIP_MODE = 'archival'
+
+
+def normalize_rip_mode(value: str | None) -> str:
+    raw = (value or '').strip().lower()
+    if raw in RIP_MODE_IDS:
+        return raw
+    return DEFAULT_RIP_MODE
+
+
+def migrate_rip_mode_from_legacy(
+    *,
+    burst_mode: bool,
+    test_and_copy: bool,
+    stored: str | None = None,
+) -> str:
+    """Resolve rip-mode from gschema, falling back to legacy bools once."""
+    raw = (stored or '').strip().lower()
+    if raw in RIP_MODE_IDS:
+        return raw
+    if burst_mode:
+        return 'burst'
+    if test_and_copy:
+        return 'archival'
+    return 'normal'
+
+
+def derive_extract_flags(rip_mode: str | None) -> tuple[str, bool, bool]:
+    """Return ``(rip_mode, burst_mode, test_and_copy)`` for a normalized mode."""
+    mode = normalize_rip_mode(rip_mode)
+    return mode, mode == 'burst', mode == 'archival'
+
+
 # Embed sizes. Lossy caps at 800 px; lossless allows up to 1200 (Roon-friendly).
 DEFAULT_ARTWORK_MAX_SIZE = 600
 ARTWORK_SIZES = (

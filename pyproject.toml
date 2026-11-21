@@ -1,6 +1,6 @@
 [project]
 name = "ready2rip"
-version = "0.4.66"
+version = "0.4.67"
 description = "Secure CD ripper for Linux"
 requires-python = ">=3.11"
 dependencies = [
@@ -41,6 +41,17 @@ ignore = [
 # Vendored EAC Rijndael port: keep upstream shape; dels after table init trip F821.
 [tool.ruff.lint.per-file-ignores]
 "src/ready2rip/eac_rijndael.py" = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+"src/ready2rip/rip/_engine_shared.py" = ["F401", "F403", "E402"]
+"src/ready2rip/rip/engine_copy_image.py" = ["F405"]
+"src/ready2rip/rip/engine_encode.py" = ["F405"]
+"src/ready2rip/rip/engine_extract.py" = ["F405"]
+"src/ready2rip/rip/engine_paranoia.py" = ["F405"]
+"src/ready2rip/rip/engine_verify.py" = ["F405"]
+"src/ready2rip/rip/engine_types.py" = ["F401"]
+"src/ready2rip/ui/_window_shared.py" = ["F401", "F403", "E402"]
+"src/ready2rip/ui/window_drive.py" = ["F405"]
+"src/ready2rip/ui/window_metadata.py" = ["F405"]
+"src/ready2rip/ui/window_rip.py" = ["F405"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

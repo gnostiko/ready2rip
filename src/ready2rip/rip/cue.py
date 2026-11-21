@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ready2rip.disc.probe import DataTrackInfo, DiscInfo, TrackInfo
-from ready2rip.metadata.providers import AlbumMetadata
+from ready2rip.metadata.models import AlbumMetadata
 from ready2rip.paths import sanitize_component, track_meta_for
 
 

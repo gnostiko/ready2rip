@@ -10,7 +10,7 @@ from pathlib import Path
 from ready2rip.artwork.fetch import ArtworkImage
 from ready2rip.disc.probe import DiscInfo, TrackInfo
 from ready2rip.metadata.cache import MetadataCache
-from ready2rip.metadata.providers import AlbumMetadata
+from ready2rip.metadata.models import AlbumMetadata
 from ready2rip.util import MAX_DOWNLOAD_BYTES
 
 

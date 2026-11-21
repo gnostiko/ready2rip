@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
+from ready2rip.metadata.models import AlbumMetadata, TrackMetadata
 from ready2rip.tags.artists import (
     ARTIST_STYLE_SLASH,
     DEFAULT_ARTIST_STYLE,

@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from ready2rip.metadata.album_edit import gap_fill_album, mark_album_edited
-from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
+from ready2rip.metadata.models import AlbumMetadata, TrackMetadata
 
 
 def test_mark_album_edited_annotates_source() -> None:

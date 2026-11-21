@@ -9,7 +9,7 @@ from pathlib import Path
 
 from ready2rip.config import APPLICATION_NAME, APPLICATION_VERSION
 from ready2rip.metadata.lyrics import embed_lyrics_text
-from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
+from ready2rip.metadata.models import AlbumMetadata, TrackMetadata
 from ready2rip.paths import track_meta_for
 from ready2rip.tags.artists import (
     ARTIST_STYLE_FEAT,

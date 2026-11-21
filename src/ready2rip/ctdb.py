@@ -15,7 +15,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-import wave
 import xml.etree.ElementTree as ET
 import zlib
 from dataclasses import dataclass, field
@@ -306,13 +305,9 @@ def compute_track_crc(
 
 def load_cdda_pcm(path: Path) -> bytes:
     """Load raw interleaved LE PCM from a 16-bit stereo 44.1 kHz WAV."""
-    with wave.open(str(path), "rb") as wf:
-        if wf.getnchannels() != 2 or wf.getsampwidth() != 2 or wf.getframerate() != 44100:
-            raise ValueError(
-                f"CTDB requires 16-bit stereo 44.1 kHz WAV, got "
-                f"{wf.getnchannels()}ch {wf.getsampwidth() * 8}bit {wf.getframerate()}Hz"
-            )
-        return wf.readframes(wf.getnframes())
+    from ready2rip.rip.pcm_io import load_cdda_pcm as _load
+
+    return _load(path)
 
 
 def compute_track_crc_wav(

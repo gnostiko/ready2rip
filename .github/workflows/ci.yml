@@ -64,6 +64,7 @@ jobs:
           meson compile -C build
           DESTDIR="${PWD}/install-root" meson install -C build
           test -x install-root/usr/bin/ready2rip
+          test -x install-root/usr/bin/ar_offset_scan
           test -f install-root/usr/share/glib-2.0/schemas/org.ready2rip.Ready2Rip.gschema.xml
           test -f install-root/usr/share/applications/org.ready2rip.Ready2Rip.desktop
           test -f install-root/usr/share/metainfo/org.ready2rip.Ready2Rip.metainfo.xml

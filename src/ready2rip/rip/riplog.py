@@ -15,7 +15,7 @@ from ready2rip import config
 from ready2rip.accuraterip import AccurateRipConfidence, AccurateRipResult
 from ready2rip.ctdb import CtdbConfidence, CtdbResult
 from ready2rip.disc.probe import DiscInfo
-from ready2rip.metadata.providers import AlbumMetadata
+from ready2rip.metadata.models import AlbumMetadata
 from ready2rip.paths import sanitize_component, track_meta_for
 from ready2rip.rip.eac_logcrc import append_eac_checksum
 from ready2rip.rip.encode import encode_command_summary
@@ -84,12 +84,14 @@ class RipLog:
         self.also_encode_format: str = 'mp3'
         self.also_encode_folder: str = 'format_subdir'
         self.also_encode_directory: str = ''
+        self.rip_mode: str = 'archival'
         self.burst_mode: bool = False
         self.burst_fallback: bool = False
         self.verify_accuraterip: bool = True
         self.verify_ctdb: bool = True
         self.submit_ctdb: bool = False
         self.require_db_match: bool = False
+        self.archival_strict: bool = False
         self.apply_replaygain: bool = True
         # Filled by finish_result before write.
         self.outcome_secure_ok: bool | None = None
@@ -143,12 +145,14 @@ class RipLog:
         self.also_encode_format = getattr(job, 'also_encode_format', None) or 'mp3'
         self.also_encode_folder = getattr(job, 'also_encode_folder', None) or 'format_subdir'
         self.also_encode_directory = getattr(job, 'also_encode_directory', None) or ''
+        self.rip_mode = (getattr(job, 'rip_mode', None) or 'archival').strip().lower()
         self.burst_mode = bool(getattr(job, 'burst_mode', False))
         self.burst_fallback = job.burst_fallback
         self.verify_accuraterip = job.verify_accuraterip
         self.verify_ctdb = getattr(job, 'verify_ctdb', True)
         self.submit_ctdb = getattr(job, 'submit_ctdb', False)
         self.require_db_match = bool(getattr(job, 'require_db_match', False))
+        self.archival_strict = bool(getattr(job, 'archival_strict', False))
         self.apply_replaygain = job.apply_replaygain
         self.write_sound_check = bool(getattr(job, 'write_sound_check', True))
         self.add_ripper_tag = bool(getattr(job, 'add_ripper_tag', True))
@@ -247,23 +251,27 @@ class RipLog:
         final_modes = [(t.extract_mode or '').lower() for t in self.tracks if t.number > 0]
         any_burst = any('burst' in m for m in final_modes)
         all_burst = bool(final_modes) and all('burst' in m for m in final_modes)
-        if self.burst_mode or all_burst:
+        rip_mode = (getattr(self, 'rip_mode', '') or '').strip().lower()
+        if self.burst_mode or all_burst or rip_mode == 'burst':
             read_mode = 'Burst (-Z)'
             read_cmd = 'cdparanoia -w -Z -e (-O when calibrated)'
         elif any_burst:
-            read_mode = 'Secure + burst fallback'
+            read_mode = 'Archival + burst fallback'
             read_cmd = 'cdparanoia -w --never-skip=500 -X -o 8 (burst: -Z)'
+        elif rip_mode == 'normal':
+            read_mode = 'Normal'
+            read_cmd = 'cdparanoia -w --never-skip=500 -o 8 (-O when calibrated; repair OK)'
         else:
-            read_mode = 'Secure'
+            read_mode = 'Archival'
             read_cmd = 'cdparanoia -w --never-skip=500 -X -o 8 (-O when calibrated)'
         read_bits = [read_mode]
-        if self.burst_mode:
+        if self.burst_mode or rip_mode == 'burst':
             read_bits.append('no test&copy')
         elif self.test_and_copy:
             read_bits.append(f'test&copy (max {max(0, self.test_copy_max_retries)} CRC retry)')
         else:
             read_bits.append('no test&copy')
-        if self.burst_fallback and not self.burst_mode:
+        if self.burst_fallback and not self.burst_mode and rip_mode != 'burst':
             read_bits.append('burst fallback on')
         if self.defeat_audio_cache:
             read_bits.append('defeat cache')
@@ -373,6 +381,8 @@ class RipLog:
         ]
         if self.require_db_match:
             db_bits.append('require AR match (≥1 MATCH)')
+        if self.archival_strict:
+            db_bits.append('archival strict')
         if self.submit_ctdb:
             db_bits.append('CTDB submit yes')
         if self.ar_status:
@@ -736,7 +746,7 @@ def _format_ctdb_line(ctdb: CtdbResult) -> str:
         return f'CTDB accurately ripped (confidence {ctdb.confidence_count})  [CRC {ctdb.crc}]'
     if ctdb.confidence == CtdbConfidence.MISMATCH:
         return (
-            f'CTDB CRC differs from database entry '
+            f'CTDB CRC differs (possible pressing) '
             f'(confidence {ctdb.confidence_count})  [CRC {ctdb.crc}]'
         )
     if ctdb.confidence == CtdbConfidence.NOT_IN_DB:

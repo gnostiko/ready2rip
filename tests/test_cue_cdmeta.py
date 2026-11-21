@@ -16,7 +16,8 @@ from ready2rip.disc.cdmeta import (
     read_mcn,
 )
 from ready2rip.disc.probe import DiscInfo, TrackInfo
-from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata, _mb_primary_genre
+from ready2rip.metadata.mb_parse import _mb_primary_genre
+from ready2rip.metadata.models import AlbumMetadata, TrackMetadata
 from ready2rip.rip.cue import multi_file_cue_basename, write_multi_file_cue_sheet
 
 

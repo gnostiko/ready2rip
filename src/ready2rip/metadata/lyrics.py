@@ -18,7 +18,7 @@ from typing import Any
 
 from ready2rip.config import APPLICATION_NAME, APPLICATION_VERSION
 from ready2rip.disc.probe import DiscInfo
-from ready2rip.metadata.providers import AlbumMetadata, TrackMetadata
+from ready2rip.metadata.models import AlbumMetadata, TrackMetadata
 from ready2rip.util import drain_http_error, is_safe_http_url, read_limited
 
 log = logging.getLogger(__name__)

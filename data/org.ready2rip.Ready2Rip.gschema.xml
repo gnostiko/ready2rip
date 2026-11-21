@@ -343,6 +343,18 @@
       </description>
     </key>
 
+    <key name="archival-strict" type="b">
+      <default>false</default>
+      <summary>Strict archival (fail on DB mismatch)</summary>
+      <description>
+        Off by default. When enabled, AccurateRip or CTDB CRC mismatches fail
+        archival for the whole rip (classic fail-closed). When off, Secure OK
+        rips with partial DB mismatches still get Archival OK; mismatches are
+        noted in the log and summary (e.g. AR 13/15). Insecure burst fallback,
+        skipped unverified files, and verify/lookup errors still fail archival.
+      </description>
+    </key>
+
     <key name="verify-ctdb" type="b">
       <default>true</default>
       <summary>Verify rips with CTDB</summary>
@@ -382,14 +394,28 @@
       <summary>Device path used when the offset was calibrated</summary>
     </key>
 
+    <key name="rip-mode" type="s">
+      <choices>
+        <choice value="archival"/>
+        <choice value="normal"/>
+        <choice value="burst"/>
+      </choices>
+      <default>'archival'</default>
+      <summary>Extraction mode</summary>
+      <description>
+        archival — full paranoia, abort-on-skip, test &amp; copy (default).
+        normal — paranoia with repair/interpolation allowed; no test &amp; copy.
+        burst — single-pass -Z (paranoia off); not archival-grade.
+        Legacy burst-mode / test-and-copy keys migrate into this setting.
+      </description>
+    </key>
+
     <key name="burst-mode" type="b">
       <default>false</default>
-      <summary>Burst rip mode (paranoia disabled)</summary>
+      <summary>Burst rip mode (paranoia disabled) — legacy</summary>
       <description>
-        Off by default. When enabled, every track (or disc image) is extracted
-        once with cdparanoia -Z (no secure paranoia, no test &amp; copy). Much
-        faster than secure mode; not archival-grade. AccurateRip / CTDB may
-        still verify if those options are on.
+        Legacy. Prefer rip-mode=burst. When rip-mode is unset/empty, true maps
+        to burst extraction (cdparanoia -Z, no test &amp; copy).
       </description>
     </key>
 
@@ -445,11 +471,10 @@
 
     <key name="test-and-copy" type="b">
       <default>true</default>
-      <summary>Test and copy each track</summary>
+      <summary>Test and copy each track — legacy</summary>
       <description>
-        Extract every track twice (test then copy), compare CRC32 values, and
-        only accept a match after up to three secure retries. Unmatched tracks
-        fail the rip unless Burst fallback is enabled.
+        Legacy. Prefer rip-mode=archival. When rip-mode is unset/empty, true
+        maps to archival (dual-pass CRC); false maps to normal.
       </description>
     </key>
 
