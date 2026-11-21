@@ -1,0 +1,16 @@
+---
+description: Only cut versioned releases for feature work, never for CI/lint/fixups alone
+alwaysApply: true
+---
+
+# Release policy
+
+- **Do not** bump version, tag, or publish a GitHub release when the change is only CI, lint, workflow, test harness, or similar non-feature fixups.
+- **Do** push those fixes to `main` and wait for CI to go green without a new release.
+- **Only** release when the user asks and the delta includes user-facing or product features (or they explicitly request a release anyway).
+- If a tagged release shipped with broken CI, fix on `main`; do not cut a follow-up release solely to clear checks.
+
+# Commit attribution
+
+- **Never** include `Co-authored-by: Cursor` (or `cursoragent@cursor.com`) on commits.
+- If the environment injects that trailer, strip it before push (amend the just-created local commit when it is still unpushed and authored in this session).

@@ -127,7 +127,7 @@ def extract_htoa(
     Uses an absolute sector span so track 1's own rip (by track number) never
     includes this region — same separation as HTOA vs track 01.
     """
-    from ready2rip.rip.secure import secure_paranoia_flags
+    from ready2rip.rip.secure import paranoia_flags_for_mode
     from ready2rip.util import find_cdparanoia
 
     binary = find_cdparanoia()
@@ -149,11 +149,10 @@ def extract_htoa(
     ]
     if sample_offset:
         cmd.extend(['-O', str(int(sample_offset))])
+    # Same mode→flags map as track extract; burst stays quiet for HTOA probe.
+    cmd.extend(paranoia_flags_for_mode(mode))
     if mode == 'burst':
-        # Quiet for HTOA probe; still disable paranoia like engine burst.
-        cmd.extend(['-Z', '-q'])
-    else:
-        cmd.extend(secure_paranoia_flags())
+        cmd.append('-q')
     cmd.extend([span, str(wav_path)])
 
     completed = subprocess.run(
