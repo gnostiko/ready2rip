@@ -93,6 +93,11 @@ from ready2rip.rip.encode_dest import (
     should_embed_artwork_for_format,
 )
 from ready2rip.rip.engine_types import *
+from ready2rip.rip.engine_types import (
+    _CrcMismatch,
+    _PendingEncode,
+    _TrackExtract,
+)
 from ready2rip.rip.job_extract import job_extract_mode, sync_job_extract_flags
 from ready2rip.rip.outcome import (
     apply_burst_notes,
@@ -157,3 +162,7 @@ from ready2rip.rip.engine_helpers import (
     _retag_title,
     _track_avoid_span,
 )
+
+# ``import *`` omits leading-underscore names unless listed in ``__all__``.
+# Mixin modules star-import this hub and need those helpers/types at runtime.
+__all__ = [name for name in globals() if not name.startswith('__')]
