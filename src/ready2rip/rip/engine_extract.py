@@ -726,6 +726,7 @@ class ExtractMixin:
                     sectors=sectors,
                     expected_bytes=expected,
                     test_and_copy=job.test_and_copy,
+                    intentional_burst=bool(job.burst_mode),
                 )
 
                 def _verify_tick(*, _tn=track_no, _idx=idx) -> None:
@@ -1320,6 +1321,7 @@ class ExtractMixin:
         sectors: int,
         expected_bytes: int | None,
         test_and_copy: bool,
+        intentional_burst: bool = False,
     ) -> None:
         if log_entry is None:
             return
@@ -1341,12 +1343,13 @@ class ExtractMixin:
         log_entry.peak_percent = extracted.peak
         log_entry.quality_percent = extracted.stats.quality_percent(sectors)
         log_entry.error_correction_lines = extracted.stats.summary_lines(length_sectors=sectors)
+        recovered_burst = extracted.mode == 'burst' and not intentional_burst
         log_entry.had_errors = bool(
             extracted.stats.had_errors
-            or extracted.mode == 'burst'
+            or recovered_burst
             or (extracted.dual_pass and not extracted.matched)
         )
-        if extracted.stats.had_errors or extracted.mode == 'burst':
+        if extracted.stats.had_errors or recovered_burst:
             log_entry.status = 'finished with errors'
         else:
             log_entry.status = 'OK'
@@ -1362,6 +1365,8 @@ class ExtractMixin:
             log_entry.notes.append(
                 'Secure test & copy mismatched; this track recovered in burst (-Z)'
             )
+        elif extracted.mode == 'burst' and intentional_burst:
+            log_entry.notes.append('Burst mode (-Z); paranoia disabled')
         elif extracted.mode == 'burst':
             log_entry.notes.append('Secure paranoia failed — burst (-Z) used for final audio')
         if (

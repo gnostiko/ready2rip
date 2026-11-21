@@ -102,10 +102,18 @@ class VerifyMixin:
         mode_label = f'{extract_mode} (copy image)'
         image_quality: float | None = None
         image_had_errors = False
+        intentional_burst = bool(
+            rip_log is not None
+            and (
+                rip_log.burst_mode
+                or (rip_log.rip_mode or '').strip().lower() == 'burst'
+            )
+        )
         if image_stats is not None:
             total_secs = sum(int(t.length_sectors) for t in disc.tracks)
             image_quality = image_stats.quality_percent(total_secs)
-            image_had_errors = bool(image_stats.had_errors) or extract_mode == 'burst'
+            recovered_burst = extract_mode == 'burst' and not intentional_burst
+            image_had_errors = bool(image_stats.had_errors) or recovered_burst
         n = max(1, len(disc.tracks))
         with image_view_cm as image_view:
             for i, track in enumerate(disc.tracks):

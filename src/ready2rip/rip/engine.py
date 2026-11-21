@@ -348,9 +348,9 @@ class RipEngine(
                 total_samples=total_audio_samples(job.disc_info),
             )
 
-        # Always defeat drive audio cache between test and copy.
+        # Defeat drive audio cache between archival test and copy passes.
         defeat_cache = bool(job.defeat_audio_cache)
-        if defeat_cache:
+        if defeat_cache and job.test_and_copy and not job.burst_mode:
             notes.append('Cache defeat enabled between test and copy')
 
         unit_index = 0.0

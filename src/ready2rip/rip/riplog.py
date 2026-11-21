@@ -535,10 +535,17 @@ class RipLog:
 
         burst = [t.number for t in self.tracks if 'burst' in (t.extract_mode or '').lower()]
         if burst:
-            lines.append(
-                f'WARNING: Burst (-Z) on track(s) {", ".join(str(n) for n in burst)} '
-                '— not archival-grade secure'
-            )
+            intentional = bool(self.burst_mode) or (self.rip_mode or '').strip().lower() == 'burst'
+            if intentional:
+                lines.append(
+                    f'Burst mode (-Z) on track(s) {", ".join(str(n) for n in burst)} '
+                    '— paranoia disabled'
+                )
+            else:
+                lines.append(
+                    f'WARNING: Burst (-Z) recovery on track(s) '
+                    f'{", ".join(str(n) for n in burst)} — not archival-grade secure'
+                )
             lines.append('')
 
         crc_ok = [t.number for t in self.tracks if t.crc_verified is True]
@@ -579,11 +586,15 @@ class RipLog:
         # sitting above an Archival FAIL (or the reverse skim confusion).
         if self.outcome_archival_ok is not None:
             arch = 'OK' if self.outcome_archival_ok else 'FAIL'
-            secure = (
-                'Secure OK'
-                if self.outcome_secure_ok
-                else 'not secure (burst)'
-            )
+            rip_mode = (self.rip_mode or '').strip().lower()
+            if self.outcome_secure_ok:
+                secure = 'Secure OK'
+            elif self.burst_mode or rip_mode == 'burst':
+                secure = 'Burst mode'
+            elif rip_mode == 'normal':
+                secure = 'Normal'
+            else:
+                secure = 'not Secure OK'
             if self.outcome_db_verified:
                 db = 'DB verified'
             elif self.verify_accuraterip or self.verify_ctdb:
@@ -595,15 +606,19 @@ class RipLog:
                 outcome = f'{outcome} ({self.outcome_summary})'
             lines.append(outcome)
 
+        intentional_burst = bool(self.burst_mode) or (self.rip_mode or '').strip().lower() == 'burst'
+        recovery_burst = bool(burst) and not intentional_burst
         if self.cancelled:
             lines.append('Extraction cancelled by user')
         elif self.error:
             lines.append(f'Errors occurred: {self.error}')
-        elif any(t.had_errors for t in self.tracks) or crc_bad or burst:
+        elif any(t.had_errors for t in self.tracks) or crc_bad or recovery_burst:
             lines.append(
                 'Extraction completed with corrections, burst fallback, '
                 'and/or CRC issues (see per-track details)'
             )
+        elif intentional_burst and burst:
+            lines.append('Burst mode extract completed (paranoia disabled)')
         elif self.outcome_archival_ok is False:
             lines.append('Archival checks failed (see Outcome and notes above)')
         else:
