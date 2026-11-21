@@ -29,6 +29,15 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-21">
       <description>
         <p>
+          0.4.71: Fix rip-log NameError in extract-mode formatting; wire
+          missing engine mixin imports (copy-image, encode, verify); harden
+          UI/engine star-import export checks.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.70" date="2026-11-21">
+      <description>
+        <p>
           0.4.70: Fix Archival/Normal/Burst extract paths (paranoia flags,
           mixin exports, HTOA mode alignment) so each rip mode uses the
           correct cdparanoia options.
