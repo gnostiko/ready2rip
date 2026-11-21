@@ -162,3 +162,48 @@ def test_format_extract_mode_labels() -> None:
     assert 'burst' in ExtractMixin._format_extract_mode(
         _ext('burst'), test_and_copy=False
     )
+
+
+def test_apply_extract_to_log_no_self_nameerror() -> None:
+    """Regression: staticmethod must not reference ``self`` when filling the log."""
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from ready2rip.rip.engine_extract import ExtractMixin
+    from ready2rip.rip.engine_types import _TrackExtract
+    from ready2rip.rip.paranoia_stats import ParanoiaStats
+
+    entry = SimpleNamespace(
+        extract_mode='',
+        extract_seconds=None,
+        extract_speed_x=None,
+        test_crc='',
+        copy_crc='',
+        peak=None,
+        quality=None,
+        notes=[],
+        expected_wav_bytes=0,
+        wav_bytes=0,
+    )
+    extracted = _TrackExtract(
+        mode='normal',
+        test_crc='',
+        copy_crc='abcd',
+        peak=0.5,
+        elapsed=2.0,
+        stats=ParanoiaStats(),
+        matched=True,
+        copy_wav=Path('/tmp/c.wav'),
+        test_wav=Path('/tmp/t.wav'),
+        dual_pass=False,
+        expected_wav_bytes=1000,
+    )
+    ExtractMixin._apply_extract_to_log(
+        entry,
+        extracted=extracted,
+        sectors=75,
+        expected_bytes=1000,
+        test_and_copy=False,
+    )
+    assert 'normal' in entry.extract_mode
+

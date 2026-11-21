@@ -1323,7 +1323,7 @@ class ExtractMixin:
     ) -> None:
         if log_entry is None:
             return
-        log_entry.extract_mode = type(self)._format_extract_mode(
+        log_entry.extract_mode = ExtractMixin._format_extract_mode(
             extracted,
             test_and_copy=test_and_copy,
         )
