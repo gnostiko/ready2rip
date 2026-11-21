@@ -15,7 +15,7 @@ import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 from pathlib import Path
@@ -103,6 +103,7 @@ from ready2rip.rip.outcome import (
     apply_burst_notes,
     archival_fail_reasons,
     compute_tiers,
+    evaluate_archival,
     finish_result,
     format_done_message,
     summarize_ar,
@@ -110,6 +111,7 @@ from ready2rip.rip.outcome import (
 )
 from ready2rip.rip.paranoia_run import run_paranoia_streaming
 from ready2rip.rip.paranoia_stats import FRAMES_PER_SECTOR, ParanoiaStats
+from ready2rip.rip.pcm_io import image_track_pcm_from_view, open_cdda_wav_mmap
 from ready2rip.rip.plan import (
     ENCODE_EXTENSIONS,
     EncodeDest,
@@ -144,6 +146,7 @@ from ready2rip.rip.secure import (
     secure_paranoia_flags,
     wav_size_minimum,
 )
+from ready2rip.rip.tmpdir import rip_scratch_dir
 from ready2rip.rip.wav_trim import trim_wav_to_expected
 from ready2rip.settings_defs import (
     DEFAULT_EXISTING_FILES_POLICY,
