@@ -29,6 +29,13 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-21">
       <description>
         <p>
+          0.4.69: Fixed some bugs.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.68" date="2026-11-21">
+      <description>
+        <p>
           0.4.68: Fix Meson C language for ar_offset_scan; AppImage matrix
           via fromJSON (no job-level matrix if); gi-free job_build unit tests
           and SettingsStore importorskip so CI unit tests collect cleanly.
