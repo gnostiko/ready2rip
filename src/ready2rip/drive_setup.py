@@ -720,16 +720,82 @@ def _ensure_native_helper() -> Path | None:
     return binary if binary.is_file() else None
 
 
+def _leadout_lba_for_device(device: str, leadout_lba: int = 0) -> int:
+    """Resolve lead-out LBA from *leadout_lba* or a quick TOC probe."""
+    lo = int(leadout_lba or 0)
+    if lo > 0:
+        return lo
+    try:
+        info = probe_disc(device)
+    except Exception as exc:
+        log.debug('TOC probe for overread lead-out failed on %s: %s', device, exc)
+        return 0
+    if info is None:
+        return 0
+    lo = int(getattr(info, 'leadout_lba', 0) or 0)
+    if lo <= 0 and info.tracks:
+        last = info.tracks[-1]
+        lo = int(last.start_sector) + int(last.length_sectors)
+    return max(0, lo)
+
+
+def probe_and_persist_overread(
+    store,
+    *,
+    device: str,
+    leadout_lba: int = 0,
+):
+    """MMC-probe lead-in/out for *device* and cache the result in *store*."""
+    from ready2rip.disc.overread import OverreadCapability, probe_overread
+
+    lo = _leadout_lba_for_device(device, leadout_lba)
+    try:
+        overread = probe_overread(device, leadout_lba=lo)
+    except Exception as exc:
+        log.debug('Overread probe failed on %s: %s', device, exc)
+        overread = OverreadCapability()
+    persist_drive_overread(store, device=device, overread=overread)
+    return overread
+
+
+def persist_drive_overread(
+    store,
+    *,
+    device: str,
+    overread,
+) -> None:
+    """Write overread capability into *store* (GSettings / memory)."""
+    store.update(
+        drive_overread_lead_in=bool(getattr(overread, 'lead_in', False)),
+        drive_overread_lead_out=bool(getattr(overread, 'lead_out', False)),
+        drive_overread_probed=True,
+        drive_overread_device=device,
+    )
+    try:
+        from gi.repository import Gio
+
+        Gio.Settings.sync()
+    except Exception:
+        pass
+    log.info(
+        'Saved drive overread for %s: lead_in=%s lead_out=%s',
+        device,
+        getattr(overread, 'lead_in', False),
+        getattr(overread, 'lead_out', False),
+    )
+
+
 def save_calibration(
     store,
     *,
     device: str,
     offset: int,
+    leadout_lba: int = 0,
 ) -> None:
-    """Persist sample offset for *device*.
+    """Persist sample offset for *device* and probe lead-in/out overread.
 
     Values are written to GSettings (or the in-memory fallback) so they survive
-    app restarts.
+    app restarts. Overread is measured here (disc is present during Detect).
     """
     store.update(
         drive_sample_offset=int(offset),
@@ -746,3 +812,4 @@ def save_calibration(
         pass
 
     log.info('Saved drive calibration for %s: offset=%s', device, offset)
+    probe_and_persist_overread(store, device=device, leadout_lba=leadout_lba)

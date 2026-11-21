@@ -380,8 +380,23 @@ class DriveSetupDialog(Adw.Dialog):
                 if result.track_number
                 else ''
             )
+            snap = self._store.get()
+            from ready2rip.disc.overread import (
+                capability_from_settings,
+                format_overread_settings_status,
+            )
+
+            over_sub, _over_tip = format_overread_settings_status(
+                probed=bool(snap.drive_overread_probed),
+                overread=capability_from_settings(
+                    lead_in=snap.drive_overread_lead_in,
+                    lead_out=snap.drive_overread_lead_out,
+                ),
+                sample_offset=int(result.offset),
+            )
             self._result_desc.set_label(
-                f'{result.offset:+d} samples{conf}{track}\nSaved for {device}.'
+                f'{result.offset:+d} samples{conf}{track}\n'
+                f'Saved for {device}.\n{over_sub}.'
             )
             self._retry_btn.set_visible(False)
             self._manual_btn.set_visible(False)
@@ -408,7 +423,23 @@ class DriveSetupDialog(Adw.Dialog):
         offset = int(self._manual_offset.get_value())
         save_calibration(self._store, device=device, offset=offset)
         self._result_title.set_label('Offset saved')
-        self._result_desc.set_label(f'Saved {offset:+d} samples for {device}.')
+        snap = self._store.get()
+        from ready2rip.disc.overread import (
+            capability_from_settings,
+            format_overread_settings_status,
+        )
+
+        over_sub, _over_tip = format_overread_settings_status(
+            probed=bool(snap.drive_overread_probed),
+            overread=capability_from_settings(
+                lead_in=snap.drive_overread_lead_in,
+                lead_out=snap.drive_overread_lead_out,
+            ),
+            sample_offset=offset,
+        )
+        self._result_desc.set_label(
+            f'Saved {offset:+d} samples for {device}.\n{over_sub}.'
+        )
         self._retry_btn.set_visible(False)
         self._manual_btn.set_visible(False)
         self._stack.set_visible_child_name('result')

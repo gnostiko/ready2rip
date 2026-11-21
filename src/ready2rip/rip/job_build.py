@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ready2rip.disc.overread import OverreadCapability, capability_from_settings
 from ready2rip.rip.encode_dest import normalize_encode_format
 from ready2rip.rip.engine_types import RipJob
 from ready2rip.settings_defs import (
@@ -23,6 +24,16 @@ if TYPE_CHECKING:
     from ready2rip.artwork.fetch import ArtworkImage
     from ready2rip.disc.probe import DiscInfo
     from ready2rip.metadata.models import AlbumMetadata
+
+
+def _overread_from_settings(settings: Any) -> OverreadCapability:
+    """Seed job overread from the last calibration/rip probe when available."""
+    if not bool(getattr(settings, 'drive_overread_probed', False)):
+        return OverreadCapability()
+    return capability_from_settings(
+        lead_in=bool(getattr(settings, 'drive_overread_lead_in', False)),
+        lead_out=bool(getattr(settings, 'drive_overread_lead_out', False)),
+    )
 
 
 def job_from_settings(
@@ -91,6 +102,7 @@ def job_from_settings(
         archival_strict=settings.archival_strict,
         sample_offset=settings.drive_sample_offset,
         offset_configured=bool(settings.drive_offset_configured),
+        overread=_overread_from_settings(settings),
         disc_info=disc,
         disc_track_count=disc.track_count if disc is not None else 0,
         rip_mode=mode,

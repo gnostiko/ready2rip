@@ -509,6 +509,8 @@ class RipActionsMixin:
         self._set_progress_fraction(progress.fraction)
         if progress.message:
             self.rip_status_label.set_label(progress.message)
+            if progress.message.startswith('Overread:'):
+                self._update_overread_row()
         elif (fallback := _RIP_STATUS_FALLBACK.get(progress.state)) is not None:
             self.rip_status_label.set_label(fallback)
 

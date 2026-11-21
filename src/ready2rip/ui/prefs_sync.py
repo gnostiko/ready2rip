@@ -134,6 +134,7 @@ def sync_options_from_store(window: Ready2RipWindow) -> None:
         window._sync_encoding_ui()
         window._offset_row.set_value(settings.drive_sample_offset)
         window._update_calibration_row()
+        window._update_overread_row()
         from ready2rip.settings_defs import (
             normalize_rip_mode,
             rip_mode_subtitle,

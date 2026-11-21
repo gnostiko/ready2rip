@@ -144,3 +144,62 @@ def probe_overread(
     except Exception as exc:
         log.debug('Overread probe failed on %s: %s', device, exc)
     return OverreadCapability(lead_in=lead_in, lead_out=lead_out)
+
+
+def overread_is_used(sample_offset: int, overread: OverreadCapability) -> bool:
+    """True when a non-zero offset will widen TOC edges into lead-in/out."""
+    return int(sample_offset) != 0 and bool(overread.any)
+
+
+def overread_usage_label(sample_offset: int, overread: OverreadCapability) -> str:
+    """Short phrase: whether detected overread is applied for *sample_offset*."""
+    if int(sample_offset) == 0:
+        return 'not used (offset 0)'
+    if overread.both:
+        return 'used for offset edges'
+    if overread.lead_in and not overread.lead_out:
+        return 'partially used (lead-in only; lead-out silence fill)'
+    if overread.lead_out and not overread.lead_in:
+        return 'partially used (lead-out only; lead-in silence fill)'
+    return 'not used (silence fill)'
+
+
+def format_overread_settings_status(
+    *,
+    probed: bool,
+    overread: OverreadCapability,
+    sample_offset: int,
+) -> tuple[str, str]:
+    """Return ``(subtitle, tooltip)`` for Drive → Overread.
+
+    Subtitle always states detected capability and whether it is used.
+    """
+    if not probed:
+        return (
+            'Not probed yet',
+            'Detected when sample offset is calibrated (or on the next rip). '
+            'Overread is only used when offset ≠ 0.',
+        )
+    detected = overread.log_label
+    usage = overread_usage_label(sample_offset, overread)
+    subtitle = f'Detected: {detected} · {usage[0].upper()}{usage[1:]}'
+    tip_bits = [
+        f'Detected lead-in/out overread: {detected}.',
+        f'For offset {int(sample_offset):+d}: {usage}.',
+    ]
+    if int(sample_offset) != 0 and not overread.any:
+        tip_bits.append(
+            'This drive cannot overread; missing edge samples are silence-filled.'
+        )
+    elif int(sample_offset) == 0:
+        tip_bits.append('Offset 0 needs no lead-in/out samples.')
+    return subtitle, ' '.join(tip_bits)
+
+
+def capability_from_settings(
+    *,
+    lead_in: bool,
+    lead_out: bool,
+) -> OverreadCapability:
+    """Build :class:`OverreadCapability` from persisted drive settings."""
+    return OverreadCapability(lead_in=bool(lead_in), lead_out=bool(lead_out))

@@ -904,7 +904,7 @@ class Ready2RipWindow(
         build_drive_settings(self, settings)
 
     def _set_overread_status(self, label: str, *, detail: str = '') -> None:
-        """Update Drive → Overread row (main thread)."""
+        """Update Drive → Overread row (main thread). Prefer ``_update_overread_row``."""
         row = getattr(self, '_overread_row', None)
         if row is None:
             return
@@ -913,6 +913,65 @@ class Ready2RipWindow(
             row.set_subtitle(f'{text} · {detail}')
         else:
             row.set_subtitle(text)
+
+    def _update_overread_row(self) -> None:
+        """Refresh Drive → Overread from stored probe + current sample offset."""
+        from ready2rip.disc.overread import (
+            capability_from_settings,
+            format_overread_settings_status,
+        )
+
+        row = getattr(self, '_overread_row', None)
+        if row is None:
+            return
+        # Rip worker may persist via a different SettingsStore instance.
+        self.store.invalidate()
+        settings = self.store.get()
+        overread = capability_from_settings(
+            lead_in=settings.drive_overread_lead_in,
+            lead_out=settings.drive_overread_lead_out,
+        )
+        probed = bool(settings.drive_overread_probed)
+        # Treat a probe for a different device path as stale.
+        device = (settings.device or '').strip()
+        saved_dev = (settings.drive_overread_device or '').strip()
+        if probed and device and saved_dev:
+            try:
+                import os
+
+                if os.path.realpath(device) != os.path.realpath(saved_dev):
+                    probed = False
+            except OSError:
+                if device != saved_dev:
+                    probed = False
+        subtitle, tip = format_overread_settings_status(
+            probed=probed,
+            overread=overread,
+            sample_offset=int(settings.drive_sample_offset),
+        )
+        row.set_subtitle(subtitle)
+        row.set_tooltip_text(tip)
+
+    def _schedule_overread_probe(self) -> None:
+        """Background MMC overread probe after offset save (disc preferred)."""
+        device = self.store.get().device or self._device or '/dev/sr0'
+        store = self.store
+
+        def work() -> None:
+            try:
+                from ready2rip.drive_setup import probe_and_persist_overread
+
+                probe_and_persist_overread(store, device=device)
+            except Exception:
+                pass
+
+            def done() -> bool:
+                self._update_overread_row()
+                return False
+
+            GLib.idle_add(done)
+
+        threading.Thread(target=work, name='ready2rip-overread', daemon=True).start()
 
     def _build_encoding_settings(self, settings, ids: list[str]) -> None:
         from ready2rip.ui.prefs_encoding import build_encoding_settings
@@ -1494,6 +1553,10 @@ class Ready2RipWindow(
         except Exception:
             pass
         self._update_calibration_row()
+        self._update_overread_row()
+        # Re-probe when offset is set/changed (Detect path probes inside save).
+        if not bool(self.store.get().drive_overread_probed):
+            self._schedule_overread_probe()
 
     def _on_mb_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(use_musicbrainz=row.get_active())

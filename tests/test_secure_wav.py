@@ -10,8 +10,11 @@ from types import SimpleNamespace
 
 from ready2rip.disc.overread import (
     OverreadCapability,
+    format_overread_settings_status,
     offset_margin_sectors,
+    overread_is_used,
     overread_span,
+    overread_usage_label,
 )
 from ready2rip.rip.ctdb_quality import ctdb_submit_quality
 from ready2rip.rip.paranoia_stats import ParanoiaStats
@@ -36,6 +39,36 @@ def test_offset_margin_sectors() -> None:
     assert offset_margin_sectors(588) == 1
     assert offset_margin_sectors(589) == 2
     assert offset_margin_sectors(-1200) == 3
+
+
+def test_overread_usage_and_settings_status() -> None:
+    yes = OverreadCapability(lead_in=True, lead_out=True)
+    no = OverreadCapability()
+    assert overread_is_used(0, yes) is False
+    assert overread_is_used(667, yes) is True
+    assert overread_is_used(667, no) is False
+    assert 'offset 0' in overread_usage_label(0, yes)
+    assert 'used for offset' in overread_usage_label(667, yes)
+    assert 'silence fill' in overread_usage_label(667, no)
+
+    sub, tip = format_overread_settings_status(
+        probed=False, overread=no, sample_offset=0
+    )
+    assert 'Not probed' in sub
+    assert 'calibrated' in tip.lower() or 'offset' in tip.lower()
+
+    sub2, tip2 = format_overread_settings_status(
+        probed=True, overread=yes, sample_offset=667
+    )
+    assert 'Detected: Yes' in sub2
+    assert 'Used' in sub2
+    assert '667' in tip2 or '+667' in tip2
+
+    sub3, _tip3 = format_overread_settings_status(
+        probed=True, overread=no, sample_offset=667
+    )
+    assert 'Detected: No' in sub3
+    assert 'Not used' in sub3 or 'silence' in sub3.lower()
 
 
 def test_overread_span_expands_when_capable() -> None:

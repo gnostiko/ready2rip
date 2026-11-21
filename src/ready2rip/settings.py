@@ -196,6 +196,10 @@ SETTINGS_KEY_MAP: dict[str, tuple[str, str]] = {
     'drive_sample_offset': ('drive-sample-offset', 'int'),
     'drive_offset_configured': ('drive-offset-configured', 'bool'),
     'drive_offset_device': ('drive-offset-device', 'string'),
+    'drive_overread_lead_in': ('drive-overread-lead-in', 'bool'),
+    'drive_overread_lead_out': ('drive-overread-lead-out', 'bool'),
+    'drive_overread_probed': ('drive-overread-probed', 'bool'),
+    'drive_overread_device': ('drive-overread-device', 'string'),
     'rip_mode': ('rip-mode', 'string'),
     'burst_mode': ('burst-mode', 'bool'),
     'burst_fallback': ('burst-fallback', 'bool'),
@@ -379,6 +383,11 @@ class AppSettings:
     drive_sample_offset: int = 0
     drive_offset_configured: bool = False
     drive_offset_device: str = ''
+    # Cached MMC overread probe (filled at offset calibration / rip).
+    drive_overread_lead_in: bool = False
+    drive_overread_lead_out: bool = False
+    drive_overread_probed: bool = False
+    drive_overread_device: str = ''
     # archival | normal | burst — derived flags below stay for engine/compat.
     rip_mode: str = DEFAULT_RIP_MODE
     # Full-disc -Z extract (no secure paranoia / test & copy). Legacy/derived.
@@ -625,6 +634,10 @@ class SettingsStore:
                 drive_sample_offset=s.get_int('drive-sample-offset'),
                 drive_offset_configured=s.get_boolean('drive-offset-configured'),
                 drive_offset_device=s.get_string('drive-offset-device'),
+                drive_overread_lead_in=_get_bool(s, 'drive-overread-lead-in', False),
+                drive_overread_lead_out=_get_bool(s, 'drive-overread-lead-out', False),
+                drive_overread_probed=_get_bool(s, 'drive-overread-probed', False),
+                drive_overread_device=_get_string(s, 'drive-overread-device', ''),
                 rip_mode=migrate_rip_mode_from_legacy(
                     burst_mode=_get_bool(s, 'burst-mode', False),
                     test_and_copy=_get_bool(s, 'test-and-copy', True),
@@ -709,6 +722,10 @@ class SettingsStore:
             except Exception:
                 pass
         return self._cache_snapshot(snap)
+
+    def invalidate(self) -> None:
+        """Drop the cached snapshot so the next ``get()`` re-reads GSettings."""
+        self._snapshot = None
 
     def update(self, **kwargs) -> AppSettings:
         # Force a fresh read before applying changes (migrations / external edits).

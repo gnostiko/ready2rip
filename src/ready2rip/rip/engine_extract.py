@@ -1522,20 +1522,29 @@ class ExtractMixin:
         except Exception as exc:
             log.debug('Overread probe failed: %s', exc)
             job.overread = OverreadCapability()
+        # Keep Drive settings in sync with the live probe.
+        try:
+            from ready2rip.drive_setup import persist_drive_overread
+            from ready2rip.settings import SettingsStore
+
+            persist_drive_overread(
+                SettingsStore(),
+                device=job.device,
+                overread=job.overread,
+            )
+        except Exception as exc:
+            log.debug('Could not persist overread probe: %s', exc)
         label = job.overread.log_label
-        if label == 'Yes':
-            detail = 'lead-in and lead-out'
-        elif label == 'No':
-            detail = 'silence fill at offset edges'
-        else:
-            detail = 'partial'
+        from ready2rip.disc.overread import overread_usage_label
+
+        usage = overread_usage_label(int(job.sample_offset), job.overread)
         if on_progress is not None:
             on_progress(
                 RipProgress(
                     track_number=0,
                     state=RipState.PREPARING,
                     fraction=0.02,
-                    message=f'Overread: {label} · {detail}',
+                    message=f'Overread: {label} · {usage}',
                 )
             )
 

@@ -394,6 +394,37 @@
       <summary>Device path used when the offset was calibrated</summary>
     </key>
 
+    <key name="drive-overread-lead-in" type="b">
+      <default>false</default>
+      <summary>Drive can overread into lead-in</summary>
+      <description>
+        Cached MMC probe result. Updated when sample offset is calibrated
+        and refreshed on rip. Used with a non-zero offset for first-track edges.
+      </description>
+    </key>
+
+    <key name="drive-overread-lead-out" type="b">
+      <default>false</default>
+      <summary>Drive can overread into lead-out</summary>
+      <description>
+        Cached MMC probe result. Updated when sample offset is calibrated
+        and refreshed on rip. Used with a non-zero offset for last-track edges.
+      </description>
+    </key>
+
+    <key name="drive-overread-probed" type="b">
+      <default>false</default>
+      <summary>Drive overread has been probed</summary>
+      <description>
+        True after lead-in/out overread was measured for drive-overread-device.
+      </description>
+    </key>
+
+    <key name="drive-overread-device" type="s">
+      <default>''</default>
+      <summary>Device path used for the overread probe</summary>
+    </key>
+
     <key name="rip-mode" type="s">
       <choices>
         <choice value="archival"/>
