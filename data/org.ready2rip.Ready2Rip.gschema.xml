@@ -403,9 +403,12 @@
       <default>'archival'</default>
       <summary>Extraction mode</summary>
       <description>
-        archival — full paranoia, abort-on-skip, test &amp; copy (default).
-        normal — paranoia with repair/interpolation allowed; no test &amp; copy.
+        Extract profile (not a verification outcome). Secure OK only applies
+        to a clean Archival dual-pass; Normal/Burst never report Secure OK.
+        archival — secure paranoia (-X), abort-on-skip, test &amp; copy (default).
+        normal — single-pass paranoia with repair/interpolation; no test &amp; copy.
         burst — single-pass -Z (paranoia off); not archival-grade.
+        AccurateRip/CTDB “DB verified” is separate from Secure OK.
         Legacy burst-mode / test-and-copy keys migrate into this setting.
       </description>
     </key>

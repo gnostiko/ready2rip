@@ -272,10 +272,24 @@ def normalize_existing_files_policy(value: str | None) -> str:
 
 
 # Extraction profile: archival (secure+test&copy), normal (paranoia+repair), burst (-Z).
+# Combo labels stay short; subtitles/tooltips explain that “Secure OK” is an
+# Archival outcome, not the Normal mode name.
 RIP_MODES = (
     ('archival', 'Archival'),
     ('normal', 'Normal'),
     ('burst', 'Burst'),
+)
+RIP_MODE_SUBTITLES = {
+    'archival': 'Secure dual-pass → can report Secure OK',
+    'normal': 'Single-pass with repair (not Secure OK)',
+    'burst': 'Fast -Z; paranoia off (not Secure OK)',
+}
+RIP_MODE_TOOLTIP = (
+    'Three extract profiles (not verification outcomes).\n'
+    'Archival: secure paranoia (-X) + test & copy; a clean rip can be Secure OK.\n'
+    'Normal: single-pass paranoia with repair/interpolation; never Secure OK.\n'
+    'Burst: single-pass -Z (paranoia disabled); never Secure OK.\n'
+    'AccurateRip/CTDB “DB verified” is separate from Secure OK.'
 )
 RIP_MODE_IDS = frozenset(m[0] for m in RIP_MODES)
 DEFAULT_RIP_MODE = 'archival'
@@ -286,6 +300,16 @@ def normalize_rip_mode(value: str | None) -> str:
     if raw in RIP_MODE_IDS:
         return raw
     return DEFAULT_RIP_MODE
+
+
+def rip_mode_subtitle(value: str | None) -> str:
+    """Short ComboRow subtitle for the selected rip mode."""
+    return RIP_MODE_SUBTITLES.get(normalize_rip_mode(value), RIP_MODE_SUBTITLES[DEFAULT_RIP_MODE])
+
+
+def rip_mode_tooltip(_value: str | None = None) -> str:
+    """Full tooltip explaining modes vs Secure OK / DB verified."""
+    return RIP_MODE_TOOLTIP
 
 
 def migrate_rip_mode_from_legacy(

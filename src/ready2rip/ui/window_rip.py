@@ -654,8 +654,10 @@ class RipActionsMixin:
             if result.accuraterip or result.ctdb:
                 return f'Secure OK · not DB-verified · {n} file(s)'
             return f'Secure OK · {n} file(s)'
-        if result.db_verified:
+        if result.secure_ok and result.db_verified:
             return f'Secure OK · DB verified · {n} file(s)'
+        if result.db_verified:
+            return f'DB verified · {n} file(s)'
         return f'Rip complete · {n} file(s)'
 
 

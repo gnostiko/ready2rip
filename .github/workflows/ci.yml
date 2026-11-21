@@ -33,6 +33,44 @@ jobs:
           PYTHONPATH: src
         run: pytest -q
 
+  # SettingsStore + window mixin export tests need PyGObject / typelibs.
+  # Kept separate so the matrix unit job stays gi-free and fast.
+  test-gi:
+    name: GI-backed tests
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PyGObject stack
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            python3 \
+            python3-gi \
+            python3-gi-cairo \
+            python3-pytest \
+            gir1.2-glib-2.0 \
+            gir1.2-gtk-4.0 \
+            gir1.2-adw-1 \
+            libglib2.0-bin \
+            libgirepository-2.0-0 \
+            gir1.2-girepository-2.0
+
+      - name: GI unit tests
+        env:
+          PYTHONPATH: src
+          # Headless; mixin export tests only import modules / inspect bytecode.
+          GI_TYPELIB_PATH: /usr/lib/x86_64-linux-gnu/girepository-1.0
+        run: |
+          set -euo pipefail
+          python3 -c 'import gi; gi.require_version("Gtk","4.0"); gi.require_version("Adw","1"); from gi.repository import Gtk, Adw, Gio; print(Gtk._version, Adw._version)'
+          python3 -m pytest -q \
+            tests/test_settings_store.py \
+            tests/test_window_shared_exports.py \
+            tests/test_rip_mode.py \
+            tests/test_riplog_outcome.py
+
   package:
     name: Meson install + metadata validate
     runs-on: ubuntu-26.04

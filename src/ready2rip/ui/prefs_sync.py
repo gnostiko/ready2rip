@@ -134,13 +134,20 @@ def sync_options_from_store(window: Ready2RipWindow) -> None:
         window._sync_encoding_ui()
         window._offset_row.set_value(settings.drive_sample_offset)
         window._update_calibration_row()
-        from ready2rip.settings_defs import normalize_rip_mode
+        from ready2rip.settings_defs import (
+            normalize_rip_mode,
+            rip_mode_subtitle,
+            rip_mode_tooltip,
+        )
 
+        rip_mode = normalize_rip_mode(settings.rip_mode)
         window._select_combo(
             window._rip_mode_row,
             window._rip_modes,
-            normalize_rip_mode(settings.rip_mode),
+            rip_mode,
         )
+        window._rip_mode_row.set_subtitle(rip_mode_subtitle(rip_mode))
+        window._rip_mode_row.set_tooltip_text(rip_mode_tooltip(rip_mode))
         window._htoa_row.set_active(settings.rip_htoa)
         window._data_tracks_row.set_active(settings.rip_data_tracks)
         window._copy_image_row.set_active(settings.copy_image)
@@ -151,7 +158,7 @@ def sync_options_from_store(window: Ready2RipWindow) -> None:
         window._ctdb_row.set_active(settings.verify_ctdb)
         window._submit_ctdb_row.set_active(settings.submit_ctdb)
         window._burst_row.set_active(settings.burst_fallback)
-        window._sync_rip_mode_sensitivity(normalize_rip_mode(settings.rip_mode))
+        window._sync_rip_mode_sensitivity(rip_mode)
         window._log_row.set_active(settings.write_rip_log)
         window._cue_row.set_active(settings.write_cue_file)
         window._auto_rip_row.set_active(settings.auto_rip)

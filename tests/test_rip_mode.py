@@ -17,6 +17,7 @@ from ready2rip.settings_defs import (
     migrate_rip_mode_from_legacy,
     normalize_rip_mode,
     rip_mode_subtitle,
+    rip_mode_tooltip,
 )
 
 
@@ -26,10 +27,19 @@ def test_normalize_rip_mode() -> None:
 
 
 def test_rip_mode_subtitle() -> None:
-    assert 'test & copy' in rip_mode_subtitle('archival').lower()
-    assert 'repair' in rip_mode_subtitle('normal').lower()
+    assert 'secure ok' in rip_mode_subtitle('archival').lower()
+    assert 'not secure ok' in rip_mode_subtitle('normal').lower()
+    assert 'not secure ok' in rip_mode_subtitle('burst').lower()
     assert '-z' in rip_mode_subtitle('burst').lower()
     assert rip_mode_subtitle('nope') == rip_mode_subtitle('archival')
+
+
+def test_rip_mode_tooltip_distinguishes_secure_ok() -> None:
+    tip = rip_mode_tooltip().lower()
+    assert 'secure ok' in tip
+    assert 'never secure ok' in tip
+    assert 'db verified' in tip
+    assert 'archival' in tip and 'normal' in tip and 'burst' in tip
 
 
 def test_migrate_from_legacy_bools() -> None:

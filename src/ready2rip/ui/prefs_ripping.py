@@ -11,7 +11,12 @@ gi.require_version('Adw', '1')
 gi.require_version('Gtk', '4.0')
 from gi.repository import Adw, Gtk
 
-from ready2rip.settings_defs import RIP_MODES, normalize_rip_mode
+from ready2rip.settings_defs import (
+    RIP_MODES,
+    normalize_rip_mode,
+    rip_mode_subtitle,
+    rip_mode_tooltip,
+)
 
 if TYPE_CHECKING:
     from ready2rip.window import Ready2RipWindow
@@ -19,21 +24,15 @@ if TYPE_CHECKING:
 
 def build_ripping_settings(window: Ready2RipWindow, settings: Any) -> None:
     """Populate verify / extras / automation groups on *window*."""
+    mode = normalize_rip_mode(settings.rip_mode)
     window._rip_modes = [mid for mid, _label in RIP_MODES]
     window._rip_mode_row = Adw.ComboRow(title='Rip mode')
     window._rip_mode_row.set_model(
         Gtk.StringList.new([label for _mid, label in RIP_MODES])
     )
-    window._rip_mode_row.set_tooltip_text(
-        'Archival: secure + test & copy. '
-        'Normal: paranoia with repair allowed. '
-        'Burst: fast -Z (not archival-grade).'
-    )
-    window._select_combo(
-        window._rip_mode_row,
-        window._rip_modes,
-        normalize_rip_mode(settings.rip_mode),
-    )
+    window._rip_mode_row.set_tooltip_text(rip_mode_tooltip(mode))
+    window._select_combo(window._rip_mode_row, window._rip_modes, mode)
+    window._rip_mode_row.set_subtitle(rip_mode_subtitle(mode))
     window._rip_mode_row.connect('notify::selected', window._on_rip_mode_changed)
     window._add_pref(window.verify_group, window._rip_mode_row)
 
@@ -149,5 +148,5 @@ def build_ripping_settings(window: Ready2RipWindow, settings: Any) -> None:
         )
         setattr(window, attr, row)
         window._add_pref(group, row)
-    window._sync_rip_mode_sensitivity(normalize_rip_mode(settings.rip_mode))
+    window._sync_rip_mode_sensitivity(mode)
     window._sync_require_db_match_sensitivity(bool(settings.verify_accuraterip))

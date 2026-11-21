@@ -72,6 +72,8 @@ from ready2rip.settings_defs import (
     rip_log_mp3_quality,
     rip_log_qaac_quality,
     rip_log_wavpack_level,
+    rip_mode_subtitle,
+    rip_mode_tooltip,
 )
 from ready2rip.tags.artists import (
     DEFAULT_ARTIST_STYLE,
@@ -140,6 +142,8 @@ __all__ = [
     'rip_log_mp3_quality',
     'rip_log_qaac_quality',
     'rip_log_wavpack_level',
+    'rip_mode_subtitle',
+    'rip_mode_tooltip',
 ]
 
 log = logging.getLogger(__name__)

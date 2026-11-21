@@ -1513,12 +1513,18 @@ class Ready2RipWindow(
             row.set_sensitive(lookup_enabled)
 
     def _on_rip_mode_changed(self, row: Adw.ComboRow, *_args) -> None:
-        from ready2rip.settings_defs import normalize_rip_mode
+        from ready2rip.settings_defs import (
+            normalize_rip_mode,
+            rip_mode_subtitle,
+            rip_mode_tooltip,
+        )
 
         idx = int(row.get_selected())
         modes = getattr(self, '_rip_modes', ['archival', 'normal', 'burst'])
         mode = normalize_rip_mode(modes[idx] if 0 <= idx < len(modes) else 'archival')
         self.store.update(rip_mode=mode)
+        row.set_subtitle(rip_mode_subtitle(mode))
+        row.set_tooltip_text(rip_mode_tooltip(mode))
         self._sync_rip_mode_sensitivity(mode)
 
     def _on_htoa_toggled(self, row: Adw.SwitchRow, *_args) -> None:
