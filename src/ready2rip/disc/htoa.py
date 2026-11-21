@@ -121,26 +121,47 @@ def extract_htoa(
     timeout: int = 600,
     mode: str = 'secure',
     sample_offset: int = 0,
+    overread=None,
 ) -> None:
     """Extract the pregap range before track 1 into *wav_path*.
 
     Uses an absolute sector span so track 1's own rip (by track number) never
-    includes this region — same separation as HTOA vs track 01.
+    includes this region — same separation as HTOA vs track 01. When
+    *sample_offset* ≠ 0 and *overread* allows lead-in, widens into lead-in
+    then trims back to the TOC HTOA byte length.
     """
+    from ready2rip.disc.overread import OverreadCapability, overread_span
     from ready2rip.rip.secure import paranoia_flags_for_mode
+    from ready2rip.rip.wav_trim import trim_wav_to_expected
     from ready2rip.util import find_cdparanoia
 
     binary = find_cdparanoia()
     if not binary:
         raise RuntimeError('cdparanoia not found')
 
-    end = htoa.length_sectors
-    if end <= 0:
+    toc_end = int(htoa.length_sectors)
+    if toc_end <= 0:
         raise RuntimeError('HTOA length is zero')
 
-    # Absolute span [0, track1_start). libcdio-paranoia: [.A]-[.B] end is
-    # relative (last inclusive = A+B), so B = end - 1 for exclusive end.
-    span = f'[.0]-[.{end - 1}]'
+    expected_bytes = 44 + toc_end * 2352
+    read_start, read_end = 0, toc_end
+    cap = overread if isinstance(overread, OverreadCapability) else OverreadCapability()
+    if int(sample_offset) != 0 and cap.any:
+        read_start, read_end = overread_span(
+            0,
+            toc_end,
+            sample_offset=int(sample_offset),
+            overread=cap,
+            at_disc_start=True,
+            at_disc_end=False,
+        )
+
+    # Absolute span [read_start, read_end). libcdio-paranoia: [.A]-[.B] end is
+    # relative (last inclusive = A+B), so B = (read_end - read_start) - 1.
+    rel_end = int(read_end) - int(read_start) - 1
+    if rel_end < 0:
+        raise RuntimeError(f'Invalid HTOA span [{read_start}, {read_end})')
+    span = f'[.{int(read_start)}]-[.{rel_end}]'
     cmd = [
         binary,
         '-w',
@@ -175,6 +196,7 @@ def extract_htoa(
         if len(detail) > 300:
             detail = detail[:300] + '…'
         raise RuntimeError(detail or f'HTOA extract failed ({span})')
+    trim_wav_to_expected(wav_path, expected_bytes)
 
 
 def htoa_display_title() -> str:

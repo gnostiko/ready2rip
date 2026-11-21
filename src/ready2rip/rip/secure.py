@@ -15,9 +15,11 @@ SECURE_NEVER_SKIP = 500
 # Forces more thorough jitter/overlap checking than drive defaults.
 SECURE_MIN_OVERLAP = 8
 
-# Reject WAVs short of the TOC-expected CDDA size. Prefer exact length;
-# allow at most one CDDA sector of slack for edge rounding.
+# Reject WAVs short of the TOC-expected CDDA size. Archival secure
+# (min_ratio ≥ 1.0) requires exact TOC length — no sector of slack.
+# Non-secure / burst paths may pass a lower min_ratio for recovery.
 SECURE_MIN_WAV_RATIO = 1.0
+# Legacy alias kept for callers/tests that still name the old one-sector slack.
 SECURE_WAV_SHORT_BYTES = 2352
 
 # Extra full test+copy cycles after a CRC mismatch (total attempts = 1 + N).
@@ -25,12 +27,17 @@ SECURE_TEST_COPY_RETRIES = 3
 
 
 def wav_size_minimum(expected_bytes: int, min_ratio: float) -> int:
-    """Smallest acceptable WAV size for a TOC-expected *expected_bytes*."""
+    """Smallest acceptable WAV size for a TOC-expected *expected_bytes*.
+
+    When *min_ratio* ≥ 1.0 (archival secure), require the full expected size.
+    Lower ratios (burst / recovery) scale the floor without the old one-sector
+    slack used for secure dual-pass.
+    """
     expected = max(0, int(expected_bytes))
     if expected <= 0:
         return 0
     if float(min_ratio) >= 1.0:
-        return max(0, expected - SECURE_WAV_SHORT_BYTES)
+        return expected
     return int(expected * max(0.0, float(min_ratio)))
 
 

@@ -26,11 +26,14 @@ from ready2rip.rip.secure import (
 from ready2rip.rip.wav_trim import trim_wav_to_expected
 
 
-def test_wav_size_minimum_exact_with_one_sector_slack() -> None:
+def test_wav_size_minimum_exact_for_archival_secure() -> None:
     assert SECURE_MIN_WAV_RATIO == 1.0
     expected = 44 + 2352 * 100
-    assert wav_size_minimum(expected, 1.0) == expected - SECURE_WAV_SHORT_BYTES
+    # Archival secure: exact TOC length (no one-sector slack).
+    assert wav_size_minimum(expected, 1.0) == expected
     assert wav_size_minimum(expected, 0.99) == int(expected * 0.99)
+    # Alias retained for docs/callers; no longer subtracted at ratio ≥ 1.
+    assert SECURE_WAV_SHORT_BYTES == 2352
 
 
 def test_offset_margin_sectors() -> None:

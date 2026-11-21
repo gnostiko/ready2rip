@@ -119,11 +119,14 @@ class ParanoiaMixin:
             minimum = wav_size_minimum(expected_bytes, min_ratio)
             if size < minimum:
                 got_pct = (100.0 * size / expected_bytes) if expected_bytes else 0.0
+                if float(min_ratio) >= 1.0:
+                    need = 'exact TOC length'
+                else:
+                    need = f'≥{min_ratio:.1%} of TOC length'
                 raise RuntimeError(
                     f'{label} extraction incomplete for track {track_number}: '
                     f'{size} bytes < {minimum} required '
-                    f'(got {got_pct:.1f}% of {expected_bytes} CDDA bytes; '
-                    f'need ≥{min_ratio:.1%} within one-sector slack)'
+                    f'(got {got_pct:.1f}% of {expected_bytes} CDDA bytes; need {need})'
                 )
 
     def _run_paranoia(

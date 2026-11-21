@@ -41,6 +41,20 @@ class ExtractMixin:
             )
 
         htoa_mode = job_extract_mode(job)
+        htoa_overread = getattr(job, 'overread', None)
+        htoa_burst_recovered = False
+        mode = htoa_mode
+
+        def _htoa_extract(dest: Path, *, pass_mode: str) -> None:
+            extract_htoa(
+                job.device,
+                htoa_info,
+                dest,
+                mode=pass_mode,
+                sample_offset=job.sample_offset,
+                overread=htoa_overread,
+            )
+
         try:
             report(
                 RipState.RIPPING,
@@ -51,14 +65,9 @@ class ExtractMixin:
                     else f'Extracting HTOA ({htoa_info.duration_label})…'
                 ),
             )
-            extract_htoa(
-                job.device,
-                htoa_info,
-                test_wav,
-                mode=htoa_mode,
-                sample_offset=job.sample_offset,
-            )
-            if job.burst_mode:
+            _htoa_extract(test_wav, pass_mode=htoa_mode)
+            if job.burst_mode or htoa_mode == 'burst':
+                mode = 'burst'
                 notes.append('HTOA extracted in burst mode')
         except Exception as exc:
             if job.burst_mode:
@@ -69,14 +78,12 @@ class ExtractMixin:
                 return False, None, [], notes
             if job.burst_fallback:
                 try:
-                    extract_htoa(
-                        job.device,
-                        htoa_info,
-                        test_wav,
-                        mode='burst',
-                        sample_offset=job.sample_offset,
+                    _htoa_extract(test_wav, pass_mode='burst')
+                    mode = 'burst'
+                    htoa_burst_recovered = True
+                    notes.append(
+                        f'Secure HTOA extract failed ({exc}); recovered in burst mode'
                     )
-                    notes.append('HTOA extracted in burst mode')
                 except Exception as exc2:
                     notes.append(f'HTOA extract failed: {exc2}')
                     if log_entry is not None:
@@ -108,9 +115,21 @@ class ExtractMixin:
         test_crc = ''
         copy_crc = ''
         peak = None
-        mode = job_extract_mode(job)
+        # Mirror Copy Image: first-pass burst skips CRC theater (no burst↔secure compare).
+        if mode == 'burst' or htoa_burst_recovered:
+            mode = 'burst'
+            if htoa_burst_recovered and not job.burst_mode:
+                notes.append(
+                    'HTOA extracted in burst mode '
+                    '(secure mode failed; disc may be scratched)'
+                )
 
-        if job.test_and_copy and not job.burst_mode:
+        if (
+            job.test_and_copy
+            and not job.burst_mode
+            and not htoa_burst_recovered
+            and mode != 'burst'
+        ):
             test_crc = wav_pcm_crc(test_wav)
             self._unlink_quiet(test_wav)
             if defeat_cache:
@@ -123,68 +142,26 @@ class ExtractMixin:
                 )
             report(RipState.RIPPING, 0.35, 'Copying HTOA…')
             try:
-                extract_htoa(
-                    job.device,
-                    htoa_info,
-                    copy_wav,
-                    mode='secure',
-                    sample_offset=job.sample_offset,
-                )
+                _htoa_extract(copy_wav, pass_mode='secure')
             except Exception:
-                if job.burst_fallback:
-                    extract_htoa(
-                        job.device,
-                        htoa_info,
-                        copy_wav,
-                        mode='burst',
-                        sample_offset=job.sample_offset,
-                    )
-                    mode = 'burst'
-                else:
+                if not job.burst_fallback:
                     raise
-            copy_crc, peak, _ = analyze_wav_for_log(copy_wav, htoa_info.length_sectors)
-            if test_crc != copy_crc:
-                max_htoa_retries = max(0, int(job.test_copy_max_retries))
-                matched_htoa = False
-                for htoa_attempt in range(max_htoa_retries):
-                    if defeat_cache:
-                        flush_drive_cache(
-                            job.device,
-                            job.disc_info,
-                            avoid_start=0,
-                            avoid_end=htoa_info.length_sectors,
-                        )
-                    # Re-run both passes so CRCs are from the same secure pair.
-                    extract_htoa(
-                        job.device,
-                        htoa_info,
-                        test_wav,
-                        mode='secure',
-                        sample_offset=job.sample_offset,
-                    )
-                    test_crc = wav_pcm_crc(test_wav)
-                    self._unlink_quiet(test_wav)
-                    if defeat_cache:
-                        flush_drive_cache(
-                            job.device,
-                            job.disc_info,
-                            avoid_start=0,
-                            avoid_end=htoa_info.length_sectors,
-                        )
-                    extract_htoa(
-                        job.device,
-                        htoa_info,
-                        copy_wav,
-                        mode='secure',
-                        sample_offset=job.sample_offset,
-                    )
-                    copy_crc, peak, _ = analyze_wav_for_log(copy_wav, htoa_info.length_sectors)
-                    if test_crc and copy_crc and test_crc == copy_crc:
-                        matched_htoa = True
-                        notes.append(f'HTOA test/copy CRC matched on retry {htoa_attempt + 1}')
-                        break
-                if not matched_htoa and test_crc != copy_crc:
-                    if job.burst_fallback:
+                # Copy failed secure → burst recovery; do not CRC vs secure test.
+                _htoa_extract(copy_wav, pass_mode='burst')
+                mode = 'burst'
+                htoa_burst_recovered = True
+                copy_crc, peak, _ = analyze_wav_for_log(copy_wav, htoa_info.length_sectors)
+                notes.append(
+                    'HTOA copy pass failed secure; recovered in burst '
+                    '(skipped test/copy CRC)'
+                )
+                test_crc = ''
+            if mode != 'burst':
+                copy_crc, peak, _ = analyze_wav_for_log(copy_wav, htoa_info.length_sectors)
+                if test_crc != copy_crc:
+                    max_htoa_retries = max(0, int(job.test_copy_max_retries))
+                    matched_htoa = False
+                    for htoa_attempt in range(max_htoa_retries):
                         if defeat_cache:
                             flush_drive_cache(
                                 job.device,
@@ -192,31 +169,60 @@ class ExtractMixin:
                                 avoid_start=0,
                                 avoid_end=htoa_info.length_sectors,
                             )
-                        extract_htoa(
-                            job.device,
-                            htoa_info,
-                            copy_wav,
-                            mode='burst',
-                            sample_offset=job.sample_offset,
+                        # Re-run both passes so CRCs are from the same secure pair.
+                        _htoa_extract(test_wav, pass_mode='secure')
+                        test_crc = wav_pcm_crc(test_wav)
+                        self._unlink_quiet(test_wav)
+                        if defeat_cache:
+                            flush_drive_cache(
+                                job.device,
+                                job.disc_info,
+                                avoid_start=0,
+                                avoid_end=htoa_info.length_sectors,
+                            )
+                        _htoa_extract(copy_wav, pass_mode='secure')
+                        copy_crc, peak, _ = analyze_wav_for_log(
+                            copy_wav, htoa_info.length_sectors
                         )
-                        mode = 'burst'
-                        copy_crc, peak, _ = analyze_wav_for_log(copy_wav, htoa_info.length_sectors)
-                        notes.append(
-                            f'HTOA test/copy CRC mismatch '
-                            f'(test={test_crc} copy={copy_crc}); '
-                            f'recovered in burst'
-                        )
-                    else:
-                        raise RuntimeError(
-                            f'HTOA test/copy CRC mismatch '
-                            f'(test={test_crc} copy={copy_crc}); '
-                            f'secure retries exhausted'
-                        )
-            wav_for_encode = copy_wav
+                        if test_crc and copy_crc and test_crc == copy_crc:
+                            matched_htoa = True
+                            notes.append(
+                                f'HTOA test/copy CRC matched on retry {htoa_attempt + 1}'
+                            )
+                            break
+                    if not matched_htoa and test_crc != copy_crc:
+                        if job.burst_fallback:
+                            if defeat_cache:
+                                flush_drive_cache(
+                                    job.device,
+                                    job.disc_info,
+                                    avoid_start=0,
+                                    avoid_end=htoa_info.length_sectors,
+                                )
+                            _htoa_extract(copy_wav, pass_mode='burst')
+                            mode = 'burst'
+                            htoa_burst_recovered = True
+                            copy_crc, peak, _ = analyze_wav_for_log(
+                                copy_wav, htoa_info.length_sectors
+                            )
+                            notes.append(
+                                f'HTOA test/copy CRC mismatch '
+                                f'(test={test_crc} copy={copy_crc}); '
+                                f'recovered in burst'
+                            )
+                            # Final audio is burst — do not keep secure test CRC as verified.
+                            test_crc = ''
+                        else:
+                            raise RuntimeError(
+                                f'HTOA test/copy CRC mismatch '
+                                f'(test={test_crc} copy={copy_crc}); '
+                                f'secure retries exhausted'
+                            )
+            wav_for_encode = copy_wav if copy_wav.is_file() else test_wav
         else:
             wav_for_encode = test_wav
             copy_crc, peak, _ = analyze_wav_for_log(test_wav, htoa_info.length_sectors)
-            test_crc = copy_crc
+            test_crc = '' if mode == 'burst' else copy_crc
 
         safe_title = ''.join(c if c not in '<>:"/\\|?*' else '_' for c in title)
         dests = self._destinations_for_track(job, 1, filename=f'00 - {safe_title}')
@@ -251,7 +257,15 @@ class ExtractMixin:
             return False, None, [], notes
 
         if log_entry is not None:
-            if job.test_and_copy and test_crc and copy_crc:
+            if mode == 'burst':
+                log_entry.extract_mode = 'burst (-Z)'
+                log_entry.test_crc = ''
+                log_entry.copy_crc = copy_crc or test_crc
+                log_entry.crc_verified = None
+                if htoa_burst_recovered and not job.burst_mode:
+                    log_entry.had_errors = True
+                    log_entry.notes.append('Secure HTOA failed — burst (-Z) used for final audio')
+            elif job.test_and_copy and test_crc and copy_crc:
                 log_entry.extract_mode = f'{mode} (test & copy)'
                 log_entry.test_crc = test_crc
                 log_entry.copy_crc = copy_crc
@@ -266,7 +280,13 @@ class ExtractMixin:
             log_entry.filename = primary_out.name
             log_entry.status = 'OK'
             log_entry.notes.append('Hidden Track One Audio (non-silent pregap)')
-            if job.test_and_copy and test_crc and copy_crc and test_crc != copy_crc:
+            if (
+                mode != 'burst'
+                and job.test_and_copy
+                and test_crc
+                and copy_crc
+                and test_crc != copy_crc
+            ):
                 log_entry.notes.append(
                     f'HTOA test/copy CRC mismatch kept copy '
                     f'(test={test_crc.upper()} copy={copy_crc.upper()})'
@@ -1746,21 +1766,31 @@ class ExtractMixin:
         """True when a size-OK secure pass still should try burst.
 
         cdparanoia with ``-X`` can leave a large but truncated WAV after skips;
-        prefer burst recovery when the process aborted with hard errors.
+        prefer burst recovery on hard errors even when the process "finished".
         """
-        if stats.exit_code in (None, 0):
-            return False
-        hard = stats.skips > 0 or stats.readerrs > 0 or stats.scratch > 0
-        # Aborted mid-track (never emitted finished) with hard errors.
-        if hard and not stats.finished:
+        hard = (
+            stats.skips > 0
+            or stats.readerrs > 0
+            or stats.scratch > 0
+            or stats.cacheerrs > 0
+            or stats.hard_errors > 0
+        )
+        # Any non-zero exit with hard errors → burst (finished or not).
+        if stats.exit_code not in (None, 0) and hard:
             return True
-        if expected_bytes and expected_bytes > 1000 and wav_path.is_file():
-            try:
-                size = wav_path.stat().st_size
-            except OSError:
-                return True
-            # Near-full files after an abort that still pass min_ratio (e.g. 98%).
-            if size < int(expected_bytes * 0.995):
+        # Exit 0 but paranoia still reported hard errors → do not trust secure.
+        if stats.exit_code in (None, 0) and stats.hard_errors > 0:
+            return True
+        if stats.exit_code not in (None, 0):
+            if expected_bytes and expected_bytes > 1000 and wav_path.is_file():
+                try:
+                    size = wav_path.stat().st_size
+                except OSError:
+                    return True
+                # Near-full files after an abort that still pass min_ratio.
+                if size < int(expected_bytes * 0.995):
+                    return True
+            elif expected_bytes and expected_bytes > 1000:
                 return True
         return False
 

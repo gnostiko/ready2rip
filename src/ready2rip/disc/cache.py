@@ -51,14 +51,15 @@ def flush_drive_cache(
             except Exception as exc:
                 log.debug('Cache flush audio read failed: %s', exc)
 
-    # Full-disc / HTOA image: no audio outside the avoid window.
+    # Full-disc / HTOA image: no clean audio outside the avoid window.
+    # Always prefer dual SEEK+READ (never treat an overlapping -Z as success).
     if _flush_via_data_or_seek(device, disc, avoid_start, avoid_end):
         return True
 
     if span is not None and find_cdparanoia() is not None:
         log.warning(
             'Cache flush span %s overlaps the just-read region; '
-            'defeat may be weaker (Copy Image / full-disc avoid)',
+            'overlapping -Z is not counted as a successful defeat',
             span,
         )
         with tempfile.TemporaryDirectory(prefix='ready2rip-flush-') as tmp:
@@ -68,8 +69,8 @@ def flush_drive_cache(
                     device, span, out, timeout=timeout, quiet=True, burst=True
                 )
             except Exception as exc:
-                log.debug('Cache flush read failed (non-fatal): %s', exc)
-                return False
+                log.debug('Cache flush overlapping read failed (non-fatal): %s', exc)
+        # Overlapping audio flush must not report success — head may still be hot.
     return False
 
 
@@ -100,32 +101,52 @@ def _flush_via_data_or_seek(
                 return True
 
         # Pure audio full-disc image: seek the head far from the avoid mid.
+        a0 = int(avoid_start) if avoid_start is not None else 0
+        a1 = int(avoid_end) if avoid_end is not None else 0
         target = 0
-        if avoid_start is not None and avoid_end is not None and avoid_end > avoid_start:
-            mid = (avoid_start + avoid_end) // 2
+        if a1 > a0:
+            mid = (a0 + a1) // 2
             # Prefer opposite end of the ripped span.
-            target = avoid_start if mid > avoid_start + 75 else max(0, avoid_end - 1)
-            if target >= avoid_start and target < avoid_end:
+            target = a0 if mid > a0 + 75 else max(0, a1 - 1)
+            if target >= a0 and target < a1:
                 # Still inside — jump toward disc start or just past avoid_end.
-                target = 0 if avoid_start > 0 else max(0, avoid_end)
-        # Dual SEEK + dwell: heavily caching drives often keep the just-read
-        # audio window hot after a single seek (Copy Image / full-disc avoid).
-        alt = 0 if target > 0 else max(0, int(avoid_end or 0))
-        if mmc.seek_lba(target):
-            time.sleep(0.12)
-            # Best-effort one-sector read at the seek point (may fail at lead-out).
-            mmc.read_raw_sectors(target, 1)
-            if alt != target:
-                time.sleep(0.05)
-                if mmc.seek_lba(alt):
-                    time.sleep(0.12)
-                    mmc.read_raw_sectors(alt, 1)
+                target = 0 if a0 > 0 else max(0, a1)
+        alt = 0 if target > 0 else max(0, a1)
+
+        # Second distant pair: lead-out−1 and a mid-avoid LBA (or disc start).
+        leadout = 0
+        if disc is not None:
+            leadout = int(getattr(disc, 'leadout_lba', 0) or 0)
+            if leadout <= 0 and disc.tracks:
+                last = disc.tracks[-1]
+                leadout = int(last.start_sector) + int(last.length_sectors)
+        lo_m1 = max(0, leadout - 1) if leadout > 0 else 0
+        mid_avoid = 0
+        if a1 > a0:
+            # Point just outside the avoid window toward the nearer end.
+            mid_avoid = max(0, a0 - 1) if a0 > 0 else a1
+        pairs: list[tuple[int, int]] = [(target, alt)]
+        if lo_m1 and lo_m1 not in (target, alt):
+            pairs.append((lo_m1, mid_avoid if mid_avoid != lo_m1 else 0))
+
+        moved = False
+        for first, second in pairs:
+            if mmc.seek_lba(first):
+                time.sleep(0.12)
+                # Best-effort one-sector read (may fail at lead-out).
+                mmc.read_raw_sectors(first, 1)
+                moved = True
+                if second != first:
+                    time.sleep(0.05)
+                    if mmc.seek_lba(second):
+                        time.sleep(0.12)
+                        mmc.read_raw_sectors(second, 1)
             log.debug(
                 'Cache flush via dual SCSI SEEK to LBA %s then %s',
-                target,
-                alt,
+                first,
+                second,
             )
-            return True
+        return moved
     except Exception as exc:
         log.debug('MMC cache flush failed: %s', exc)
         return False
