@@ -29,6 +29,16 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-21">
       <description>
         <p>
+          0.4.73: Probe and show drive overread when sample offset is set;
+          harden archival extract (HTOA burst skips CRC theater, stricter
+          secure→burst gate, exact TOC WAV length, HTOA lead-in overread,
+          stronger cache flush).
+        </p>
+      </description>
+    </release>
+    <release version="0.4.72" date="2026-11-21">
+      <description>
+        <p>
           0.4.72: Fix rip-log wording for Normal and intentional Burst modes;
           clarify Rip mode settings vs Secure OK / DB-verified outcomes; add
           GI-backed CI tests for SettingsStore and window mixin exports.
