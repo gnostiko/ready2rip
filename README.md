@@ -91,15 +91,6 @@ Auto-lookup, MusicBrainz / FreeDB, disc gap-fill (CD-TEXT / MCN / ISRC), artwork
 
 ## Install
 
-Release assets for **x86_64** and **aarch64**:
-[GitHub Releases](https://github.com/gnostiko/ready2rip/releases).
-
-| Format | Best for |
-|--------|----------|
-| **AppImage** | Portable installs (recommended) |
-| **Debian** | Ubuntu / Debian |
-| **RPM** | Fedora and related |
-
 ### AppImage
 
 ```bash
