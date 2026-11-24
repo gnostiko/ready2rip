@@ -29,6 +29,13 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-24">
       <description>
         <p>
+          0.4.75: UI fixes, faster offset detect, prefer libcdio-paranoia.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.74" date="2026-11-24">
+      <description>
+        <p>
           0.4.74: Bug fixes and some code refactor.
         </p>
       </description>
