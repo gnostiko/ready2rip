@@ -26,7 +26,14 @@
     <name>gnostiko</name>
   </developer>
   <releases>
-    <release version="@APPLICATION_VERSION@" date="2026-11-21">
+    <release version="@APPLICATION_VERSION@" date="2026-11-24">
+      <description>
+        <p>
+          0.4.74: Bug fixes and some code refactor.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.73" date="2026-11-21">
       <description>
         <p>
           0.4.73: Probe and show drive overread when sample offset is set;
