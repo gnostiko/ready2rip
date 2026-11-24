@@ -29,6 +29,13 @@
     <release version="@APPLICATION_VERSION@" date="2026-11-24">
       <description>
         <p>
+          0.4.76: Remove CTDB; AccurateRip-only verification.
+        </p>
+      </description>
+    </release>
+    <release version="0.4.75" date="2026-11-24">
+      <description>
+        <p>
           0.4.75: UI fixes, faster offset detect, prefer libcdio-paranoia.
         </p>
       </description>
