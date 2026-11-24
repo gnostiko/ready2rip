@@ -78,12 +78,8 @@ class RipActionsMixin:
 
 
     def _selected_track_numbers(self) -> list[int]:
-        selected = [num for num, check in sorted(self._track_checks.items()) if check.get_active()]
-        if selected:
-            return selected
-        if self._disc is not None:
-            return [t.number for t in self._disc.tracks]
-        return []
+        """Tracks with an active checkbox (empty when none are checked)."""
+        return [num for num, check in sorted(self._track_checks.items()) if check.get_active()]
 
 
     def _start_rip(self) -> None:
@@ -91,10 +87,14 @@ class RipActionsMixin:
             self._toast('No disc to rip')
             return
 
-        track_numbers = self._selected_track_numbers()
-        if not track_numbers:
-            self._toast('Select at least one track to rip')
-            return
+        # Copy Image rips the whole disc; track checkboxes are dimmed and unused.
+        if self.store.get().copy_image:
+            track_numbers = [t.number for t in self._disc.tracks]
+        else:
+            track_numbers = self._selected_track_numbers()
+            if not track_numbers:
+                self._toast('Select at least one track to rip')
+                return
 
         settings = self.store.get()
         if needs_drive_setup(self.store):
@@ -149,10 +149,16 @@ class RipActionsMixin:
 
     def _start_rip_after_offset_check(self) -> None:
         settings = self.store.get()
-        track_numbers = self._selected_track_numbers()
-        if not track_numbers:
-            self._toast('Select at least one track to rip')
+        if self._disc is None or not self._disc.tracks:
+            self._toast('No disc to rip')
             return
+        if settings.copy_image:
+            track_numbers = [t.number for t in self._disc.tracks]
+        else:
+            track_numbers = self._selected_track_numbers()
+            if not track_numbers:
+                self._toast('Select at least one track to rip')
+                return
 
         # Full-res for folder cover; separate embed sizes for lossy / lossless.
         folder_art = self._artwork
@@ -433,11 +439,49 @@ class RipActionsMixin:
 
 
     def _set_track_select_sensitive(self, sensitive: bool) -> None:
-        """Enable/disable left-side track select checkboxes (select-all + per track)."""
+        """Enable/disable left-side track select checkboxes (select-all + per track).
+
+        Copy Image mode always dims the checks — the whole disc is ripped.
+        """
+        enabled = bool(sensitive) and not bool(self.store.get().copy_image)
+        tip = (
+            'Copy Image rips the whole disc — track selection is unused'
+            if not enabled and self.store.get().copy_image
+            else None
+        )
         if self._track_select_all is not None:
-            self._track_select_all.set_sensitive(sensitive)
-        for check in self._track_checks.values():
-            check.set_sensitive(sensitive)
+            self._track_select_all.set_sensitive(enabled)
+            if tip:
+                self._track_select_all.set_tooltip_text(tip)
+            else:
+                self._track_select_all.set_tooltip_text(
+                    'Select or deselect all tracks for ripping'
+                )
+        for number, check in self._track_checks.items():
+            check.set_sensitive(enabled)
+            check.set_tooltip_text(
+                tip or f'Include track {number:02d} in the rip'
+            )
+
+
+    def _sync_copy_image_ui(self) -> None:
+        """Dim track selection and Also encode when Copy Image is on."""
+        copy_on = bool(self.store.get().copy_image)
+        self._set_track_select_sensitive(not self._ripping)
+        also = getattr(self, '_also_encode_row', None)
+        if also is not None:
+            also.set_sensitive(not copy_on)
+            if copy_on:
+                also.set_subtitle('Not used in Copy Image mode')
+                also.set_tooltip_text(
+                    'Also encode is skipped when Copy Image is on '
+                    '(one continuous disc image only)'
+                )
+            else:
+                also.set_subtitle('')
+                also.set_tooltip_text(
+                    'Encode a second lossy copy from the same verified rip'
+                )
 
 
     def _set_ripping_ui(self, active: bool) -> None:

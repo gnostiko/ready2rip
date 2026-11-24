@@ -1420,6 +1420,7 @@ class ExtractMixin:
                 burst_fallback=burst_fallback and primary_mode != 'secure',
                 force_mode=primary_mode,
                 sample_offset=sample_offset,
+                overread=job.overread if job is not None else None,
                 on_burst=on_burst,
                 on_extract_progress=on_extract_progress,
             )
@@ -1431,6 +1432,8 @@ class ExtractMixin:
         burst_timeout = _extract_timeout(expected_bytes, mode='burst')
         expected_frames = max(0, int(expected_sectors)) * FRAMES_PER_SECTOR
 
+        overread_cap = job.overread if job is not None else None
+
         def run_primary() -> ParanoiaStats:
             return self._run_cdparanoia(
                 device,
@@ -1440,6 +1443,7 @@ class ExtractMixin:
                 timeout=primary_timeout,
                 allow_nonzero=True,
                 sample_offset=sample_offset,
+                overread=overread_cap,
                 on_extract_progress=on_extract_progress,
                 expected_frames=expected_frames,
                 expected_bytes=expected_bytes,
@@ -1454,6 +1458,7 @@ class ExtractMixin:
                 timeout=burst_timeout,
                 allow_nonzero=True,
                 sample_offset=sample_offset,
+                overread=overread_cap,
                 on_extract_progress=on_extract_progress,
                 expected_frames=expected_frames,
                 expected_bytes=expected_bytes,
@@ -1554,6 +1559,7 @@ class ExtractMixin:
         burst_fallback: bool = False,
         force_mode: str | None = None,
         sample_offset: int = 0,
+        overread: OverreadCapability | None = None,
         on_burst: Callable[[], None] | None = None,
         on_extract_progress: Callable[[float], None] | None = None,
         timeout_secure: int | None = None,
@@ -1587,6 +1593,7 @@ class ExtractMixin:
                 timeout=timeout_secure,
                 allow_nonzero=True,
                 sample_offset=sample_offset,
+                overread=overread,
                 on_extract_progress=on_extract_progress,
                 expected_frames=expected_frames,
                 expected_bytes=progress_bytes,
@@ -1602,6 +1609,7 @@ class ExtractMixin:
                 timeout=timeout_burst,
                 allow_nonzero=True,
                 sample_offset=sample_offset,
+                overread=overread,
                 on_extract_progress=on_extract_progress,
                 expected_frames=expected_frames,
                 expected_bytes=progress_bytes,

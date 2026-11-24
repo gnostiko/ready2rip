@@ -356,11 +356,22 @@ class DriveMonitorMixin:
                     'Waiting for the drive to finish loading the disc…'
                 )
             else:
-                self.status_page.set_title('No audio CD detected')
-                self.status_page.set_description(
-                    f'A disc is present on {device}, but no audio tracks were found. '
-                    'Insert an audio CD.'
-                )
+                from ready2rip.util import find_cdparanoia
+
+                if find_cdparanoia() is None:
+                    self.status_page.set_title('cd-paranoia required')
+                    self.status_page.set_description(
+                        'A disc is in the drive, but no paranoia binary was found.\n'
+                        'Prefer libcdio-paranoia (Debian/Ubuntu: sudo apt install '
+                        'cd-paranoia). Classic cdparanoia also works. '
+                        'Then re-insert the disc or reopen ready2rip.'
+                    )
+                else:
+                    self.status_page.set_title('No audio CD detected')
+                    self.status_page.set_description(
+                        f'A disc is present on {device}, but no audio tracks were found. '
+                        'Insert an audio CD.'
+                    )
             self._album = None
             self._rebuild_track_list(None)
             self._fill_album_edit_fields(None)

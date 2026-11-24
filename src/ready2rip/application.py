@@ -15,7 +15,6 @@ from ready2rip.drive_setup import needs_drive_setup
 from ready2rip.icons import register_application_icons
 from ready2rip.settings import SettingsStore
 from ready2rip.shortcuts import present_keyboard_shortcuts
-from ready2rip.theme import apply_color_scheme
 
 
 class Application(Adw.Application):
@@ -52,7 +51,6 @@ class Application(Adw.Application):
         self._startup_complete = True
         GLib.set_application_name(config.APPLICATION_NAME)
         GLib.set_prgname(config.APPLICATION_ID)
-        apply_color_scheme(self.store.get().color_scheme)
         try:
             register_application_icons()
         except Exception:

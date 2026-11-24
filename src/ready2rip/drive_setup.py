@@ -17,14 +17,17 @@ from ready2rip.accuraterip import (
     POPULAR_OFFSETS,
     AccurateRipConfidence,
     AccurateRipDatabase,
-    AccurateRipVerifier,
     compute_checksums_samples,
     disc_ids_from_info,
     fetch_database,
     load_cdda_wav_samples,
 )
 from ready2rip.disc.probe import DiscInfo, TrackInfo, probe_disc
-from ready2rip.rip.secure import secure_paranoia_flags
+from ready2rip.rip.paranoia_cmd import (
+    absolute_span_arg,
+    build_paranoia_argv,
+    want_force_overread,
+)
 from ready2rip.util import find_cdparanoia, subprocess_env_for
 
 log = logging.getLogger(__name__)
@@ -36,13 +39,20 @@ CancelCb = Callable[[], bool]
 CALIBRATION_BUDGET_SEC = 180.0
 # Leave a little room for saving results after the deadline check.
 _EXTRACT_TIMEOUT_SEC = 90
+# Short secure confirm is much cheaper than a full-track paranoia re-rip.
+_CONFIRM_TIMEOUT_SEC = 45
 # Try a few tracks when the first extract or match fails.
 _MAX_CALIBRATION_TRACKS = 3
 # AccurateRip skips 5 sectors at the start of track 1 / end of the last track.
 # Offset detection must use those tracks so a non-zero offset's silence padding
 # falls inside the skipped window (middle tracks can never match +6, etc.).
-_AR_SKIP_FRAMES = 5 * 588
+_AR_SKIP_SECTORS = 5
+_AR_SKIP_FRAMES = _AR_SKIP_SECTORS * 588
 _MIN_CALIBRATION_SAMPLES = _AR_SKIP_FRAMES * 2 + 588
+# Short secure confirm window (sectors). Enough for AR edge + offset margin.
+_CONFIRM_SPAN_SECTORS = 60
+# Allow a few mismatched frames at span edges (overread/silence padding).
+_CONFIRM_EDGE_SLACK_FRAMES = 588
 
 
 @dataclass
@@ -204,16 +214,13 @@ def calibrate_drive_offset(
             wav_path = tmp_path / f'cal{track.number}.wav'
             try:
                 # Burst mode: much faster than full paranoia for offset finding.
-                cal_cmd = [
+                cal_cmd = build_paranoia_argv(
                     cdparanoia,
-                    '-q',
-                    '-Z',
-                    '-w',
-                    '-d',
                     device,
-                    str(track.number),
-                    str(wav_path),
-                ]
+                    mode='burst',
+                    quiet=True,
+                )
+                cal_cmd.extend([str(track.number), str(wav_path)])
                 subprocess.run(
                     cal_cmd,
                     check=True,
@@ -278,7 +285,7 @@ def calibrate_drive_offset(
             if result is not None:
                 off, conf, _v1, _v2 = result
                 progress(
-                    f'Confirming offset {off:+d} with secure extract…',
+                    f'Confirming offset {off:+d} (short secure span)…',
                     0.92,
                 )
                 if cancelled():
@@ -289,7 +296,7 @@ def calibrate_drive_offset(
                         track_number=track.number,
                     )
                 confirm_timeout = min(
-                    _EXTRACT_TIMEOUT_SEC, max(20, int(remaining() - 5))
+                    _CONFIRM_TIMEOUT_SEC, max(12, int(remaining() - 5))
                 )
                 if _confirm_offset_secure(
                     cdparanoia=cdparanoia,
@@ -297,6 +304,8 @@ def calibrate_drive_offset(
                     track=track,
                     info=info,
                     offset=int(off),
+                    db=db,
+                    burst_samples=samples,
                     tmp_path=tmp_path,
                     timeout=confirm_timeout,
                 ):
@@ -618,6 +627,74 @@ def _scan_with_native(
         return off, v1, v2
 
 
+def _confirm_span_sectors(
+    track: TrackInfo,
+    *,
+    track_count: int,
+    sample_offset: int,
+    sector_count: int = _CONFIRM_SPAN_SECTORS,
+) -> tuple[int, int]:
+    """Absolute ``[start, end)`` sectors for a short secure confirm extract.
+
+    Prefers the AccurateRip-sensitive edge: end of the last track (positive
+    offsets) or start of track 1 (negative / first-track checks).
+    """
+    margin = (abs(int(sample_offset)) + 587) // 588
+    n = max(int(sector_count), _AR_SKIP_SECTORS + margin + 8)
+    length = max(1, int(track.length_sectors))
+    n = min(n, length)
+    start0 = int(track.start_sector)
+    end0 = start0 + length
+    if int(track.number) == int(track_count):
+        end = end0
+        start = end - n
+    else:
+        start = start0
+        end = start + n
+    return start, end
+
+
+def _software_offset_span(
+    burst_samples,
+    *,
+    track_start_sector: int,
+    span_start: int,
+    span_end: int,
+    sample_offset: int,
+) -> list[int]:
+    """Expected uint32 frames for a span after applying *sample_offset* in software."""
+    rel0 = (int(span_start) - int(track_start_sector)) * 588
+    n_frames = (int(span_end) - int(span_start)) * 588
+    off = int(sample_offset)
+    n_burst = len(burst_samples)
+    out: list[int] = []
+    for j in range(n_frames):
+        src = rel0 + j + off
+        out.append(int(burst_samples[src]) if 0 <= src < n_burst else 0)
+    return out
+
+
+def _span_samples_match(expected: list[int], actual, *, slack: int) -> bool:
+    """True when *actual* matches *expected*, ignoring *slack* frames at each edge."""
+    n_exp = len(expected)
+    n_act = len(actual)
+    if n_exp <= 0 or n_act <= 0:
+        return False
+    n = min(n_exp, n_act)
+    edge = max(0, min(int(slack), n // 4))
+    lo = edge
+    hi = n - edge
+    if hi <= lo:
+        lo, hi = 0, n
+    mismatches = 0
+    for i in range(lo, hi):
+        if int(actual[i]) != int(expected[i]):
+            mismatches += 1
+    checked = hi - lo
+    # Allow up to 0.5% mismatches inside the compared window (drive jitter).
+    return mismatches * 200 <= checked
+
+
 def _confirm_offset_secure(
     *,
     cdparanoia: str,
@@ -625,36 +702,71 @@ def _confirm_offset_secure(
     track: TrackInfo,
     info: DiscInfo,
     offset: int,
+    db: AccurateRipDatabase,
+    burst_samples,
     tmp_path: Path,
     timeout: int,
 ) -> bool:
-    """Re-extract with full paranoia + ``-O`` and require an AccurateRip MATCH.
+    """Confirm a candidate offset with a short secure ``-O`` span extract.
 
-    Burst-based discovery is fast but can bit-error; a secure confirm avoids
-    saving a wrong offset from a lucky CRC collision on a bad extract.
+    Burst discovery can bit-error; a paranoia re-read of the AR-sensitive edge
+    must match the software-offset view of the burst audio, and the full-track
+    AccurateRip checksum for *offset* must still MATCH.
     """
+    off = int(offset)
+    span_start, span_end = _confirm_span_sectors(
+        track,
+        track_count=info.track_count,
+        sample_offset=off,
+    )
+    try:
+        v1, v2 = compute_checksums_samples(
+            burst_samples,
+            int(track.number),
+            info.track_count,
+            sample_offset=off,
+        )
+    except ValueError as exc:
+        log.warning('Secure offset confirm AR checksum failed: %s', exc)
+        return False
+    match = db.best_match(int(track.number), v1, v2)
+    if match.confidence != AccurateRipConfidence.MATCH:
+        log.warning(
+            'Secure offset confirm AR %s for track %s offset %+d: %s',
+            match.confidence.name,
+            track.number,
+            off,
+            match.message,
+        )
+        return False
+
     wav_path = tmp_path / f'confirm{int(track.number)}.wav'
     try:
         wav_path.unlink(missing_ok=True)
     except OSError:
         pass
-    cmd = [
+
+    # Calibration: omit --force-overread (capability often unknown; silence pad).
+    cmd = build_paranoia_argv(
         cdparanoia,
-        '-w',
-        '-d',
         device,
-        *secure_paranoia_flags(),
-    ]
-    if int(offset):
-        cmd.extend(['-O', str(int(offset))])
-    cmd.extend([str(int(track.number)), str(wav_path)])
+        mode='secure',
+        sample_offset=off,
+        force_overread=want_force_overread(off, None),
+    )
+    try:
+        span = absolute_span_arg(span_start, span_end)
+    except ValueError as exc:
+        log.warning('Secure offset confirm span: %s', exc)
+        return False
+    cmd.extend([span, str(wav_path)])
     try:
         subprocess.run(
             cmd,
             check=True,
             capture_output=True,
             text=True,
-            timeout=max(15, int(timeout)),
+            timeout=max(12, int(timeout)),
             env=subprocess_env_for(cmd),
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
@@ -662,21 +774,35 @@ def _confirm_offset_secure(
         return False
     if not wav_path.is_file() or wav_path.stat().st_size < 1000:
         return False
-    verifier = AccurateRipVerifier(sample_offset=0)
-    status = verifier.prepare(info)
-    if 'not in database' in status.lower() or 'could not compute' in status.lower():
-        log.warning('Secure offset confirm: %s', status)
+
+    try:
+        secure_samples = load_cdda_wav_samples(wav_path)
+    except ValueError as exc:
+        log.warning('Secure offset confirm WAV load failed: %s', exc)
         return False
-    verifier.set_total_tracks(info.track_count)
-    result = verifier.verify_wav(wav_path, int(track.number))
-    ok = result.confidence == AccurateRipConfidence.MATCH
+
+    expected = _software_offset_span(
+        burst_samples,
+        track_start_sector=track.start_sector,
+        span_start=span_start,
+        span_end=span_end,
+        sample_offset=off,
+    )
+    ok = _span_samples_match(
+        expected,
+        secure_samples,
+        slack=_CONFIRM_EDGE_SLACK_FRAMES,
+    )
     if not ok:
         log.warning(
-            'Secure offset confirm AR %s for track %s offset %+d: %s',
-            result.confidence.name,
+            'Secure offset confirm PCM mismatch track %s offset %+d '
+            'span [%s, %s) (secure=%s frames, expected=%s)',
             track.number,
-            offset,
-            result.message,
+            off,
+            span_start,
+            span_end,
+            len(secure_samples),
+            len(expected),
         )
     return ok
 

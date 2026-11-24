@@ -102,6 +102,7 @@ def rebuild_track_list(window: Ready2RipWindow, info: DiscInfo | None) -> None:
     window._tracks_editing = False
     # Fresh size groups so rebuilt widgets align cleanly.
     window._track_lead_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+    window._track_status_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
     window._track_dur_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
 
     if info is None:
@@ -157,8 +158,8 @@ def rebuild_track_list(window: Ready2RipWindow, info: DiscInfo | None) -> None:
 
     group.set_title(f'Tracks · {info.track_count}')
     window._apply_tracks_edit_mode()
-    # Rebuild while ripping must keep select checkboxes greyed out.
-    window._set_track_select_sensitive(not window._ripping)
+    # Rebuild while ripping / Copy Image must keep select + Also encode in sync.
+    window._sync_copy_image_ui()
 
 
 def align_track_row_baseline(*widgets: Gtk.Widget) -> None:
@@ -285,6 +286,11 @@ def make_track_column_header(window: Ready2RipWindow) -> Gtk.ListBoxRow:
     align_track_row_baseline(fields)
     box.append(fields)
 
+    status_h = track_caption('Verify', 'ready2rip-track-status', xalign=1.0)
+    status_h.set_tooltip_text('AccurateRip / CTDB result after a rip')
+    window._track_status_size.add_widget(status_h)
+    box.append(status_h)
+
     dur_h = track_caption('Time', 'ready2rip-track-dur', xalign=1.0)
     window._track_dur_size.add_widget(dur_h)
     box.append(dur_h)
@@ -360,12 +366,15 @@ def make_track_edit_row(
 
     status = Gtk.Label(label='')
     status.add_css_class('ready2rip-track-text')
+    status.add_css_class('ready2rip-track-status')
     status.add_css_class('dim-label')
     status.set_ellipsize(Pango.EllipsizeMode.END)
-    status.set_max_width_chars(12)
+    status.set_width_chars(10)
+    status.set_max_width_chars(28)
     status.set_xalign(1.0)
     status.set_valign(Gtk.Align.BASELINE)
-    status.set_visible(False)
+    # Always allocated so the Verify column lines up with the header.
+    window._track_status_size.add_widget(status)
     box.append(status)
 
     # Same text metrics as Title/Artist values (not caption-sized headers).

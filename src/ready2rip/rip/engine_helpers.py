@@ -59,6 +59,27 @@ def _retag_title(path: Path, title: str, *, track_number: int = 0) -> None:
             audio['TITLE'] = [title]
             audio['TRACKNUMBER'] = [str(track_number)]
             audio.save()
+        elif suffix in {'.wav', '.aiff', '.aif'}:
+            from mutagen.id3 import TIT2, TRCK
+
+            if suffix == '.wav':
+                from mutagen.wave import WAVE
+
+                audio = WAVE(path)
+            else:
+                from mutagen.aiff import AIFF
+
+                audio = AIFF(path)
+            if audio.tags is None:
+                audio.add_tags()
+            tags = audio.tags
+            if tags is None:
+                return
+            tags.delall('TIT2')
+            tags.delall('TRCK')
+            tags.add(TIT2(encoding=3, text=title))
+            tags.add(TRCK(encoding=3, text=str(track_number)))
+            audio.save(v2_version=4)
     except Exception as exc:
         log.warning('Could not retag HTOA title on %s: %s', path, exc)
 

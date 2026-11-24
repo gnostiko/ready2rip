@@ -17,14 +17,18 @@ class ParanoiaMixin:
         *,
         mode: str,
         sample_offset: int = 0,
+        force_overread: bool = False,
     ) -> list[str]:
         """Build shared cdparanoia argv for secure, normal, or burst extract."""
-        cmd = [binary, '-w', '-d', device]
-        if sample_offset:
-            # Apply drive sample offset at read time (read offset correction).
-            cmd.extend(['-O', str(int(sample_offset))])
-        cmd.extend(paranoia_flags_for_mode(mode))
-        return cmd
+        from ready2rip.rip.paranoia_cmd import build_paranoia_argv
+
+        return build_paranoia_argv(
+            binary,
+            device,
+            mode=mode,
+            sample_offset=sample_offset,
+            force_overread=force_overread,
+        )
 
     def _run_cdparanoia(
         self,
@@ -36,14 +40,23 @@ class ParanoiaMixin:
         timeout: int,
         allow_nonzero: bool = False,
         sample_offset: int = 0,
+        overread: OverreadCapability | None = None,
         on_extract_progress: Callable[[float], None] | None = None,
         expected_frames: int = 0,
         expected_bytes: int | None = None,
     ) -> ParanoiaStats:
+        from ready2rip.rip.paranoia_cmd import want_force_overread
+
         binary = find_cdparanoia()
         if not binary:
             raise RuntimeError('cdparanoia not found')
-        cmd = self._paranoia_cmd_base(binary, device, mode=mode, sample_offset=sample_offset)
+        cmd = self._paranoia_cmd_base(
+            binary,
+            device,
+            mode=mode,
+            sample_offset=sample_offset,
+            force_overread=want_force_overread(sample_offset, overread),
+        )
         cmd.extend([str(track_number), str(wav_path)])
         return self._run_paranoia(
             cmd,
@@ -67,6 +80,7 @@ class ParanoiaMixin:
         timeout: int,
         allow_nonzero: bool = False,
         sample_offset: int = 0,
+        overread: OverreadCapability | None = None,
         on_extract_progress: Callable[[float], None] | None = None,
         expected_frames: int = 0,
         expected_bytes: int | None = None,
@@ -78,21 +92,26 @@ class ParanoiaMixin:
         end sector B. Passing absolute B made Copy Image request past the
         lead-out (“Time/sector offset goes beyond end of disc”).
         """
+        from ready2rip.rip.paranoia_cmd import absolute_span_arg, want_force_overread
+
         binary = find_cdparanoia()
         if not binary:
             raise RuntimeError('cdparanoia not found')
-        start = int(start_sector)
-        end = int(end_sector)
-        if end <= start:
-            raise RuntimeError(f'Invalid sector span [{start}, {end}) for disc image')
-        # N = end - start sectors → last inclusive = end - 1 → relative B.
-        rel_end = end - start - 1
-        span = f'[.{start}]-[.{rel_end}]'
-        cmd = self._paranoia_cmd_base(binary, device, mode=mode, sample_offset=sample_offset)
+        try:
+            span = absolute_span_arg(start_sector, end_sector)
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+        cmd = self._paranoia_cmd_base(
+            binary,
+            device,
+            mode=mode,
+            sample_offset=sample_offset,
+            force_overread=want_force_overread(sample_offset, overread),
+        )
         cmd.extend([span, str(wav_path)])
         return self._run_paranoia(
             cmd,
-            what=f'cdparanoia {mode} span {span} (sectors [{start}, {end}))',
+            what=f'cdparanoia {mode} span {span} (sectors [{start_sector}, {end_sector}))',
             timeout=timeout,
             allow_nonzero=allow_nonzero,
             on_extract_progress=on_extract_progress,

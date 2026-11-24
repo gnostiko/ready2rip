@@ -237,20 +237,13 @@ def _extract_span(
     quiet: bool = True,
 ) -> None:
     """Burst (-Z) seek+read used only for cache eviction (audio discarded)."""
+    from ready2rip.rip.paranoia_cmd import build_paranoia_argv
     from ready2rip.util import find_cdparanoia
 
     binary = find_cdparanoia()
     if not binary:
         raise RuntimeError('cdparanoia not found')
-    cmd = [
-        binary,
-        '-w',
-        '-d',
-        device,
-        '-Z',
-    ]
-    if quiet:
-        cmd.append('-q')
+    cmd = build_paranoia_argv(binary, device, mode='burst', quiet=quiet)
     cmd.extend([span, str(wav_path)])
     completed = subprocess.run(
         cmd,

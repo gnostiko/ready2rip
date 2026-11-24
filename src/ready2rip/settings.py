@@ -154,7 +154,6 @@ _SCHEMA_XML = 'org.ready2rip.Ready2Rip.gschema.xml'
 # attr → (gschema-key, kind) — single map for SettingsStore.update().
 SETTINGS_KEY_MAP: dict[str, tuple[str, str]] = {
     'device': ('device', 'string'),
-    'color_scheme': ('color-scheme', 'string'),
     'output_directory': ('output-directory', 'string'),
     'encode_format': ('encode-format', 'string'),
     'flac_compression': ('flac-compression', 'int'),
@@ -319,8 +318,6 @@ class AppSettings:
     """Snapshot of user preferences used by the UI and rip pipeline."""
 
     device: str = '/dev/sr0'
-    # Appearance: default (system) | light | dark — Adw.StyleManager color scheme.
-    color_scheme: str = 'default'
     output_directory: str = ''  # empty → default_output_directory() (Music)
     encode_format: str = 'flac'
     flac_compression: int = 5
@@ -569,12 +566,8 @@ class SettingsStore:
         if s is None:
             snap = replace(self._memory)
         else:
-            scheme = _get_string(s, 'color-scheme', 'default')
-            if scheme not in ('default', 'light', 'dark'):
-                scheme = 'default'
             snap = AppSettings(
                 device=s.get_string('device') or '/dev/sr0',
-                color_scheme=scheme,
                 output_directory=s.get_string('output-directory') or '',
                 encode_format=normalize_encode_format(_get_string(s, 'encode-format', 'flac')),
                 flac_compression=s.get_int('flac-compression'),

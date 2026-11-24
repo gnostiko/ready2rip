@@ -51,8 +51,39 @@ _FETCH_HOST_SUFFIXES = (
 
 
 def find_cdparanoia() -> str | None:
-    """Return path to ``cdparanoia`` or libcdio's ``cd-paranoia`` binary."""
-    return shutil.which('cdparanoia') or shutil.which('cd-paranoia')
+    """Return path to a paranoia binary.
+
+    Prefers libcdio-paranoia (``cd-paranoia``) when both are installed; falls
+    back to classic Xiph ``cdparanoia``.
+    """
+    return shutil.which('cd-paranoia') or shutil.which('cdparanoia')
+
+
+def paranoia_backend(path: str | None) -> str:
+    """Classify a paranoia binary: ``libcdio``, ``xiph``, or ``unknown``."""
+    if not path:
+        return 'unknown'
+    try:
+        name = Path(path).resolve().name
+    except OSError:
+        name = Path(path).name
+    lowered = name.lower()
+    if lowered in ('cd-paranoia', 'cd-paranoia.exe'):
+        return 'libcdio'
+    if lowered in ('cdparanoia', 'cdparanoia.exe'):
+        # AppImage may ship libcdio as ``cdparanoia`` via symlink.
+        try:
+            resolved = Path(path).resolve().name.lower()
+        except OSError:
+            resolved = lowered
+        if resolved in ('cd-paranoia', 'cd-paranoia.exe'):
+            return 'libcdio'
+        return 'xiph'
+    if 'cd-paranoia' in lowered:
+        return 'libcdio'
+    if 'cdparanoia' in lowered:
+        return 'xiph'
+    return 'unknown'
 
 
 # ---------------------------------------------------------------------------

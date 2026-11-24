@@ -190,6 +190,7 @@ class CopyImageMixin:
                         burst_fallback=False,
                         force_mode=force_mode,
                         sample_offset=job.sample_offset,
+                        overread=job.overread,
                         timeout_secure=span_timeout_secure,
                         timeout_burst=span_timeout_burst,
                         on_extract_progress=on_extract_progress,

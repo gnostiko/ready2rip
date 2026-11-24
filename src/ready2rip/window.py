@@ -190,9 +190,10 @@ class Ready2RipWindow(
         self._custom_filename_template = ''
         # Last lossy-encode custom root (cleared from the entry when leaving Custom).
         self._custom_also_directory = ''
-        # Lead (#) and Time stay locked; Title|Artist use a fixed 50/50 grid
-        # so column headers do not drift when the window is resized.
+        # Lead (#), Verify, and Time stay locked; Title|Artist use a fixed
+        # 50/50 grid so column headers do not drift when the window is resized.
         self._track_lead_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
+        self._track_status_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
         self._track_dur_size = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
         self._album_field_rows: list[Gtk.Widget] = []
         self._album_title_row: Adw.EntryRow | None = None
@@ -420,6 +421,9 @@ class Ready2RipWindow(
         dialog = Adw.Dialog(title='Settings')
         dialog.set_content_width(560)
         dialog.set_content_height(700)
+        # libadwaita ≥ 1.9: breakpoints need GTK size requests (content-* alone
+        # is not enough and spams “does not have a minimum size”).
+        dialog.set_size_request(360, 320)
 
         toolbar = Adw.ToolbarView()
         header = Adw.HeaderBar()
@@ -505,13 +509,22 @@ class Ready2RipWindow(
         if hasattr(self.cover_picture, 'set_can_shrink'):
             self.cover_picture.set_can_shrink(True)
 
+        self._cover_pointer_inside = False
         self._set_cover_actions_visible(False)
-        for button in (
-            self.search_art_button,
-            self.choose_art_button,
-            self.clear_art_button,
+        for button, label in (
+            (self.search_art_button, 'Search for artwork'),
+            (self.choose_art_button, 'Choose an image file'),
+            (self.clear_art_button, 'Remove artwork'),
         ):
-            button.set_focusable(False)
+            button.set_focusable(True)
+            button.update_property(
+                [Gtk.AccessibleProperty.LABEL],
+                [label],
+            )
+            focus = Gtk.EventControllerFocus()
+            focus.connect('enter', self._on_cover_focus_enter)
+            focus.connect('leave', self._on_cover_focus_leave)
+            button.add_controller(focus)
         self._show_placeholder_cover()
         self._sync_cover_action_sensitivity()
 
@@ -661,11 +674,35 @@ class Ready2RipWindow(
         if visible:
             self._update_cover_size_label()
 
+    def _cover_actions_should_show(self) -> bool:
+        if getattr(self, '_cover_pointer_inside', False):
+            return True
+        for button in (
+            self.search_art_button,
+            self.choose_art_button,
+            self.clear_art_button,
+        ):
+            if button.has_focus():
+                return True
+        return False
+
+    def _refresh_cover_actions_visibility(self) -> None:
+        self._set_cover_actions_visible(self._cover_actions_should_show())
+
     def _on_cover_pointer_enter(self, *_args) -> None:
-        self._set_cover_actions_visible(True)
+        self._cover_pointer_inside = True
+        self._refresh_cover_actions_visibility()
 
     def _on_cover_pointer_leave(self, *_args) -> None:
-        self._set_cover_actions_visible(False)
+        self._cover_pointer_inside = False
+        self._refresh_cover_actions_visibility()
+
+    def _on_cover_focus_enter(self, *_args) -> None:
+        self._refresh_cover_actions_visibility()
+
+    def _on_cover_focus_leave(self, *_args) -> None:
+        # Defer so moving focus between cover buttons does not flicker off.
+        GLib.idle_add(self._refresh_cover_actions_visibility)
 
     def _sync_cover_action_sensitivity(self) -> None:
         self.clear_art_button.set_sensitive(self._artwork is not None)
@@ -1133,6 +1170,8 @@ class Ready2RipWindow(
             )
         else:
             self._also_format_row.set_subtitle('')
+        # Copy Image disables Also encode (engine skips companions).
+        self._sync_copy_image_ui()
 
     def _apply_quality_selection(self, fmt: str, index: int) -> None:
         if fmt == 'flac' and 0 <= index < len(self._flac_levels):
@@ -1598,6 +1637,7 @@ class Ready2RipWindow(
 
     def _on_copy_image_toggled(self, row: Adw.SwitchRow, *_args) -> None:
         self.store.update(copy_image=row.get_active())
+        self._sync_copy_image_ui()
         if row.get_active():
             self._toast('Copy image on — rip writes one continuous disc image')
 
@@ -2130,8 +2170,8 @@ class Ready2RipWindow(
                 parts.append(ctdb.message)
             msg = ' · '.join(parts)
             label.set_text(msg)
-            label.set_tooltip_text(msg)
-            label.set_visible(bool(msg))
+            label.set_tooltip_text(msg if msg else None)
+            # Keep the Verify column allocated so rows stay aligned.
 
     # —— Metadata lookup ——
 

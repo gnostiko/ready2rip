@@ -129,7 +129,7 @@ class RipEngine(
         if find_cdparanoia() is None:
             return RipResult(
                 success=False,
-                error='cdparanoia not found (install cdparanoia or libcdio-paranoia)',
+                error='cdparanoia not found (install libcdio-paranoia / cd-paranoia)',
             )
 
         try:

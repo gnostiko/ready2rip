@@ -139,6 +139,11 @@ button.ready2rip-cover-trash:active {{
 .ready2rip-track-artist {{
     min-width: 96px;
 }}
+.ready2rip-track-status {{
+    min-width: 7em;
+    font-feature-settings: "tnum";
+    opacity: 0.75;
+}}
 .ready2rip-track-dur {{
     min-width: 3em;
     font-feature-settings: "tnum";

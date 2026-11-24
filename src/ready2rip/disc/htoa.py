@@ -129,7 +129,11 @@ def extract_htoa(
     then trims back to the TOC HTOA byte length.
     """
     from ready2rip.disc.overread import OverreadCapability, overread_span
-    from ready2rip.rip.secure import paranoia_flags_for_mode
+    from ready2rip.rip.paranoia_cmd import (
+        absolute_span_arg,
+        build_paranoia_argv,
+        want_force_overread,
+    )
     from ready2rip.rip.wav_trim import trim_wav_to_expected
     from ready2rip.util import find_cdparanoia
 
@@ -154,24 +158,18 @@ def extract_htoa(
             at_disc_end=False,
         )
 
-    # Absolute span [read_start, read_end). libcdio-paranoia: [.A]-[.B] end is
-    # relative (last inclusive = A+B), so B = (read_end - read_start) - 1.
-    rel_end = int(read_end) - int(read_start) - 1
-    if rel_end < 0:
-        raise RuntimeError(f'Invalid HTOA span [{read_start}, {read_end})')
-    span = f'[.{int(read_start)}]-[.{rel_end}]'
-    cmd = [
+    try:
+        span = absolute_span_arg(read_start, read_end)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    cmd = build_paranoia_argv(
         binary,
-        '-w',
-        '-d',
         device,
-    ]
-    if sample_offset:
-        cmd.extend(['-O', str(int(sample_offset))])
-    # Same mode→flags map as track extract; burst stays quiet for HTOA probe.
-    cmd.extend(paranoia_flags_for_mode(mode))
-    if mode == 'burst':
-        cmd.append('-q')
+        mode=mode,
+        sample_offset=int(sample_offset),
+        force_overread=want_force_overread(int(sample_offset), cap),
+        quiet=(mode == 'burst'),
+    )
     cmd.extend([span, str(wav_path)])
 
     completed = subprocess.run(

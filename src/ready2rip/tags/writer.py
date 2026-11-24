@@ -47,6 +47,22 @@ def _apply_id3_encoder_tags(
         tags.add(TENC(encoding=3, text=encoded_by))
 
 
+def _apply_id3_compilation(tags, album_meta: AlbumMetadata | None) -> None:
+    """Write TCMP (or TXXX:COMPILATION) for Various Artists; clear otherwise."""
+    from mutagen.id3 import TXXX
+
+    tags.delall('TCMP')
+    tags.delall('TXXX:COMPILATION')
+    if not _is_compilation(album_meta):
+        return
+    try:
+        from mutagen.id3 import TCMP
+
+        tags.add(TCMP(encoding=3, text='1'))
+    except ImportError:
+        tags.add(TXXX(encoding=3, desc='COMPILATION', text=['1']))
+
+
 @dataclass
 class ReplayGainValues:
     track_gain_db: float
@@ -796,14 +812,7 @@ class TagWriter:
             isrc = _track_isrc(album_meta, track_number)
             if isrc:
                 tags.add(TSRC(encoding=3, text=isrc))
-        if _is_compilation(album_meta):
-            try:
-                from mutagen.id3 import TCMP
-
-                tags.add(TCMP(encoding=3, text='1'))
-            except ImportError:
-                tags.delall('TXXX:COMPILATION')
-                tags.add(TXXX(encoding=3, desc='COMPILATION', text=['1']))
+        _apply_id3_compilation(tags, album_meta)
         tags.delall('TXXX:LABEL')
         _apply_id3_encoder_tags(tags, encoder=encoder, encoded_by=encoded_by)
         tags.delall('USLT')
@@ -861,6 +870,7 @@ class TagWriter:
                 'TPOS',
                 'TCON',
                 'TPUB',
+                'TCMP',
                 'TDRC',
                 'TSRC',
             ):
@@ -895,6 +905,7 @@ class TagWriter:
                 isrc = _track_isrc(album_meta, track_number)
                 if isrc:
                     tags.add(TSRC(encoding=3, text=isrc))
+            _apply_id3_compilation(tags, album_meta)
             _apply_id3_encoder_tags(tags, encoder=encoder, encoded_by=encoded_by)
             tags.delall('USLT')
             uslt_text = (lyrics or '').strip() or (synced_lyrics or '').strip()

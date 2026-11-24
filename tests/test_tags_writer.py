@@ -8,6 +8,7 @@ from ready2rip.tags.writer import (
     TagWriter,
     _album_barcode,
     _album_date,
+    _apply_id3_compilation,
     _artist_names_for_tags,
     _is_compilation,
     _people_tag_values,
@@ -46,6 +47,44 @@ def test_is_compilation_various_artists() -> None:
     assert _is_compilation(AlbumMetadata(artist='Various Artists'))
     assert _is_compilation(AlbumMetadata(artist='VA'))
     assert not _is_compilation(AlbumMetadata(artist='Radiohead'))
+
+
+def test_apply_id3_compilation_writes_tcmp_for_va() -> None:
+    import pytest
+
+    pytest.importorskip('mutagen')
+    from mutagen.id3 import TCMP
+
+    class _Tags:
+        def __init__(self) -> None:
+            self.frames: dict[str, object] = {}
+
+        def delall(self, key: str) -> None:
+            self.frames.pop(key, None)
+            # Also drop TXXX:COMPILATION-style keys used by the helper.
+            for existing in list(self.frames):
+                if existing == key or existing.startswith(f'{key}:'):
+                    self.frames.pop(existing, None)
+
+        def add(self, frame) -> None:
+            self.frames[getattr(frame, 'FrameID', type(frame).__name__)] = frame
+
+    tags = _Tags()
+    _apply_id3_compilation(tags, AlbumMetadata(artist='Various Artists'))
+    assert 'TCMP' in tags.frames
+    assert list(tags.frames['TCMP'].text) == ['1']  # type: ignore[attr-defined]
+    assert isinstance(tags.frames['TCMP'], TCMP)
+
+    _apply_id3_compilation(tags, AlbumMetadata(artist='Radiohead'))
+    assert 'TCMP' not in tags.frames
+
+
+def test_id3_pcm_container_writes_compilation() -> None:
+    """WAV/AIFF share MP3's VA compilation flag (regression)."""
+    import inspect
+
+    src = inspect.getsource(TagWriter._tag_id3_pcm_container)
+    assert '_apply_id3_compilation' in src
 
 
 def test_apply_vorbis_writes_date_barcode_isrc() -> None:

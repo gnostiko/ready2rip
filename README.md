@@ -129,7 +129,7 @@ sudo dnf install ./ready2rip-0.4.74-1.x86_64.rpm   # or .aarch64.rpm
 | Dependency | Role |
 |------------|------|
 | **Python ≥ 3.11** + **PyGObject** (Gtk 4, Adw 1) | UI |
-| **cdparanoia** | TOC + secure extract |
+| **cd-paranoia** (libcdio-paranoia; or classic **cdparanoia**) | TOC + secure extract |
 | **mutagen**, **Pillow** | Tags and cover art |
 | **flac**, **lame**, **ffmpeg**, **opusenc** | Encode |
 | Meson, Ninja | Install / packaging |
@@ -137,11 +137,11 @@ sudo dnf install ./ready2rip-0.4.74-1.x86_64.rpm   # or .aarch64.rpm
 ```bash
 # Fedora
 sudo dnf install python3-gobject gtk4 libadwaita python3-mutagen python3-pillow \
-  cdparanoia flac lame ffmpeg opus-tools
+  libcdio-paranoia flac lame ffmpeg opus-tools
 
-# Debian / Ubuntu
+# Debian / Ubuntu (prefer libcdio's cd-paranoia; classic cdparanoia also works)
 sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 \
-  python3-mutagen python3-pil cdparanoia flac lame ffmpeg opus-tools
+  python3-mutagen python3-pil cd-paranoia flac lame ffmpeg opus-tools
 
 ./run
 pip install --user 'mutagen>=1.47' 'pillow>=10' ruff pytest
