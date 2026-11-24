@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ready2rip.accuraterip import AccurateRipConfidence, AccurateRipResult
-from ready2rip.ctdb import CtdbConfidence, CtdbResult
 
 if TYPE_CHECKING:
     from ready2rip.rip.engine_types import RipJob, RipResult
@@ -48,38 +47,10 @@ def _ar_error_tracks(ar_results: list[AccurateRipResult]) -> list[int]:
     ]
 
 
-def _ctdb_mismatch_tracks(
-    *,
-    ar_results: list[AccurateRipResult],
-    ctdb_results: list[CtdbResult],
-) -> list[int]:
-    """Exact-TOC CTDB conflicts, deferred when AccurateRip already matched."""
-    ar_matched = {
-        r.track_number
-        for r in ar_results
-        if r.confidence == AccurateRipConfidence.MATCH
-    }
-    return [
-        r.track_number
-        for r in ctdb_results
-        if r.confidence == CtdbConfidence.MISMATCH
-        and r.track_number not in ar_matched
-    ]
-
-
-def _ctdb_error_tracks(ctdb_results: list[CtdbResult]) -> list[int]:
-    return [
-        r.track_number
-        for r in ctdb_results
-        if r.confidence == CtdbConfidence.ERROR
-    ]
-
-
 def archival_db_warnings(
     job: RipJob,
     *,
     ar_results: list[AccurateRipResult],
-    ctdb_results: list[CtdbResult],
 ) -> list[str]:
     """Pressing/DB mismatch notes (soft unless ``archival_strict``)."""
     warnings: list[str] = []
@@ -89,12 +60,6 @@ def archival_db_warnings(
             warnings.append(
                 f'AccurateRip mismatch on track(s) {_tracks_csv(bad)}'
             )
-    if job.verify_ctdb and ctdb_results:
-        bad = _ctdb_mismatch_tracks(
-            ar_results=ar_results, ctdb_results=ctdb_results
-        )
-        if bad:
-            warnings.append(f'CTDB mismatch on track(s) {_tracks_csv(bad)}')
     return warnings
 
 
@@ -102,16 +67,14 @@ def archival_fail_reasons(
     job: RipJob,
     *,
     ar_results: list[AccurateRipResult],
-    ctdb_results: list[CtdbResult],
     burst_tracks: list[int],
     skipped_unverified: list[int] | None = None,
     ar_lookup_error: str | None = None,
-    ctdb_lookup_error: str | None = None,
 ) -> list[str]:
     """Reasons a finished rip is not archival-grade.
 
     Default (lenient): hard-fail on insecure extract / verify infrastructure
-    errors only. AccurateRip/CTDB *mismatches* are soft unless
+    errors only. AccurateRip *mismatches* are soft unless
     ``job.archival_strict`` is on. ``require_db_match`` still requires ≥1 MATCH.
     """
     reasons: list[str] = []
@@ -153,21 +116,8 @@ def archival_fail_reasons(
                 reasons.append(
                     'AccurateRip: no tracks matched (require ≥1 MATCH is on)'
                 )
-    if job.verify_ctdb:
-        if ctdb_lookup_error and not ctdb_results:
-            reasons.append(f'CTDB lookup failed: {ctdb_lookup_error}')
-        if ctdb_results:
-            errors = _ctdb_error_tracks(ctdb_results)
-            if errors:
-                reasons.append(f'CTDB error on track(s) {_tracks_csv(errors)}')
-        elif expect_verify:
-            reasons.append('CTDB: verification produced no results')
     if job.archival_strict:
-        reasons.extend(
-            archival_db_warnings(
-                job, ar_results=ar_results, ctdb_results=ctdb_results
-            )
-        )
+        reasons.extend(archival_db_warnings(job, ar_results=ar_results))
     return reasons
 
 
@@ -190,30 +140,10 @@ def summarize_ar(results: list[AccurateRipResult]) -> str:
     return ', '.join(parts)
 
 
-def summarize_ctdb(results: list[CtdbResult]) -> str:
-    if not results:
-        return ''
-    matches = sum(1 for r in results if r.confidence == CtdbConfidence.MATCH)
-    mismatches = sum(1 for r in results if r.confidence == CtdbConfidence.MISMATCH)
-    missing = sum(1 for r in results if r.confidence == CtdbConfidence.NOT_IN_DB)
-    errors = sum(1 for r in results if r.confidence == CtdbConfidence.ERROR)
-    if matches == len(results):
-        return f'CTDB {matches}/{len(results)} match'
-    parts = [f'CTDB {matches}/{len(results)} match']
-    if mismatches:
-        parts.append(f'{mismatches} mismatch')
-    if missing:
-        parts.append(f'{missing} unverified')
-    if errors:
-        parts.append(f'{errors} error')
-    return ', '.join(parts)
-
-
 def compute_tiers(
     job: RipJob,
     *,
     ar_results: list[AccurateRipResult],
-    ctdb_results: list[CtdbResult],
     burst_tracks: list[int],
     fail_reasons: list[str],
 ) -> OutcomeTiers:
@@ -227,7 +157,7 @@ def compute_tiers(
         and not bool(burst_tracks)
         and not bool(job.burst_mode)
     )
-    db_verified = _db_verified(job, ar_results=ar_results, ctdb_results=ctdb_results)
+    db_verified = _db_verified(job, ar_results=ar_results)
     archival_ok = not fail_reasons
     summary = _tier_summary(
         job,
@@ -235,7 +165,6 @@ def compute_tiers(
         db_verified=db_verified,
         archival_ok=archival_ok,
         ar_results=ar_results,
-        ctdb_results=ctdb_results,
         burst_tracks=burst_tracks,
     )
     return OutcomeTiers(
@@ -250,7 +179,6 @@ def _db_verified(
     job: RipJob,
     *,
     ar_results: list[AccurateRipResult],
-    ctdb_results: list[CtdbResult],
 ) -> bool:
     """True when every enabled DB check returned MATCH for all checked tracks."""
     checked = False
@@ -258,29 +186,19 @@ def _db_verified(
         checked = True
         if any(r.confidence != AccurateRipConfidence.MATCH for r in ar_results):
             return False
-    if job.verify_ctdb and ctdb_results:
-        checked = True
-        if any(r.confidence != CtdbConfidence.MATCH for r in ctdb_results):
-            return False
     return checked
 
 
 def _all_not_in_db(
     *,
     ar_results: list[AccurateRipResult],
-    ctdb_results: list[CtdbResult],
     verify_ar: bool,
-    verify_ctdb: bool,
 ) -> bool:
     """True when every checked result is NOT_IN_DB (no match / mismatch / error)."""
     has_any = False
     if verify_ar and ar_results:
         has_any = True
         if any(r.confidence != AccurateRipConfidence.NOT_IN_DB for r in ar_results):
-            return False
-    if verify_ctdb and ctdb_results:
-        has_any = True
-        if any(r.confidence != CtdbConfidence.NOT_IN_DB for r in ctdb_results):
             return False
     return has_any
 
@@ -292,7 +210,6 @@ def _tier_summary(
     db_verified: bool,
     archival_ok: bool,
     ar_results: list[AccurateRipResult],
-    ctdb_results: list[CtdbResult],
     burst_tracks: list[int],
 ) -> str:
     if not archival_ok:
@@ -313,18 +230,13 @@ def _tier_summary(
         parts.append('DB verified')
     elif _all_not_in_db(
         ar_results=ar_results,
-        ctdb_results=ctdb_results,
         verify_ar=bool(job.verify_accuraterip),
-        verify_ctdb=bool(job.verify_ctdb),
     ):
-        parts.append('not in AccurateRip/CTDB')
+        parts.append('not in AccurateRip')
     else:
         ar = summarize_ar(ar_results) if job.verify_accuraterip else ''
-        ctdb = summarize_ctdb(ctdb_results) if job.verify_ctdb else ''
         if ar:
             parts.append(ar)
-        if ctdb:
-            parts.append(ctdb)
     return ' · '.join(parts) if parts else 'Done'
 
 
@@ -334,7 +246,6 @@ def format_done_message(
     outputs: list[Path],
     tiers: OutcomeTiers,
     ar_results: list[AccurateRipResult],
-    ctdb_results: list[CtdbResult],
     burst_tracks: list[int],
     htoa_ripped: bool = False,
     data_count: int = 0,
@@ -358,11 +269,8 @@ def format_done_message(
     if data_count:
         done_msg = f'{done_msg} · {data_count} data'
     ar_summary = summarize_ar(ar_results)
-    ctdb_summary = summarize_ctdb(ctdb_results)
     if ar_summary:
         done_msg = f'{done_msg} · {ar_summary}'
-    if ctdb_summary:
-        done_msg = f'{done_msg} · {ctdb_summary}'
     if burst_tracks:
         if copy_image and burst_tracks == [0]:
             done_msg = f'{done_msg} · burst (-Z) on disc image'
@@ -384,7 +292,7 @@ def format_done_message(
         tiers.archival_ok
         and tiers.secure_ok
         and not tiers.db_verified
-        and (ar_results or ctdb_results)
+        and ar_results
     ):
         if 'Secure OK' not in done_msg:
             done_msg = f'Secure OK · {done_msg}'
@@ -406,7 +314,6 @@ def finish_result(
     htoa_ripped: bool = False,
     test_copy_mismatches: list[int] | None = None,
     log_dir: Path | None = None,
-    ctdb_results: list[CtdbResult] | None = None,
     secure_ok: bool = True,
     db_verified: bool = False,
     archival_ok: bool | None = None,
@@ -448,7 +355,6 @@ def finish_result(
         error=error,
         cancelled=cancelled,
         accuraterip=ar_results,
-        ctdb=ctdb_results or [],
         notes=notes,
         burst_tracks=burst_tracks,
         log_path=log_path,
@@ -513,26 +419,20 @@ def evaluate_archival(
     job: RipJob,
     *,
     ar_results: list[AccurateRipResult],
-    ctdb_results: list[CtdbResult],
     burst_tracks: list[int],
     notes: list[str],
     skipped_unverified: list[int] | None = None,
     ar_lookup_error: str | None = None,
-    ctdb_lookup_error: str | None = None,
 ) -> tuple[list[str], OutcomeTiers]:
     """Compute fail reasons + tiers and append notes (burst + archival)."""
     fail_reasons = archival_fail_reasons(
         job,
         ar_results=ar_results,
-        ctdb_results=ctdb_results,
         burst_tracks=burst_tracks,
         skipped_unverified=skipped_unverified,
         ar_lookup_error=ar_lookup_error,
-        ctdb_lookup_error=ctdb_lookup_error,
     )
-    soft = archival_db_warnings(
-        job, ar_results=ar_results, ctdb_results=ctdb_results
-    )
+    soft = archival_db_warnings(job, ar_results=ar_results)
     apply_burst_notes(job, burst_tracks=burst_tracks, notes=notes)
     append_archival_notes(
         notes, fail_reasons=fail_reasons, soft_warnings=soft
@@ -540,7 +440,6 @@ def evaluate_archival(
     tiers = compute_tiers(
         job,
         ar_results=ar_results,
-        ctdb_results=ctdb_results,
         burst_tracks=burst_tracks,
         fail_reasons=fail_reasons,
     )

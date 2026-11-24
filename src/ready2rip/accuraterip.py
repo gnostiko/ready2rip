@@ -387,7 +387,7 @@ class AccurateRipVerifier:
         return self.verify_samples(pcm, track_number)
 
     def verify_pcm(self, pcm: bytes, track_number: int) -> AccurateRipResult:
-        """Verify from raw interleaved LE PCM (same bytes as CTDB ``load_cdda_pcm``)."""
+        """Verify from raw interleaved LE PCM (same layout as ``load_cdda_pcm``)."""
         raw = pcm
         if len(raw) % 4 != 0:
             raw = raw[: len(raw) - (len(raw) % 4)]

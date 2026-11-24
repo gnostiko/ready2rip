@@ -57,8 +57,6 @@ def sync_options_from_store(window: Ready2RipWindow) -> None:
         (window._ar_row, window._on_ar_toggled),
         (window._require_db_match_row, window._on_require_db_match_toggled),
         (window._archival_strict_row, window._on_archival_strict_toggled),
-        (window._ctdb_row, window._on_ctdb_toggled),
-        (window._submit_ctdb_row, window._on_submit_ctdb_toggled),
         (window._burst_row, window._on_burst_toggled),
         (window._log_row, window._on_log_toggled),
         (window._cue_row, window._on_cue_toggled),
@@ -156,8 +154,6 @@ def sync_options_from_store(window: Ready2RipWindow) -> None:
         window._require_db_match_row.set_active(settings.require_db_match)
         window._sync_require_db_match_sensitivity(settings.verify_accuraterip)
         window._archival_strict_row.set_active(settings.archival_strict)
-        window._ctdb_row.set_active(settings.verify_ctdb)
-        window._submit_ctdb_row.set_active(settings.submit_ctdb)
         window._burst_row.set_active(settings.burst_fallback)
         window._sync_rip_mode_sensitivity(rip_mode)
         window._log_row.set_active(settings.write_rip_log)

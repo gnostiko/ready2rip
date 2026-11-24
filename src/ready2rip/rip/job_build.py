@@ -96,8 +96,6 @@ def job_from_settings(
         m4a_feat_artists=settings.m4a_feat_artists,
         save_cover_file=folder_art is not None,
         verify_accuraterip=settings.verify_accuraterip,
-        verify_ctdb=settings.verify_ctdb,
-        submit_ctdb=settings.submit_ctdb,
         require_db_match=settings.require_db_match,
         archival_strict=settings.archival_strict,
         sample_offset=settings.drive_sample_offset,

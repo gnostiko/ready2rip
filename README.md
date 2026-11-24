@@ -2,8 +2,7 @@
 
 **ready2rip is a secure CD ripper for Linux.**
 
-Careful archival extraction with full cdparanoia, AccurateRip and CTDB
-verification, MusicBrainz / gnudb metadata, disc-native CD-TEXT / MCN / ISRC,
+Careful archival extraction with full cdparanoia, AccurateRip verification, MusicBrainz / gnudb metadata, disc-native CD-TEXT / MCN / ISRC,
 and modern tagging.
 
 
@@ -16,7 +15,6 @@ and modern tagging.
 |---------|-------------|
 | Secure rip | Full cdparanoia, retries, test & copy (CRC match required) |
 | AccurateRip | Online CRC check after extraction (per-track and Copy image) |
-| CTDB | CUETools Database verify; optional confirm / new-parity submit |
 | Metadata | MusicBrainz + FreeDB-compatible lookup; editable album and tracks |
 | Disc extras | Live CD-TEXT, MCN (barcode), and per-track ISRC when the drive supports it |
 | Tags | mutagen — FLAC / MP3 / AAC (M4A) / Opus / WAV / AIFF |
@@ -24,13 +22,13 @@ and modern tagging.
 | Artwork | Cover Art Archive and iTunes, with optional embed sizes |
 | Lyrics | Optional LRCLIB fetch; embed and/or sidecar for lossless |
 | Logs & CUE | Detailed rip log; multi-file or image CUE |
-| Drive setup | Sample offset calibration (required when AccurateRip or CTDB is on) |
+| Drive setup | Sample offset calibration (required when AccurateRip is on) |
 
 ## Typical workflow
 
 1. **Install / run** — AppImage recommended (see [Install](#install)). [Gear Lever](https://github.com/mijorus/gearlever) adds menu integration and updates.
 2. **Insert an audio CD.** ready2rip detects the disc and shows tracks.
-3. **Drive setup** (first run, or new drive): calibrate **sample offset**. With AccurateRip or CTDB on, ripping is blocked until calibrated.
+3. **Drive setup** (first run, or new drive): calibrate **sample offset**. With AccurateRip on, ripping is blocked until calibrated.
 4. **Metadata** (optional): auto-lookup, or **Lookup → By disc ID** / paste a MusicBrainz release URL. Edit fields and cover art as needed.
 5. **Settings**: encoder, rip mode (Archival / Normal / Burst), CUE/log, Copy image, HTOA, Existing files, and related options.
 6. Press **Rip**. Files land under your output folder using the album/track templates.
@@ -43,10 +41,10 @@ and modern tagging.
 | Never-skip | Keep re-reading imperfect data; don’t silently leave holes |
 | Sample offset | Applied at extract time when calibrated |
 | Test and copy | Extract twice, compare CRC32; unmatched tracks fail the rip |
-| AccurateRip / CTDB | Verify offset-corrected audio against public databases |
+| AccurateRip | Verify offset-corrected audio against the public database |
 | Burst fallback | Off by default — optional insecure recovery after secure retries fail |
 
-**Copy image** rips one continuous lossless image (FLAC / WAV / AIFF) instead of per-track files; AR and CTDB still verify per track. Mixed-mode data tracks are saved as raw `.bin` beside the lossless output.
+**Copy image** rips one continuous lossless image (FLAC / WAV / AIFF) instead of per-track files; AccurateRip still verifies per track. Mixed-mode data tracks are saved as raw `.bin` beside the lossless output.
 
 Default layout: `{album_artist}/{dated_album}/{disc_folder}` / `{track:02d} - {title}`.
 
@@ -76,12 +74,11 @@ Default layout: `{album_artist}/{dated_album}/{disc_folder}` / `{track:02d} - {t
 | Option | Default | Notes |
 |--------|---------|-------|
 | **Rip mode** | Archival | Archival = secure + test & copy; Normal = paranoia with repair; Burst = `-Z` |
-| **Copy image** | Off | One continuous image; AR + CTDB still verify per track |
+| **Copy image** | Off | One continuous image; AccurateRip still verifies per track |
 | **Pregap / HTOA** | On | Longer non-silent track-1 pregap → track `00` |
 | **Data tracks** | On | Mixed-mode / CD-Extra as raw `.bin` |
-| **AccurateRip / CTDB** | On | Require calibrated sample offset |
+| **AccurateRip** | On | Require calibrated sample offset |
 | **Strict archival** | Off | Fail archival on DB mismatches; off keeps Secure OK with partial AR notes |
-| **Submit to CTDB** | Off | Confirm match or submit new parity |
 | **Burst fallback** | Off | Insecure `-Z` after Archival retries fail |
 | **Write rip log / CUE** | On | Log and CUE in the album folder |
 | **Auto-rip / Auto-eject** | Off | Start after detect / eject when a rip finishes |

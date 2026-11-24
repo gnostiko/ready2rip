@@ -13,9 +13,6 @@ from ready2rip.accuraterip import (
     AccurateRipResult,
 )
 from ready2rip.artwork.fetch import ArtworkImage
-from ready2rip.ctdb import (
-    CtdbResult,
-)
 from ready2rip.disc.overread import (
     OverreadCapability,
 )
@@ -71,7 +68,6 @@ class RipResult:
     error: str | None = None
     cancelled: bool = False
     accuraterip: list[AccurateRipResult] = field(default_factory=list)
-    ctdb: list[CtdbResult] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     burst_tracks: list[int] = field(default_factory=list)
     log_path: Path | None = None
@@ -127,11 +123,9 @@ class RipJob:
     m4a_feat_artists: bool = True
     save_cover_file: bool = True
     verify_accuraterip: bool = True
-    verify_ctdb: bool = True
-    submit_ctdb: bool = False
     # When AccurateRip is on, fail archival if zero tracks MATCH (strict).
     require_db_match: bool = False
-    # When True, AccurateRip/CTDB mismatches fail archival (default: soft).
+    # When True, AccurateRip mismatches fail archival (default: soft).
     archival_strict: bool = False
     sample_offset: int = 0
     # True after Detect or manual save in drive setup (offset may still be 0).

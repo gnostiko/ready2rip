@@ -17,9 +17,7 @@ class VerifyMixin:
         message: str,
         extract_mode: str,
         ar_verifier: AccurateRipVerifier | None,
-        ctdb_verifier: CtdbVerifier | None,
         ar_results: list[AccurateRipResult],
-        ctdb_results: list[CtdbResult],
         rip_log: RipLog | None,
     ) -> None:
         """Append per-track ERROR results when Copy Image PCM cannot be loaded."""
@@ -43,15 +41,6 @@ class VerifyMixin:
                 ar_results.append(ar)
                 if entry is not None:
                     entry.accuraterip = ar
-            if ctdb_verifier is not None:
-                ctdb = CtdbResult(
-                    track.number,
-                    CtdbConfidence.ERROR,
-                    message=message,
-                )
-                ctdb_results.append(ctdb)
-                if entry is not None:
-                    entry.ctdb = ctdb
 
     def _verify_image_databases(
         self,
@@ -62,15 +51,13 @@ class VerifyMixin:
         extract_mode: str,
         image_stats: ParanoiaStats | None = None,
         ar_verifier: AccurateRipVerifier | None,
-        ctdb_verifier: CtdbVerifier | None,
         ar_results: list[AccurateRipResult],
-        ctdb_results: list[CtdbResult],
         notes: list[str],
         rip_log: RipLog | None,
         report: Callable[[RipState, float, str], None],
     ) -> None:
-        """TOC-split a continuous image WAV and run AccurateRip + CTDB per track."""
-        if ar_verifier is None and ctdb_verifier is None:
+        """TOC-split a continuous image WAV and run AccurateRip per track."""
+        if ar_verifier is None:
             return
         if not disc.tracks:
             return
@@ -89,9 +76,7 @@ class VerifyMixin:
                 message=msg,
                 extract_mode=extract_mode,
                 ar_verifier=ar_verifier,
-                ctdb_verifier=ctdb_verifier,
                 ar_results=ar_results,
-                ctdb_results=ctdb_results,
                 rip_log=rip_log,
             )
             return
@@ -157,15 +142,6 @@ class VerifyMixin:
                         ar_results.append(ar)
                         if log_entry is not None:
                             log_entry.accuraterip = ar
-                    if ctdb_verifier is not None:
-                        ctdb = CtdbResult(
-                            track.number,
-                            CtdbConfidence.ERROR,
-                            message=msg,
-                        )
-                        ctdb_results.append(ctdb)
-                        if log_entry is not None:
-                            log_entry.ctdb = ctdb
                     continue
                 if expected and len(pcm) < expected:
                     msg = (
@@ -191,13 +167,6 @@ class VerifyMixin:
                     if log_entry is not None:
                         log_entry.accuraterip = ar
 
-                if ctdb_verifier is not None:
-                    ctdb = ctdb_verifier.verify_pcm(pcm, track.number)
-                    ctdb_results.append(ctdb)
-                    notes.append(f'Track {track.number} CTDB: {ctdb.message}')
-                    if log_entry is not None:
-                        log_entry.ctdb = ctdb
-
     def _reverify_existing_track(
         self,
         *,
@@ -205,9 +174,7 @@ class VerifyMixin:
         track_no: int,
         tmp_path: Path,
         ar_verifier: AccurateRipVerifier | None,
-        ctdb_verifier: CtdbVerifier | None,
         ar_results: list[AccurateRipResult],
-        ctdb_results: list[CtdbResult],
         log_entry: TrackLogEntry | None,
         idx: float,
         total_units: float,
@@ -216,14 +183,14 @@ class VerifyMixin:
         track_output_pairs: list[tuple[int, Path]],
         notes: list[str],
     ) -> bool:
-        """Decode an existing primary encode and run AR/CTDB when possible.
+        """Decode an existing primary encode and run AccurateRip when possible.
 
         Returns True when the track was re-verified (or verify is off).
         """
         probe = replace(job, existing_files='overwrite')
         existing = self._destinations_for_track(probe, track_no)
         if not existing:
-            return not (job.verify_accuraterip or job.verify_ctdb)
+            return not job.verify_accuraterip
         primary = next((d for d in existing if d.primary), existing[0])
         if not primary.out_path.is_file():
             return False
@@ -234,8 +201,7 @@ class VerifyMixin:
             log_entry.output_path = primary.out_path
             log_entry.filename = primary.out_path.name
 
-        need_verify = ar_verifier is not None or ctdb_verifier is not None
-        if not need_verify:
+        if ar_verifier is None:
             return True
 
         wav = tmp_path / f'track{track_no:02d}_existing.wav'
@@ -250,9 +216,7 @@ class VerifyMixin:
                 wav,
                 track_no,
                 ar_verifier=ar_verifier,
-                ctdb_verifier=ctdb_verifier,
                 ar_results=ar_results,
-                ctdb_results=ctdb_results,
                 log_entry=log_entry,
                 idx=idx,
                 total_units=total_units,
@@ -368,17 +332,15 @@ class VerifyMixin:
         track_no: int,
         *,
         ar_verifier: AccurateRipVerifier | None,
-        ctdb_verifier: CtdbVerifier | None,
         ar_results: list[AccurateRipResult],
-        ctdb_results: list[CtdbResult],
         log_entry: TrackLogEntry | None,
         idx: float,
         total_units: float,
         report: TrackReportFn,
     ) -> None:
-        """One PCM load for peak/CRC log fields + AccurateRip + CTDB."""
+        """One PCM load for peak/CRC log fields + AccurateRip."""
         need_peak = log_entry is not None and log_entry.peak_percent is None
-        if ar_verifier is None and ctdb_verifier is None and not need_peak:
+        if ar_verifier is None and not need_peak:
             return
 
         report(
@@ -416,29 +378,3 @@ class VerifyMixin:
                 message=ar.message,
                 total_units=total_units,
             )
-
-        if ctdb_verifier is not None:
-            report(
-                track_no,
-                RipState.VERIFYING,
-                index=idx,
-                sub=0.86,
-                message=f'CTDB check track {track_no}…',
-                total_units=total_units,
-            )
-            if pcm is not None:
-                ctdb = ctdb_verifier.verify_pcm(pcm, track_no)
-            else:
-                ctdb = ctdb_verifier.verify_wav(wav_path, track_no)
-            ctdb_results.append(ctdb)
-            if log_entry is not None:
-                log_entry.ctdb = ctdb
-            report(
-                track_no,
-                RipState.VERIFYING,
-                index=idx,
-                sub=0.88,
-                message=ctdb.message,
-                total_units=total_units,
-            )
-

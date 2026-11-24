@@ -188,8 +188,6 @@ SETTINGS_KEY_MAP: dict[str, tuple[str, str]] = {
     'artist_style': ('artist-style', 'string'),
     'm4a_feat_artists': ('m4a-feat-artists', 'bool'),
     'verify_accuraterip': ('verify-accuraterip', 'bool'),
-    'verify_ctdb': ('verify-ctdb', 'bool'),
-    'submit_ctdb': ('submit-ctdb', 'bool'),
     'require_db_match': ('require-db-match', 'bool'),
     'archival_strict': ('archival-strict', 'bool'),
     'drive_sample_offset': ('drive-sample-offset', 'int'),
@@ -371,11 +369,9 @@ class AppSettings:
     # Force feat. artist string on M4A/AAC/ALAC/QAAC for Apple/iPod players.
     m4a_feat_artists: bool = True
     verify_accuraterip: bool = True
-    verify_ctdb: bool = True
-    submit_ctdb: bool = False
     # Fail archival when AccurateRip is enabled but zero tracks MATCH.
     require_db_match: bool = False
-    # Fail archival on AccurateRip/CTDB mismatches (default: soft / notes only).
+    # Fail archival on AccurateRip mismatches (default: soft / notes only).
     archival_strict: bool = False
     drive_sample_offset: int = 0
     drive_offset_configured: bool = False
@@ -620,8 +616,6 @@ class SettingsStore:
                 ),
                 m4a_feat_artists=_get_bool(s, 'm4a-feat-artists', True),
                 verify_accuraterip=s.get_boolean('verify-accuraterip'),
-                verify_ctdb=_get_bool(s, 'verify-ctdb', True),
-                submit_ctdb=_get_bool(s, 'submit-ctdb', False),
                 require_db_match=_get_bool(s, 'require-db-match', False),
                 archival_strict=_get_bool(s, 'archival-strict', False),
                 drive_sample_offset=s.get_int('drive-sample-offset'),

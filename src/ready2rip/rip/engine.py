@@ -11,18 +11,11 @@ from ready2rip.accuraterip import (
     AccurateRipResult,
     AccurateRipVerifier,
 )
-from ready2rip.ctdb import (
-    CtdbConfidence,
-    CtdbResult,
-    CtdbVerifier,
-    total_audio_samples,
-)
 from ready2rip.disc.htoa import (
     detect_htoa,
 )
 from ready2rip.replaygain import apply_replaygain
 from ready2rip.rip.artwork_prep import prepare_artwork as _prepare_artwork
-from ready2rip.rip.ctdb_quality import ctdb_submit_quality
 from ready2rip.rip.encode_dest import (
     is_lossless_extension,
     is_lossless_format,
@@ -171,7 +164,6 @@ class RipEngine(
         # Work units: optional HTOA (track 0) + selected audio tracks.
         outputs: list[Path] = []
         ar_results: list[AccurateRipResult] = []
-        ctdb_results: list[CtdbResult] = []
         notes: list[str] = list(layout_notes)
         burst_tracks: list[int] = []
         skipped_unverified: list[int] = []
@@ -296,7 +288,7 @@ class RipEngine(
             if rip_log is not None:
                 rip_log.notes.append(f'Cover art saved before rip: {cover_path}')
 
-        # AccurateRip / CTDB setup. Sample offset is applied at extract time via
+        # AccurateRip setup. Sample offset is applied at extract time via
         # cdparanoia -O; both verifiers hash the offset-corrected WAV as-is.
         ar_verifier: AccurateRipVerifier | None = None
         if job.verify_accuraterip and job.disc_info is not None:
@@ -322,31 +314,12 @@ class RipEngine(
                 message=status,
             )
 
-        ctdb_verifier: CtdbVerifier | None = None
-        if (job.verify_ctdb or job.submit_ctdb) and job.disc_info is not None:
-            ctdb_verifier = CtdbVerifier()
-            ctdb_status = ctdb_verifier.prepare(job.disc_info)
-            notes.append(ctdb_status)
-            if rip_log is not None:
-                rip_log.ctdb_status = ctdb_status
-            report(
-                first_for_paths,
-                RipState.VERIFYING,
-                index=0.0,
-                sub=0.03,
-                message=ctdb_status,
-            )
 
         disc_track_count = job.disc_track_count or (
             job.disc_info.track_count if job.disc_info else (max(tracks) if tracks else 0)
         )
         if ar_verifier is not None:
             ar_verifier.set_total_tracks(disc_track_count)
-        if ctdb_verifier is not None and job.disc_info is not None:
-            ctdb_verifier.set_totals(
-                total_tracks=disc_track_count,
-                total_samples=total_audio_samples(job.disc_info),
-            )
 
         # Defeat drive audio cache between archival test and copy passes.
         defeat_cache = bool(job.defeat_audio_cache)
@@ -425,7 +398,6 @@ class RipEngine(
                         defeat_cache=defeat_cache,
                         expected_sizes=expected_sizes,
                         ar_verifier=ar_verifier,
-                        ctdb_verifier=ctdb_verifier,
                         disc_track_count=disc_track_count,
                         unit_index=unit_index,
                         total_units=total_units,
@@ -433,7 +405,6 @@ class RipEngine(
                         outputs=outputs,
                         track_output_pairs=track_output_pairs,
                         ar_results=ar_results,
-                        ctdb_results=ctdb_results,
                         notes=notes,
                         burst_tracks=burst_tracks,
                         test_copy_mismatches=test_copy_mismatches,
@@ -452,7 +423,6 @@ class RipEngine(
                         outputs=outputs,
                         album_dir=album_dir,
                         ar_results=ar_results,
-                        ctdb_results=ctdb_results,
                         notes=notes,
                         burst_tracks=burst_tracks,
                         rip_log=rip_log,
@@ -587,7 +557,6 @@ class RipEngine(
                 outputs=outputs,
                 album_dir=album_dir,
                 ar_results=ar_results,
-                ctdb_results=ctdb_results,
                 notes=notes,
                 burst_tracks=burst_tracks,
                 rip_log=rip_log,
@@ -606,7 +575,6 @@ class RipEngine(
                 outputs=outputs,
                 album_dir=album_dir,
                 ar_results=ar_results,
-                ctdb_results=ctdb_results,
                 notes=notes,
                 burst_tracks=burst_tracks,
                 rip_log=rip_log,
@@ -617,68 +585,15 @@ class RipEngine(
                 archival_ok=False,
             )
 
-        if job.submit_ctdb and ctdb_verifier is not None and ctdb_results:
-            if on_progress is not None:
-                on_progress(
-                    RipProgress(
-                        track_number=tracks[-1] if tracks else 0,
-                        state=RipState.VERIFYING,
-                        fraction=0.97,
-                        message='Submitting to CTDB…',
-                    )
-                )
-            drivename = ''
-            try:
-                from ready2rip.disc.drive_info import probe_drive
-
-                drivename = probe_drive(job.device, allow_optical=False).ctdb_drivename
-            except Exception:
-                drivename = ''
-            album = job.album
-            ctdb_quality = ctdb_submit_quality(
-                test_and_copy=job.test_and_copy and not job.burst_mode,
-                burst_tracks=burst_tracks,
-                test_copy_mismatches=test_copy_mismatches,
-                track_entries=rip_log.tracks if rip_log is not None else None,
-            )
-            if ctdb_quality < 100:
-                notes.append(
-                    'CTDB submit quality=0 '
-                    '(requires secure test&copy, no burst, '
-                    'paranoia quality 100% on all tracks)'
-                )
-            submit = ctdb_verifier.submit(
-                ctdb_results,
-                drivename=drivename,
-                artist=(album.artist if album else '') or '',
-                title=(album.title if album else '') or '',
-                barcode=(album.barcode if album else '') or '',
-                quality=ctdb_quality,
-            )
-            notes.append(submit.message)
-            if rip_log is not None:
-                rip_log.notes.append(submit.message)
-            if not submit.ok and any(r.confidence == CtdbConfidence.MISMATCH for r in ctdb_results):
-                try:
-                    probe = ctdb_verifier.attempt_repair_for_mismatch(ctdb_results)
-                    notes.append(probe.message)
-                    if rip_log is not None:
-                        rip_log.notes.append(probe.message)
-                except Exception as exc:
-                    log.warning('CTDB repair probe failed: %s', exc)
 
         fail_reasons, tiers = evaluate_archival(
             job,
             ar_results=ar_results,
-            ctdb_results=ctdb_results,
             burst_tracks=burst_tracks,
             notes=notes,
             skipped_unverified=skipped_unverified,
             ar_lookup_error=(
                 ar_verifier.fetch_error if ar_verifier is not None else None
-            ),
-            ctdb_lookup_error=(
-                ctdb_verifier.lookup_error if ctdb_verifier is not None else None
             ),
         )
         done_msg = format_done_message(
@@ -686,7 +601,6 @@ class RipEngine(
             outputs=outputs,
             tiers=tiers,
             ar_results=ar_results,
-            ctdb_results=ctdb_results,
             burst_tracks=burst_tracks,
             htoa_ripped=htoa_ripped,
             data_count=len(data_output_pairs),
@@ -699,7 +613,6 @@ class RipEngine(
             outputs=outputs,
             album_dir=album_dir,
             ar_results=ar_results,
-            ctdb_results=ctdb_results,
             notes=notes,
             burst_tracks=burst_tracks,
             rip_log=rip_log,

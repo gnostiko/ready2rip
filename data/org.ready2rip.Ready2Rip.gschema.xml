@@ -333,29 +333,11 @@
       <default>false</default>
       <summary>Strict archival (fail on DB mismatch)</summary>
       <description>
-        Off by default. When enabled, AccurateRip or CTDB CRC mismatches fail
+        Off by default. When enabled, AccurateRip CRC mismatches fail
         archival for the whole rip (classic fail-closed). When off, Secure OK
         rips with partial DB mismatches still get Archival OK; mismatches are
         noted in the log and summary (e.g. AR 13/15). Insecure burst fallback,
         skipped unverified files, and verify/lookup errors still fail archival.
-      </description>
-    </key>
-
-    <key name="verify-ctdb" type="b">
-      <default>true</default>
-      <summary>Verify rips with CTDB</summary>
-      <description>
-        After extraction, compare track CRCs to the CUETools Database (CTDB).
-      </description>
-    </key>
-
-    <key name="submit-ctdb" type="b">
-      <default>false</default>
-      <summary>Submit rips to CTDB</summary>
-      <description>
-        After ripping, confirm a full-disc CTDB match, or submit a new parity
-        entry when the disc is missing/unmatched and rip quality is 100
-        (secure test&amp;copy). Off by default.
       </description>
     </key>
 
@@ -425,7 +407,7 @@
         archival — secure paranoia (-X), abort-on-skip, test &amp; copy (default).
         normal — single-pass paranoia with repair/interpolation; no test &amp; copy.
         burst — single-pass -Z (paranoia off); not archival-grade.
-        AccurateRip/CTDB “DB verified” is separate from Secure OK.
+        AccurateRip “DB verified” is separate from Secure OK.
         Legacy burst-mode / test-and-copy keys migrate into this setting.
       </description>
     </key>

@@ -256,7 +256,7 @@ class Ready2RipWindow(
         self.verify_group = Adw.PreferencesGroup(
             title='Verify',
             description=(
-                'Secure = local CRC; AccurateRip/CTDB = online confirm'
+                'Secure = local CRC; AccurateRip = online confirm'
             ),
         )
         self.extras_group = Adw.PreferencesGroup(
@@ -1682,12 +1682,6 @@ class Ready2RipWindow(
     def _sync_require_db_match_sensitivity(self, verify_ar: bool) -> None:
         self._require_db_match_row.set_sensitive(bool(verify_ar))
 
-    def _on_ctdb_toggled(self, row: Adw.SwitchRow, *_args) -> None:
-        self.store.update(verify_ctdb=row.get_active())
-
-    def _on_submit_ctdb_toggled(self, row: Adw.SwitchRow, *_args) -> None:
-        self.store.update(submit_ctdb=row.get_active())
-
     def _sync_rip_mode_sensitivity(self, rip_mode: str) -> None:
         # Burst fallback only applies to Archival secure retries.
         self._burst_row.set_sensitive(rip_mode == 'archival')
@@ -2153,11 +2147,9 @@ class Ready2RipWindow(
         self,
         *,
         ar_results=None,
-        ctdb_results=None,
     ) -> None:
         ar_by = {r.track_number: r for r in (ar_results or [])}
-        ctdb_by = {r.track_number: r for r in (ctdb_results or [])}
-        for num in sorted(set(ar_by) | set(ctdb_by)):
+        for num in sorted(ar_by):
             label = self._track_status_labels.get(num)
             if label is None:
                 continue
@@ -2165,9 +2157,6 @@ class Ready2RipWindow(
             ar = ar_by.get(num)
             if ar is not None and ar.message:
                 parts.append(ar.message)
-            ctdb = ctdb_by.get(num)
-            if ctdb is not None and ctdb.message:
-                parts.append(ctdb.message)
             msg = ' · '.join(parts)
             label.set_text(msg)
             label.set_tooltip_text(msg if msg else None)

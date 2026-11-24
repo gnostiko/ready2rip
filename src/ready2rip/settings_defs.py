@@ -289,7 +289,7 @@ RIP_MODE_TOOLTIP = (
     'Archival: secure paranoia (-X) + test & copy; a clean rip can be Secure OK.\n'
     'Normal: single-pass paranoia with repair/interpolation; never Secure OK.\n'
     'Burst: single-pass -Z (paranoia disabled); never Secure OK.\n'
-    'AccurateRip/CTDB “DB verified” is separate from Secure OK.'
+    'AccurateRip “DB verified” is separate from Secure OK.'
 )
 RIP_MODE_IDS = frozenset(m[0] for m in RIP_MODES)
 DEFAULT_RIP_MODE = 'archival'

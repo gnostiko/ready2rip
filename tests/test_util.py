@@ -42,8 +42,6 @@ def test_is_safe_http_url_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert is_safe_http_url('https://musicbrainz.org/ws/2/release')
     assert is_safe_http_url('http://www.accuraterip.com/accuraterip/x.bin')
-    assert is_safe_http_url('https://db.cue.tools/lookup2.php?toc=0:1')
-    assert is_safe_http_url('http://db.cuetools.net/lookup2.php?toc=0:1')
 
 
 def test_is_safe_http_url_rejects_private_resolve(

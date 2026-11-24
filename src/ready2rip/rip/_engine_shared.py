@@ -26,13 +26,6 @@ from ready2rip.accuraterip import (
     AccurateRipVerifier,
 )
 from ready2rip.artwork.fetch import ArtworkFetcher, ArtworkImage
-from ready2rip.ctdb import (
-    CtdbConfidence,
-    CtdbResult,
-    CtdbVerifier,
-    load_cdda_pcm,
-    total_audio_samples,
-)
 from ready2rip.disc.cache import flush_drive_cache
 from ready2rip.disc.data import extract_data_tracks
 from ready2rip.disc.drive_info import probe_drive
@@ -61,7 +54,6 @@ from ready2rip.paths import (
 )
 from ready2rip.replaygain import apply_replaygain
 from ready2rip.rip.artwork_prep import prepare_artwork as _prepare_artwork
-from ready2rip.rip.ctdb_quality import ctdb_submit_quality
 from ready2rip.rip.cue import (
     cue_file_type_for_extension,
     image_basename,
@@ -107,11 +99,10 @@ from ready2rip.rip.outcome import (
     finish_result,
     format_done_message,
     summarize_ar,
-    summarize_ctdb,
 )
 from ready2rip.rip.paranoia_run import run_paranoia_streaming
 from ready2rip.rip.paranoia_stats import FRAMES_PER_SECTOR, ParanoiaStats
-from ready2rip.rip.pcm_io import image_track_pcm_from_view, open_cdda_wav_mmap
+from ready2rip.rip.pcm_io import image_track_pcm_from_view, load_cdda_pcm, open_cdda_wav_mmap
 from ready2rip.rip.plan import (
     ENCODE_EXTENSIONS,
     EncodeDest,

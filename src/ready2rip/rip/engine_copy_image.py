@@ -139,7 +139,6 @@ class CopyImageMixin:
                         outputs=[],
                         album_dir=album_dir,
                         ar_results=[],
-                        ctdb_results=[],
                         notes=notes,
                         burst_tracks=[],
                         rip_log=rip_log,
@@ -476,7 +475,6 @@ class CopyImageMixin:
                             outputs=[],
                             album_dir=album_dir,
                             ar_results=[],
-                            ctdb_results=[],
                             notes=notes,
                             burst_tracks=[],
                             rip_log=rip_log,
@@ -526,7 +524,6 @@ class CopyImageMixin:
                         outputs=[],
                         album_dir=album_dir,
                         ar_results=[],
-                        ctdb_results=[],
                         notes=notes,
                         burst_tracks=[],
                         rip_log=rip_log,
@@ -534,14 +531,12 @@ class CopyImageMixin:
                     )
 
                 ar_results: list[AccurateRipResult] = []
-                ctdb_results: list[CtdbResult] = []
                 burst_tracks: list[int] = [0] if mode == 'burst' else []
                 image_test_copy_ok = bool(
                     job.test_and_copy and not job.burst_mode and mode != 'burst'
                 )
 
                 ar_verifier: AccurateRipVerifier | None = None
-                ctdb_verifier: CtdbVerifier | None = None
                 if job.verify_accuraterip:
                     ar_verifier = AccurateRipVerifier(sample_offset=0)
                     ar_status = ar_verifier.prepare(disc)
@@ -556,19 +551,8 @@ class CopyImageMixin:
                         )
                     report(RipState.VERIFYING, 0.68, ar_status)
 
-                if job.verify_ctdb or job.submit_ctdb:
-                    ctdb_verifier = CtdbVerifier()
-                    ctdb_status = ctdb_verifier.prepare(disc)
-                    notes.append(ctdb_status)
-                    ctdb_verifier.set_totals(
-                        total_tracks=disc.track_count,
-                        total_samples=total_audio_samples(disc),
-                    )
-                    if rip_log is not None:
-                        rip_log.ctdb_status = ctdb_status
-                    report(RipState.VERIFYING, 0.69, ctdb_status)
 
-                if ar_verifier is not None or ctdb_verifier is not None:
+                if ar_verifier is not None:
                     self._verify_image_databases(
                         use_wav,
                         disc,
@@ -576,9 +560,7 @@ class CopyImageMixin:
                         extract_mode=mode,
                         image_stats=img_stats,
                         ar_verifier=ar_verifier,
-                        ctdb_verifier=ctdb_verifier,
                         ar_results=ar_results,
-                        ctdb_results=ctdb_results,
                         notes=notes,
                         rip_log=rip_log,
                         report=report,
@@ -592,7 +574,6 @@ class CopyImageMixin:
                         outputs=[],
                         album_dir=album_dir,
                         ar_results=ar_results,
-                        ctdb_results=ctdb_results,
                         notes=notes,
                         burst_tracks=burst_tracks,
                         rip_log=rip_log,
@@ -646,7 +627,6 @@ class CopyImageMixin:
                         outputs=[],
                         album_dir=dests[0].meta_dir if dests else album_dir,
                         ar_results=ar_results,
-                        ctdb_results=ctdb_results,
                         notes=notes,
                         burst_tracks=burst_tracks,
                         rip_log=rip_log,
@@ -662,7 +642,6 @@ class CopyImageMixin:
                             outputs=output_files,
                             album_dir=dest.meta_dir,
                             ar_results=ar_results,
-                            ctdb_results=ctdb_results,
                             notes=notes,
                             burst_tracks=burst_tracks,
                             rip_log=rip_log,
@@ -767,51 +746,6 @@ class CopyImageMixin:
                     if rip_log is not None:
                         rip_log.replaygain_notes.extend(rg_notes)
 
-                if job.submit_ctdb and ctdb_verifier is not None and ctdb_results:
-                    report(RipState.VERIFYING, 0.97, 'Submitting to CTDB…')
-                    drivename = ''
-                    try:
-                        from ready2rip.disc.drive_info import probe_drive
-
-                        drivename = probe_drive(job.device, allow_optical=False).ctdb_drivename
-                    except Exception:
-                        drivename = ''
-                    album = job.album
-                    ctdb_quality = ctdb_submit_quality(
-                        test_and_copy=job.test_and_copy and not job.burst_mode,
-                        burst_tracks=burst_tracks,
-                        test_copy_mismatches=([] if image_test_copy_ok else [0]),
-                        track_entries=(rip_log.tracks if rip_log is not None else None),
-                        image_stats=img_stats,
-                        image_sectors=total_sectors,
-                    )
-                    if ctdb_quality < 100:
-                        notes.append(
-                            'CTDB submit quality=0 '
-                            '(requires secure test&copy, no burst, '
-                            'paranoia quality 100%)'
-                        )
-                    submit = ctdb_verifier.submit(
-                        ctdb_results,
-                        drivename=drivename,
-                        artist=(album.artist if album else '') or '',
-                        title=(album.title if album else '') or '',
-                        barcode=(album.barcode if album else '') or '',
-                        quality=ctdb_quality,
-                    )
-                    notes.append(submit.message)
-                    if rip_log is not None:
-                        rip_log.notes.append(submit.message)
-                    if not submit.ok and any(
-                        r.confidence == CtdbConfidence.MISMATCH for r in ctdb_results
-                    ):
-                        try:
-                            probe = ctdb_verifier.attempt_repair_for_mismatch(ctdb_results)
-                            notes.append(probe.message)
-                            if rip_log is not None:
-                                rip_log.notes.append(probe.message)
-                        except Exception as exc:
-                            log.warning('CTDB repair probe failed: %s', exc)
 
                 done_label = primary_out.name if primary_out else 'image'
                 if job.write_cue_file and primary_out is not None:
@@ -821,16 +755,10 @@ class CopyImageMixin:
                 fail_reasons, tiers = evaluate_archival(
                     job,
                     ar_results=ar_results,
-                    ctdb_results=ctdb_results,
                     burst_tracks=burst_tracks,
                     notes=notes,
                     ar_lookup_error=(
                         ar_verifier.fetch_error if ar_verifier is not None else None
-                    ),
-                    ctdb_lookup_error=(
-                        ctdb_verifier.lookup_error
-                        if ctdb_verifier is not None
-                        else None
                     ),
                 )
                 done_msg = format_done_message(
@@ -838,7 +766,6 @@ class CopyImageMixin:
                     outputs=output_files,
                     tiers=tiers,
                     ar_results=ar_results,
-                    ctdb_results=ctdb_results,
                     burst_tracks=burst_tracks,
                     htoa_ripped=htoa_in_image,
                     data_count=len(data_pairs),
@@ -851,7 +778,6 @@ class CopyImageMixin:
                     outputs=output_files,
                     album_dir=primary_album,
                     ar_results=ar_results,
-                    ctdb_results=ctdb_results,
                     notes=notes,
                     burst_tracks=burst_tracks,
                     rip_log=rip_log,
@@ -876,7 +802,6 @@ class CopyImageMixin:
                 outputs=[],
                 album_dir=album_dir,
                 ar_results=[],
-                ctdb_results=[],
                 notes=notes,
                 burst_tracks=[],
                 rip_log=rip_log,

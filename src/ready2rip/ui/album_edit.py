@@ -287,7 +287,7 @@ def make_track_column_header(window: Ready2RipWindow) -> Gtk.ListBoxRow:
     box.append(fields)
 
     status_h = track_caption('Verify', 'ready2rip-track-status', xalign=1.0)
-    status_h.set_tooltip_text('AccurateRip / CTDB result after a rip')
+    status_h.set_tooltip_text('AccurateRip result after a rip')
     window._track_status_size.add_widget(status_h)
     box.append(status_h)
 

@@ -38,8 +38,6 @@ def _settings(**overrides: object) -> SimpleNamespace:
         'artist_style': 'semicolon',
         'm4a_feat_artists': True,
         'verify_accuraterip': True,
-        'verify_ctdb': True,
-        'submit_ctdb': False,
         'require_db_match': False,
         'archival_strict': False,
         'drive_sample_offset': 0,

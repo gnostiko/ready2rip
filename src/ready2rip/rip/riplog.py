@@ -13,7 +13,6 @@ from pathlib import Path
 
 from ready2rip import config
 from ready2rip.accuraterip import AccurateRipConfidence, AccurateRipResult
-from ready2rip.ctdb import CtdbConfidence, CtdbResult
 from ready2rip.disc.probe import DiscInfo
 from ready2rip.metadata.models import AlbumMetadata
 from ready2rip.paths import sanitize_component, track_meta_for
@@ -49,7 +48,6 @@ class TrackLogEntry:
     expected_wav_bytes: int = 0
     wav_bytes: int = 0
     accuraterip: AccurateRipResult | None = None
-    ctdb: CtdbResult | None = None
     status: str = 'OK'
     notes: list[str] = field(default_factory=list)
     # Chronological attempt history (retries, CRC mismatches, mode switches).
@@ -85,8 +83,6 @@ class RipLog:
         self.burst_mode: bool = False
         self.burst_fallback: bool = False
         self.verify_accuraterip: bool = True
-        self.verify_ctdb: bool = True
-        self.submit_ctdb: bool = False
         self.require_db_match: bool = False
         self.archival_strict: bool = False
         self.apply_replaygain: bool = True
@@ -109,7 +105,6 @@ class RipLog:
         self.album: AlbumMetadata | None = None
         self.disc: DiscInfo | None = None
         self.ar_status: str = ''
-        self.ctdb_status: str = ''
         self.tracks: list[TrackLogEntry] = []
         self.notes: list[str] = []
         # Session-level archival history (e.g. superseded secure rips before
@@ -146,8 +141,6 @@ class RipLog:
         self.burst_mode = bool(getattr(job, 'burst_mode', False))
         self.burst_fallback = job.burst_fallback
         self.verify_accuraterip = job.verify_accuraterip
-        self.verify_ctdb = getattr(job, 'verify_ctdb', True)
-        self.submit_ctdb = getattr(job, 'submit_ctdb', False)
         self.require_db_match = bool(getattr(job, 'require_db_match', False))
         self.archival_strict = bool(getattr(job, 'archival_strict', False))
         self.apply_replaygain = job.apply_replaygain
@@ -365,18 +358,13 @@ class RipLog:
 
         db_bits = [
             f'AccurateRip {"yes" if self.verify_accuraterip else "no"}',
-            f'CTDB {"yes" if self.verify_ctdb else "no"}',
         ]
         if self.require_db_match:
             db_bits.append('require AR match (≥1 MATCH)')
         if self.archival_strict:
             db_bits.append('archival strict')
-        if self.submit_ctdb:
-            db_bits.append('CTDB submit yes')
         if self.ar_status:
             db_bits.append(f'AR DB: {self.ar_status}')
-        if self.ctdb_status:
-            db_bits.append(f'CTDB DB: {self.ctdb_status}')
         lines.append(' · '.join(db_bits))
         lines.append(f'CUE: {"yes" if self.write_cue_file else "no"}')
         lines.append('')
@@ -459,12 +447,6 @@ class RipLog:
                 entry.extract_mode or ''
             ).lower().startswith('raw'):
                 lines.append('     AccurateRip result missing')
-            if entry.ctdb is not None:
-                lines.append(f'     {_format_ctdb_line(entry.ctdb)}')
-            elif self.verify_ctdb and not (entry.extract_mode or '').lower().startswith(
-                'raw'
-            ):
-                lines.append('     CTDB result missing')
             # Error correction block (skip duplicate quality line).
             for ec in entry.error_correction_lines:
                 if ec.lower().startswith('track quality'):
@@ -494,31 +476,6 @@ class RipLog:
                 lines.append('No tracks could be verified as accurate')
             else:
                 lines.append(f'{matches} of {len(ar_checked)} tracks accurately ripped')
-            lines.append('')
-
-        ctdb_checked = [t for t in self.tracks if t.ctdb is not None]
-        if ctdb_checked:
-            matches = sum(
-                1 for t in ctdb_checked if t.ctdb and t.ctdb.confidence == CtdbConfidence.MATCH
-            )
-            hard_miss = sum(
-                1
-                for t in ctdb_checked
-                if t.ctdb and t.ctdb.confidence == CtdbConfidence.MISMATCH
-            )
-            if matches == len(ctdb_checked):
-                lines.append('All tracks verified by CTDB')
-            elif hard_miss and matches == 0:
-                lines.append('CTDB reported CRC mismatches (exact TOC entries)')
-            elif hard_miss:
-                lines.append(
-                    f'{matches} of {len(ctdb_checked)} tracks verified by CTDB '
-                    f'({hard_miss} CRC mismatch)'
-                )
-            elif matches == 0:
-                lines.append('CTDB: not verified (no matching entries)')
-            else:
-                lines.append(f'{matches} of {len(ctdb_checked)} tracks verified by CTDB')
             lines.append('')
 
         burst = [t.number for t in self.tracks if 'burst' in (t.extract_mode or '').lower()]
@@ -585,7 +542,7 @@ class RipLog:
                 secure = 'not Secure OK'
             if self.outcome_db_verified:
                 db = 'DB verified'
-            elif self.verify_accuraterip or self.verify_ctdb:
+            elif self.verify_accuraterip:
                 db = 'not DB-verified'
             else:
                 db = 'DB checks off'
@@ -740,19 +697,3 @@ def _format_ar_line(ar: AccurateRipResult) -> str:
     return f'AccurateRip: {ar.message or "unknown"}'
 
 
-def _format_ctdb_line(ctdb: CtdbResult) -> str:
-    if ctdb.confidence == CtdbConfidence.MATCH:
-        return f'CTDB accurately ripped (confidence {ctdb.confidence_count})  [CRC {ctdb.crc}]'
-    if ctdb.confidence == CtdbConfidence.MISMATCH:
-        return (
-            f'CTDB CRC differs (possible pressing) '
-            f'(confidence {ctdb.confidence_count})  [CRC {ctdb.crc}]'
-        )
-    if ctdb.confidence == CtdbConfidence.NOT_IN_DB:
-        # Soft miss (fuzzy neighbors / absent TOC) or truly empty DB.
-        if ctdb.message and 'no matching entry' in ctdb.message.lower():
-            return 'CTDB: not verified (no matching entry)'
-        return 'CTDB: not verified (not in database)'
-    if ctdb.confidence == CtdbConfidence.ERROR:
-        return f'CTDB error: {ctdb.message}'
-    return f'CTDB: {ctdb.message or "unknown"}'

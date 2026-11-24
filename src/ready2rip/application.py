@@ -119,7 +119,7 @@ class Application(Adw.Application):
             comments=(
                 'Secure CD ripper for Linux. ready2rip uses full cdparanoia, '
                 'secure extraction, test and copy, cache defeat, AccurateRip, '
-                'CTDB, MusicBrainz metadata, ReplayGain, and album artwork.'
+                'AccurateRip, MusicBrainz metadata, ReplayGain, and album artwork.'
             ),
             website='https://github.com/gnostiko/ready2rip',
             issue_url='https://github.com/gnostiko/ready2rip/issues',

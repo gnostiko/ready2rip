@@ -22,7 +22,6 @@ from ready2rip.artwork.fetch import (
     ArtworkSourceOptions,
     apply_artwork_to_picture,
 )
-from ready2rip.ctdb import CtdbConfidence
 from ready2rip.disc.cdmeta import enrich_album_from_disc
 from ready2rip.disc.discid_util import DiscIdentifiers, identifiers_from_disc
 from ready2rip.disc.drive_info import DriveInfo, probe_drive

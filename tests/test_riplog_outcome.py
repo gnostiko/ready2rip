@@ -14,7 +14,7 @@ def test_riplog_outcome_footer() -> None:
         secure_ok=True,
         db_verified=False,
         archival_ok=True,
-        summary='Secure OK · not in AccurateRip/CTDB',
+        summary='Secure OK · not in AccurateRip',
     )
     log.finish()
     text = log.render()

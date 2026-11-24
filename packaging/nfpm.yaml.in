@@ -9,7 +9,7 @@ priority: optional
 maintainer: gnostiko <https://github.com/gnostiko/ready2rip>
 description: |
   Secure CD ripper for Linux.
-  Full cdparanoia extraction with AccurateRip and CTDB verification,
+  Full cdparanoia extraction with AccurateRip verification,
   MusicBrainz metadata, and modern tagging (GTK 4 / libadwaita).
 vendor: gnostiko
 homepage: https://github.com/gnostiko/ready2rip

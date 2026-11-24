@@ -468,7 +468,6 @@ class ExtractMixin:
         defeat_cache: bool,
         expected_sizes: dict[int, int],
         ar_verifier: AccurateRipVerifier | None,
-        ctdb_verifier: CtdbVerifier | None,
         disc_track_count: int,
         unit_index: float,
         total_units: float,
@@ -476,7 +475,6 @@ class ExtractMixin:
         outputs: list[Path],
         track_output_pairs: list[tuple[int, Path]],
         ar_results: list[AccurateRipResult],
-        ctdb_results: list[CtdbResult],
         notes: list[str],
         burst_tracks: list[int],
         test_copy_mismatches: list[int],
@@ -486,7 +484,7 @@ class ExtractMixin:
         """Process every selected track with secure test & copy.
 
         Encode of track N overlaps extraction of track N+1 (drive-bound rip
-        with CPU-bound encode). AccurateRip and CTDB share one PCM load.
+        with CPU-bound encode). AccurateRip uses one PCM load per track.
         """
         skipped_unverified = skipped_unverified if skipped_unverified is not None else []
         pending: _PendingEncode | None = None
@@ -627,9 +625,7 @@ class ExtractMixin:
                         track_no=track_no,
                         tmp_path=tmp_path,
                         ar_verifier=ar_verifier,
-                        ctdb_verifier=ctdb_verifier,
                         ar_results=ar_results,
-                        ctdb_results=ctdb_results,
                         log_entry=log_entry,
                         idx=idx,
                         total_units=total_units,
@@ -731,9 +727,7 @@ class ExtractMixin:
                         extracted.copy_wav,
                         track_no,
                         ar_verifier=ar_verifier,
-                        ctdb_verifier=ctdb_verifier,
                         ar_results=ar_results,
-                        ctdb_results=ctdb_results,
                         log_entry=log_entry,
                         idx=idx,
                         total_units=total_units,
@@ -762,7 +756,7 @@ class ExtractMixin:
                 dests = self._destinations_for_track(job, track_no)
                 if not dests:
                     # Skip-existing after extract: destinations appeared; keep
-                    # the just-verified WAV results (already in ar/ctdb lists).
+                    # the just-verified WAV results (already in ar_results).
                     notes.append(
                         f'Skipped encode for track {track_no} '
                         '(output already exists; extract was verified)'

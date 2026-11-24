@@ -98,12 +98,8 @@ class RipActionsMixin:
 
         settings = self.store.get()
         if needs_drive_setup(self.store):
-            if (
-                settings.verify_accuraterip
-                or settings.verify_ctdb
-                or settings.submit_ctdb
-            ):
-                # Hard gate: AR/CTDB verify and CTDB submit need a measured offset.
+            if settings.verify_accuraterip:
+                # Hard gate: AccurateRip verify needs a measured offset.
                 self._require_offset_calibration()
                 return
             # Verification off — offset 0 is fine for an unverified rip.
@@ -119,10 +115,6 @@ class RipActionsMixin:
         targets: list[str] = []
         if settings.verify_accuraterip:
             targets.append('AccurateRip')
-        if settings.verify_ctdb:
-            targets.append('CTDB')
-        if settings.submit_ctdb and 'CTDB' not in targets:
-            targets.append('CTDB submit')
         which = ' and '.join(targets) if targets else 'verification'
         dialog = Adw.AlertDialog(
             heading='Sample offset required',
@@ -580,12 +572,9 @@ class RipActionsMixin:
             self._toast('Rip cancelled')
             return
 
-        # Per-track AR/CTDB rows matter most on archival fail.
-        if result.accuraterip or result.ctdb:
-            self._apply_verify_results_to_rows(
-                ar_results=result.accuraterip,
-                ctdb_results=result.ctdb,
-            )
+        # Per-track AR rows matter most on archival fail.
+        if result.accuraterip:
+            self._apply_verify_results_to_rows(ar_results=result.accuraterip)
 
         n = len(result.output_files)
         if not result.success:
@@ -632,19 +621,6 @@ class RipActionsMixin:
                 1 for r in result.accuraterip if r.confidence == AccurateRipConfidence.MATCH
             )
             ar_bits.append(f'AR {matches}/{len(result.accuraterip)}')
-        if result.ctdb and 'CTDB ' not in (result.outcome_summary or ''):
-            matches = sum(1 for r in result.ctdb if r.confidence == CtdbConfidence.MATCH)
-            hard_miss = sum(
-                1 for r in result.ctdb if r.confidence == CtdbConfidence.MISMATCH
-            )
-            if matches == len(result.ctdb):
-                ar_bits.append(f'CTDB {matches}/{len(result.ctdb)}')
-            elif hard_miss:
-                ar_bits.append(f'CTDB {matches}/{len(result.ctdb)} ({hard_miss} mismatch)')
-            elif matches:
-                ar_bits.append(f'CTDB {matches}/{len(result.ctdb)}')
-            else:
-                ar_bits.append('CTDB unverified')
         intentional_burst = bool(self.store.get().burst_mode)
         if result.burst_tracks and intentional_burst:
             n_burst = len(result.burst_tracks)
@@ -697,7 +673,7 @@ class RipActionsMixin:
                 f'{n_burst} track{"s" if n_burst != 1 else ""} (-Z)'
             )
         if result.secure_ok and not result.db_verified:
-            if result.accuraterip or result.ctdb:
+            if result.accuraterip:
                 return f'Secure OK · not DB-verified · {n} file(s)'
             return f'Secure OK · {n} file(s)'
         if result.secure_ok and result.db_verified:
