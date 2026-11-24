@@ -298,32 +298,42 @@ class EncodeMixin:
                 wav_left -= 1
                 place_wav_output(wav_path, dest.out_path, move=wav_left == 0)
 
-            if job.album is not None:
-                total_for_tags = len(job.album.tracks) if job.album.tracks else disc_track_count
-                lyrics_on = (
-                    bool(job.embed_lyrics) and is_lossless_format(dest.format) and not tag_as_image
-                )
-                write_lyrics_tags = lyrics_on and lyrics_mode_writes_tags(job.lyrics_save_mode)
-                write_lyrics_files = lyrics_on and lyrics_mode_writes_sidecar(job.lyrics_save_mode)
-                self._tags.write_album_tags(
+            # Always tag after encode so Encoder / Encoded by land even without
+            # a metadata lookup (placeholder album keeps titles sane).
+            album_for_tags = job.album or AlbumMetadata(
+                title='Unknown Album',
+                artist='Unknown Artist',
+            )
+            total_for_tags = (
+                len(album_for_tags.tracks) if album_for_tags.tracks else disc_track_count
+            )
+            lyrics_on = (
+                bool(job.embed_lyrics)
+                and job.album is not None
+                and is_lossless_format(dest.format)
+                and not tag_as_image
+            )
+            write_lyrics_tags = lyrics_on and lyrics_mode_writes_tags(job.lyrics_save_mode)
+            write_lyrics_files = lyrics_on and lyrics_mode_writes_sidecar(job.lyrics_save_mode)
+            self._tags.write_album_tags(
+                dest.out_path,
+                album_for_tags,
+                track_number,
+                total_tracks=total_for_tags or None,
+                artist_style=job.artist_style,
+                m4a_feat_artists=job.m4a_feat_artists,
+                image=tag_as_image,
+                encoder=encoder_tag_for_format(dest.format),
+                encoded_by=(ripper_tag_value() if job.add_ripper_tag else None),
+                embed_lyrics=write_lyrics_tags,
+            )
+            if write_lyrics_files and track_number > 0 and job.album is not None:
+                write_lyrics_sidecar(
                     dest.out_path,
-                    job.album,
-                    track_number,
-                    total_tracks=total_for_tags or None,
-                    artist_style=job.artist_style,
-                    m4a_feat_artists=job.m4a_feat_artists,
-                    image=tag_as_image,
-                    encoder=encoder_tag_for_format(dest.format),
-                    encoded_by=(ripper_tag_value() if job.add_ripper_tag else None),
-                    embed_lyrics=write_lyrics_tags,
+                    track_meta_for(job.album, track_number),
                 )
-                if write_lyrics_files and track_number > 0:
-                    write_lyrics_sidecar(
-                        dest.out_path,
-                        track_meta_for(job.album, track_number),
-                    )
-                if retitle and not tag_as_image:
-                    _retag_title(dest.out_path, retitle, track_number=track_number)
+            if retitle and not tag_as_image:
+                _retag_title(dest.out_path, retitle, track_number=track_number)
             art = embed_art.for_format(dest.format, job)
             if art is not None:
                 self._tags.embed_artwork(dest.out_path, art.data, art.mime)
