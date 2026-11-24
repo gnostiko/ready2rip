@@ -411,7 +411,6 @@ def finish_result(
     db_verified: bool = False,
     archival_ok: bool | None = None,
     outcome_summary: str = '',
-    skipped_existing: list[int] | None = None,
 ) -> RipResult:
     """Build a RipResult; write the rip log beside the *first* encode only.
 
@@ -460,7 +459,6 @@ def finish_result(
         db_verified=db_verified,
         archival_ok=ok_archival,
         outcome_summary=outcome_summary,
-        skipped_existing=skipped_existing or [],
     )
 
 

@@ -34,7 +34,6 @@ STANDARD_TRACK1_PREGAP_SECTORS = 150
 class HtoaInfo:
     """Pregap before track 1 (possible HTOA). Never part of the track 1 file."""
 
-    start_sector: int  # always 0 for absolute disc start
     length_sectors: int
     message: str = ''
 
@@ -79,7 +78,6 @@ def detect_htoa(disc: DiscInfo | None) -> HtoaInfo | None:
 
     extra = pregap - STANDARD_TRACK1_PREGAP_SECTORS
     info = HtoaInfo(
-        start_sector=0,
         length_sectors=pregap,
         message=(
             f'Extended pregap before track 1: {pregap} sectors '

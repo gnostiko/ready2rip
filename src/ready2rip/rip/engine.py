@@ -461,7 +461,6 @@ class RipEngine(
                         test_copy_mismatches=test_copy_mismatches,
                         log_dir=primary_audio_dir,
                         archival_ok=False,
-                        skipped_existing=skipped_unverified,
                     )
 
                 data_index = float(len(tracks) + (1 if htoa_info else 0))
@@ -597,7 +596,6 @@ class RipEngine(
                 test_copy_mismatches=test_copy_mismatches,
                 log_dir=primary_audio_dir,
                 archival_ok=False,
-                skipped_existing=skipped_unverified,
             )
 
         if self._cancelled:
@@ -617,7 +615,6 @@ class RipEngine(
                 test_copy_mismatches=test_copy_mismatches,
                 log_dir=primary_audio_dir,
                 archival_ok=False,
-                skipped_existing=skipped_unverified,
             )
 
         if job.submit_ctdb and ctdb_verifier is not None and ctdb_results:
@@ -715,7 +712,6 @@ class RipEngine(
             db_verified=tiers.db_verified,
             archival_ok=tiers.archival_ok,
             outcome_summary=tiers.summary,
-            skipped_existing=skipped_unverified,
         )
         if result.log_path is not None:
             done_msg = f'{done_msg} · log saved'

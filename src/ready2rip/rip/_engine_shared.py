@@ -119,9 +119,6 @@ from ready2rip.rip.plan import (
     place_wav_output,
     unique_album_dirs,
 )
-from ready2rip.rip.plan import (
-    conflicting_paths as plan_conflicting_paths,
-)
 from ready2rip.rip.progress_map import (
     normalize_unit_weights,
     overall_fraction,
@@ -146,6 +143,7 @@ from ready2rip.rip.secure import (
     secure_paranoia_flags,
     wav_size_minimum,
 )
+from ready2rip.rip.test_copy import SecureTestCopyResult, run_secure_test_and_copy
 from ready2rip.rip.tmpdir import rip_scratch_dir
 from ready2rip.rip.wav_trim import trim_wav_to_expected
 from ready2rip.settings_defs import (
@@ -163,7 +161,6 @@ log = logging.getLogger('ready2rip.rip.engine')
 from ready2rip.rip.engine_helpers import (
     _expected_wav_sizes,
     _extract_timeout,
-    _job_per_track_overread_span,
     _retag_title,
     _track_avoid_span,
 )

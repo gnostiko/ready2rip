@@ -12,17 +12,12 @@ from ready2rip.disc.overread import (
     OverreadCapability,
     format_overread_settings_status,
     offset_margin_sectors,
-    overread_is_used,
     overread_span,
     overread_usage_label,
 )
 from ready2rip.rip.ctdb_quality import ctdb_submit_quality
 from ready2rip.rip.paranoia_stats import ParanoiaStats
-from ready2rip.rip.secure import (
-    SECURE_MIN_WAV_RATIO,
-    SECURE_WAV_SHORT_BYTES,
-    wav_size_minimum,
-)
+from ready2rip.rip.secure import SECURE_MIN_WAV_RATIO, wav_size_minimum
 from ready2rip.rip.wav_trim import trim_wav_to_expected
 
 
@@ -32,8 +27,6 @@ def test_wav_size_minimum_exact_for_archival_secure() -> None:
     # Archival secure: exact TOC length (no one-sector slack).
     assert wav_size_minimum(expected, 1.0) == expected
     assert wav_size_minimum(expected, 0.99) == int(expected * 0.99)
-    # Alias retained for docs/callers; no longer subtracted at ratio ≥ 1.
-    assert SECURE_WAV_SHORT_BYTES == 2352
 
 
 def test_offset_margin_sectors() -> None:
@@ -47,9 +40,6 @@ def test_offset_margin_sectors() -> None:
 def test_overread_usage_and_settings_status() -> None:
     yes = OverreadCapability(lead_in=True, lead_out=True)
     no = OverreadCapability()
-    assert overread_is_used(0, yes) is False
-    assert overread_is_used(667, yes) is True
-    assert overread_is_used(667, no) is False
     assert 'offset 0' in overread_usage_label(0, yes)
     assert 'used for offset' in overread_usage_label(667, yes)
     assert 'silence fill' in overread_usage_label(667, no)

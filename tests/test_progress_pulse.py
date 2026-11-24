@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import time
 
-from ready2rip.rip.progress_pulse import ProgressPulse, pulse_while
+from ready2rip.rip.progress_pulse import ProgressPulse
 
 
 def test_progress_pulse_ticks() -> None:
@@ -19,13 +19,14 @@ def test_progress_pulse_ticks() -> None:
     assert len(hits) >= 2
 
 
-def test_pulse_while_returns_work_result() -> None:
+def test_progress_pulse_context_runs_work() -> None:
     hits = 0
 
     def tick() -> None:
         nonlocal hits
         hits += 1
 
-    result = pulse_while(tick, lambda: 42, interval=0.05)
+    with ProgressPulse(tick, interval=0.05):
+        result = 42
     assert result == 42
     assert hits >= 1

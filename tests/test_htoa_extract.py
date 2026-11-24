@@ -15,7 +15,7 @@ from ready2rip.rip.secure import (
 
 
 def _htoa(sectors: int = 150) -> HtoaInfo:
-    return HtoaInfo(start_sector=0, length_sectors=sectors)
+    return HtoaInfo(length_sectors=sectors)
 
 
 def _capture_cmd(tmp_path: Path, *, mode: str) -> list[str]:

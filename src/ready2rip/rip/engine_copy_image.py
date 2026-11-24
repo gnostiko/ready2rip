@@ -258,79 +258,71 @@ class CopyImageMixin:
                 ):
                     max_img_retries = max(0, int(job.test_copy_max_retries))
                     img_attempts = 1 + max_img_retries
-                    img_matched = False
-                    test_crc = ''
-                    copy_crc = ''
+                    attempt_n = {'n': 0}
                     copy_mode = mode
-                    for img_attempt in range(img_attempts):
-                        if self._cancelled:
-                            break
-                        # Phase marks for retries (fill jumps at boundaries).
-                        extract_base = 0.05 if img_attempt == 0 else 0.66
-                        copy_base = 0.32 if img_attempt == 0 else 0.75
-                        if img_attempt > 0:
-                            report(
-                                RipState.RIPPING,
-                                extract_base,
-                                f'Retrying disc image test & copy (attempt {img_attempt + 1})…',
-                            )
-                            self._unlink_quiet(test_wav, copy_wav)
-                            flush_drive_cache(
-                                job.device,
-                                disc,
-                                avoid_start=file_start,
-                                avoid_end=end_sector,
-                            )
 
-                            def _img_retry_progress(local: float, *, _base=extract_base) -> None:
-                                local_c = max(0.0, min(1.0, local))
-                                report(
-                                    RipState.RIPPING,
-                                    _base + 0.20 * local_c,
-                                    'Retrying disc image…',
-                                )
-
-                            mode, retry_stats = _img_span(
-                                test_wav,
-                                force_mode='secure',
-                                on_extract_progress=_img_retry_progress,
-                            )
-                            img_stats.merge(retry_stats)
-                            report(
-                                RipState.RIPPING,
-                                last_overall,
-                                'Trimming disc image…',
-                            )
-                            trim_wav_to_expected(test_wav, expected_bytes)
-
+                    def _img_flush() -> None:
+                        if not job.defeat_audio_cache:
+                            return
                         report(
                             RipState.RIPPING,
-                            max(last_overall, copy_base - 0.02),
+                            max(last_overall, 0.31),
+                            'Defeating drive cache…',
+                        )
+                        flush_drive_cache(
+                            job.device,
+                            disc,
+                            avoid_start=file_start,
+                            avoid_end=end_sector,
+                        )
+
+                    def _extract_test(dest: Path) -> str:
+                        extract_base = 0.66
+                        report(
+                            RipState.RIPPING,
+                            extract_base,
+                            f'Retrying disc image test & copy '
+                            f'(attempt {attempt_n["n"] + 1})…',
+                        )
+                        self._unlink_quiet(test_wav, copy_wav)
+                        flush_drive_cache(
+                            job.device,
+                            disc,
+                            avoid_start=file_start,
+                            avoid_end=end_sector,
+                        )
+
+                        def _img_retry_progress(local: float, *, _base=extract_base) -> None:
+                            local_c = max(0.0, min(1.0, local))
+                            report(
+                                RipState.RIPPING,
+                                _base + 0.20 * local_c,
+                                'Retrying disc image…',
+                            )
+
+                        mode_l, retry_stats = _img_span(
+                            dest,
+                            force_mode='secure',
+                            on_extract_progress=_img_retry_progress,
+                        )
+                        img_stats.merge(retry_stats)
+                        report(
+                            RipState.RIPPING,
+                            last_overall,
+                            'Trimming disc image…',
+                        )
+                        return mode_l
+
+                    def _after_test(path: Path) -> None:
+                        trim_wav_to_expected(path, expected_bytes)
+                        report(
+                            RipState.RIPPING,
+                            max(last_overall, 0.30),
                             'Checking image CRC…',
                         )
 
-                        def _img_test_crc_tick() -> None:
-                            report(
-                                RipState.RIPPING,
-                                last_overall,
-                                'Checking image CRC…',
-                                nudge=True,
-                            )
-
-                        with ProgressPulse(_img_test_crc_tick):
-                            test_crc = wav_pcm_crc(test_wav)
-                        if job.defeat_audio_cache:
-                            report(
-                                RipState.RIPPING,
-                                max(last_overall, copy_base - 0.01),
-                                'Defeating drive cache…',
-                            )
-                            flush_drive_cache(
-                                job.device,
-                                disc,
-                                avoid_start=file_start,
-                                avoid_end=end_sector,
-                            )
+                    def _extract_copy(dest: Path) -> str:
+                        copy_base = 0.32 if attempt_n['n'] == 0 else 0.75
                         report(
                             RipState.RIPPING,
                             copy_base,
@@ -350,8 +342,8 @@ class CopyImageMixin:
                             0.45,
                             'Copy pass for disc image…',
                         )
-                        copy_mode, copy_stats = _img_span(
-                            copy_wav,
+                        mode_l, copy_stats = _img_span(
+                            dest,
                             force_mode='secure',
                             on_extract_progress=_img_copy_progress,
                         )
@@ -361,89 +353,135 @@ class CopyImageMixin:
                             0.55,
                             'Disc image copy complete…',
                         )
-                        trim_wav_to_expected(copy_wav, expected_bytes)
+                        attempt_n['n'] += 1
+                        return mode_l
+
+                    def _after_copy(path: Path) -> None:
+                        trim_wav_to_expected(path, expected_bytes)
                         report(
                             RipState.RIPPING,
                             0.58,
                             'Checking image CRC…',
                         )
 
-                        def _img_copy_crc_tick() -> None:
+                    def _extract_burst(dest: Path) -> str:
+                        def _img_burst_progress(local: float) -> None:
+                            local_c = max(0.0, min(1.0, local))
                             report(
                                 RipState.RIPPING,
-                                last_overall,
-                                'Checking image CRC…',
-                                nudge=True,
+                                max(last_overall, 0.84 + 0.10 * local_c),
+                                'Burst recovery for disc image…',
                             )
 
-                        with ProgressPulse(_img_copy_crc_tick):
-                            copy_crc = wav_pcm_crc(copy_wav)
-                        if test_crc and copy_crc and test_crc == copy_crc:
-                            img_matched = True
-                            break
+                        mode_l, burst_stats = _img_span(
+                            dest,
+                            force_mode='burst',
+                            on_extract_progress=_img_burst_progress,
+                        )
+                        img_stats.merge(burst_stats)
+                        return mode_l
+
+                    def _after_burst(path: Path) -> None:
+                        report(
+                            RipState.RIPPING,
+                            last_overall,
+                            'Trimming disc image…',
+                        )
+                        trim_wav_to_expected(path, expected_bytes)
+
+                    def _test_crc_tick() -> None:
+                        report(
+                            RipState.RIPPING,
+                            last_overall,
+                            'Checking image CRC…',
+                            nudge=True,
+                        )
+
+                    def _copy_crc_tick() -> None:
+                        report(
+                            RipState.RIPPING,
+                            last_overall,
+                            'Checking image CRC…',
+                            nudge=True,
+                        )
+
+                    def _on_mismatch(t_crc: str, c_crc: str, img_attempt: int) -> None:
                         notes.append(
                             f'Image test/copy CRC mismatch '
-                            f'({test_crc} ≠ {copy_crc})'
+                            f'({t_crc} ≠ {c_crc})'
                             + ('; retrying' if img_attempt + 1 < img_attempts else '')
                         )
 
-                    if not img_matched:
-                        if job.burst_fallback and not self._cancelled:
-                            report(
-                                RipState.RIPPING,
-                                max(last_overall, 0.84),
-                                'Image test & copy failed — burst recovery…',
-                            )
-                            flush_drive_cache(
-                                job.device,
-                                disc,
-                                avoid_start=file_start,
-                                avoid_end=end_sector,
-                            )
+                    def _on_before_burst() -> None:
+                        report(
+                            RipState.RIPPING,
+                            max(last_overall, 0.84),
+                            'Image test & copy failed — burst recovery…',
+                        )
+                        # Always seek elsewhere before burst recovery (not only when
+                        # defeat_audio_cache is on for the secure dual-pass).
+                        flush_drive_cache(
+                            job.device,
+                            disc,
+                            avoid_start=file_start,
+                            avoid_end=end_sector,
+                        )
 
-                            def _img_burst_progress(local: float) -> None:
-                                local_c = max(0.0, min(1.0, local))
-                                report(
-                                    RipState.RIPPING,
-                                    max(last_overall, 0.84 + 0.10 * local_c),
-                                    'Burst recovery for disc image…',
-                                )
-
-                            copy_mode, burst_stats = _img_span(
-                                copy_wav,
-                                force_mode='burst',
-                                on_extract_progress=_img_burst_progress,
-                            )
-                            img_stats.merge(burst_stats)
-                            report(
-                                RipState.RIPPING,
-                                last_overall,
-                                'Trimming disc image…',
-                            )
-                            trim_wav_to_expected(copy_wav, expected_bytes)
-                            mode = 'burst'
-                            notes.append(
+                    # Attempt 0 reuses the already-extracted/trimmed test_wav.
+                    report(
+                        RipState.RIPPING,
+                        max(last_overall, 0.30),
+                        'Checking image CRC…',
+                    )
+                    session = run_secure_test_and_copy(
+                        test_wav=test_wav,
+                        copy_wav=copy_wav,
+                        max_retries=max_img_retries,
+                        burst_fallback=bool(job.burst_fallback),
+                        extract_test=_extract_test,
+                        extract_copy=_extract_copy,
+                        extract_burst=_extract_burst if job.burst_fallback else None,
+                        flush=_img_flush if job.defeat_audio_cache else None,
+                        is_cancelled=lambda: self._cancelled,
+                        unlink=self._unlink_quiet,
+                        reuse_initial_test=True,
+                        after_test=_after_test,
+                        after_copy=_after_copy,
+                        after_burst=_after_burst,
+                        test_crc_tick=_test_crc_tick,
+                        copy_crc_tick=_copy_crc_tick,
+                        on_mismatch=_on_mismatch,
+                        on_before_burst=_on_before_burst,
+                        unlink_test_after_crc=False,
+                        label='Image',
+                    )
+                    test_crc = session.secure_test_crc or session.test_crc
+                    copy_crc = session.secure_copy_crc or session.copy_crc
+                    copy_mode = session.copy_mode or mode
+                    if session.burst_recovered:
+                        mode = 'burst'
+                        notes.append(
+                            f'Image test/copy CRC mismatch '
+                            f'({test_crc} ≠ {copy_crc}); recovered in burst'
+                        )
+                    elif not session.matched:
+                        return finish_result(
+                            success=False,
+                            error=(
                                 f'Image test/copy CRC mismatch '
-                                f'({test_crc} ≠ {copy_crc}); recovered in burst'
-                            )
-                        else:
-                            return finish_result(
-                                success=False,
-                                error=(
-                                    f'Image test/copy CRC mismatch '
-                                    f'({test_crc} ≠ {copy_crc}); '
-                                    f'secure retries exhausted'
-                                ),
-                                outputs=[],
-                                album_dir=album_dir,
-                                ar_results=[],
-                                ctdb_results=[],
-                                notes=notes,
-                                burst_tracks=[],
-                                rip_log=rip_log,
-                                archival_ok=False,
-                                secure_ok=False,
-                            )
+                                f'({test_crc} ≠ {copy_crc}); '
+                                f'secure retries exhausted'
+                            ),
+                            outputs=[],
+                            album_dir=album_dir,
+                            ar_results=[],
+                            ctdb_results=[],
+                            notes=notes,
+                            burst_tracks=[],
+                            rip_log=rip_log,
+                            archival_ok=False,
+                            secure_ok=False,
+                        )
                     if copy_mode == 'burst':
                         mode = 'burst'
                         notes.append('Disc image used burst mode')
@@ -453,7 +491,7 @@ class CopyImageMixin:
                             f'Copy CRC {copy_crc.upper()}'
                             + (
                                 ' — matched'
-                                if test_crc == copy_crc
+                                if session.matched
                                 else ' — MISMATCH'
                             )
                         )

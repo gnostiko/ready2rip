@@ -19,8 +19,6 @@ SECURE_MIN_OVERLAP = 8
 # (min_ratio ≥ 1.0) requires exact TOC length — no sector of slack.
 # Non-secure / burst paths may pass a lower min_ratio for recovery.
 SECURE_MIN_WAV_RATIO = 1.0
-# Legacy alias kept for callers/tests that still name the old one-sector slack.
-SECURE_WAV_SHORT_BYTES = 2352
 
 # Extra full test+copy cycles after a CRC mismatch (total attempts = 1 + N).
 SECURE_TEST_COPY_RETRIES = 3
@@ -30,8 +28,7 @@ def wav_size_minimum(expected_bytes: int, min_ratio: float) -> int:
     """Smallest acceptable WAV size for a TOC-expected *expected_bytes*.
 
     When *min_ratio* ≥ 1.0 (archival secure), require the full expected size.
-    Lower ratios (burst / recovery) scale the floor without the old one-sector
-    slack used for secure dual-pass.
+    Lower ratios (burst / recovery) scale that floor.
     """
     expected = max(0, int(expected_bytes))
     if expected <= 0:

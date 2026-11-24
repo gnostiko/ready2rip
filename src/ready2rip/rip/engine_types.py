@@ -28,7 +28,6 @@ from ready2rip.paths import (
 from ready2rip.rip.encode_dest import (
     is_lossless_format,
     is_lossy_format,
-    should_embed_artwork_for_format,
 )
 from ready2rip.rip.paranoia_stats import ParanoiaStats
 from ready2rip.rip.plan import (
@@ -84,7 +83,6 @@ class RipResult:
     db_verified: bool = False
     archival_ok: bool = True
     outcome_summary: str = ''
-    skipped_existing: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -185,17 +183,6 @@ class RipJob:
     artwork_max_size: int = 600  # lossy embed edge; match settings default
     artwork_max_size_lossless: int = 600
 
-    def wants_embed_artwork(self) -> bool:
-        return bool(self.embed_artwork or self.embed_artwork_lossless)
-
-    def should_embed_format(self, fmt: str) -> bool:
-        """Whether *fmt* should receive an embedded cover for this job."""
-        return should_embed_artwork_for_format(
-            fmt,
-            embed_lossy=bool(self.embed_artwork),
-            embed_lossless=bool(self.embed_artwork_lossless),
-        )
-
 
 @dataclass(frozen=True)
 class EmbedArtworkSet:
@@ -256,21 +243,10 @@ class _PendingEncode:
 class _CrcMismatch(Exception):
     """Secure test&copy failed after retries with no recovered copy WAV."""
 
-    def __init__(
-        self,
-        track_number: int,
-        message: str,
-        *,
-        test_crc: str = '',
-        copy_crc: str = '',
-        attempt_log: list[str] | None = None,
-    ) -> None:
+    def __init__(self, track_number: int, message: str) -> None:
         super().__init__(message)
         self.track_number = track_number
         self.message = message
-        self.test_crc = test_crc
-        self.copy_crc = copy_crc
-        self.attempt_log = list(attempt_log or [])
 
 
 

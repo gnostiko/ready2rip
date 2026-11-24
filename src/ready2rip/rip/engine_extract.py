@@ -32,16 +32,9 @@ class ExtractMixin:
 
         log_entry = None
         if rip_log is not None:
-            log_entry = rip_log.begin_track(
-                0,
-                title=title,
-                length_label=htoa_info.duration_label,
-                start_sector=0,
-                length_sectors=htoa_info.length_sectors,
-            )
+            log_entry = rip_log.begin_track(0, title=title)
 
         htoa_mode = job_extract_mode(job)
-        htoa_overread = getattr(job, 'overread', None)
         htoa_burst_recovered = False
         mode = htoa_mode
 
@@ -52,7 +45,7 @@ class ExtractMixin:
                 dest,
                 mode=pass_mode,
                 sample_offset=job.sample_offset,
-                overread=htoa_overread,
+                overread=job.overread,
             )
 
         try:
@@ -61,12 +54,12 @@ class ExtractMixin:
                 0.05,
                 (
                     f'Burst extracting HTOA ({htoa_info.duration_label})…'
-                    if job.burst_mode
+                    if htoa_mode == 'burst'
                     else f'Extracting HTOA ({htoa_info.duration_label})…'
                 ),
             )
             _htoa_extract(test_wav, pass_mode=htoa_mode)
-            if job.burst_mode or htoa_mode == 'burst':
+            if htoa_mode == 'burst':
                 mode = 'burst'
                 notes.append('HTOA extracted in burst mode')
         except Exception as exc:
@@ -112,27 +105,28 @@ class ExtractMixin:
 
         notes.append(f'Non-silent HTOA detected ({htoa_info.duration_label}) — ripping')
 
-        test_crc = ''
-        copy_crc = ''
-        peak = None
         # Mirror Copy Image: first-pass burst skips CRC theater (no burst↔secure compare).
-        if mode == 'burst' or htoa_burst_recovered:
+        if htoa_burst_recovered:
             mode = 'burst'
-            if htoa_burst_recovered and not job.burst_mode:
+            if not job.burst_mode:
                 notes.append(
                     'HTOA extracted in burst mode '
                     '(secure mode failed; disc may be scratched)'
                 )
 
-        if (
-            job.test_and_copy
-            and not job.burst_mode
-            and not htoa_burst_recovered
-            and mode != 'burst'
-        ):
-            test_crc = wav_pcm_crc(test_wav)
-            self._unlink_quiet(test_wav)
-            if defeat_cache:
+        dual_pass = False
+        session: SecureTestCopyResult | None = None
+        peak: float | None = None
+        test_crc = ''
+        copy_crc = ''
+        t0 = time.monotonic()
+
+        if job.test_and_copy and not job.burst_mode and mode != 'burst':
+            dual_pass = True
+
+            def _htoa_flush() -> None:
+                if not defeat_cache:
+                    return
                 report(RipState.RIPPING, 0.25, 'Defeating drive cache before HTOA copy…')
                 flush_drive_cache(
                     job.device,
@@ -140,90 +134,68 @@ class ExtractMixin:
                     avoid_start=0,
                     avoid_end=htoa_info.length_sectors,
                 )
-            report(RipState.RIPPING, 0.35, 'Copying HTOA…')
-            try:
-                _htoa_extract(copy_wav, pass_mode='secure')
-            except Exception:
-                if not job.burst_fallback:
-                    raise
-                # Copy failed secure → burst recovery; do not CRC vs secure test.
-                _htoa_extract(copy_wav, pass_mode='burst')
+
+            def _extract_test(dest: Path) -> str:
+                _htoa_extract(dest, pass_mode='secure')
+                return 'secure'
+
+            def _extract_copy(dest: Path) -> str:
+                report(RipState.RIPPING, 0.35, 'Copying HTOA…')
+                _htoa_extract(dest, pass_mode='secure')
+                return 'secure'
+
+            def _extract_burst(dest: Path) -> str:
+                _htoa_extract(dest, pass_mode='burst')
+                return 'burst'
+
+            session = run_secure_test_and_copy(
+                test_wav=test_wav,
+                copy_wav=copy_wav,
+                max_retries=max(0, int(job.test_copy_max_retries)),
+                burst_fallback=bool(job.burst_fallback),
+                extract_test=_extract_test,
+                extract_copy=_extract_copy,
+                extract_burst=_extract_burst if job.burst_fallback else None,
+                flush=_htoa_flush if defeat_cache else None,
+                is_cancelled=lambda: self._cancelled,
+                unlink=self._unlink_quiet,
+                reuse_initial_test=True,
+                compute_peak=True,
+                label='HTOA',
+            )
+            if session.burst_recovered:
                 mode = 'burst'
                 htoa_burst_recovered = True
-                copy_crc, peak, _ = analyze_wav_for_log(copy_wav, htoa_info.length_sectors)
-                notes.append(
-                    'HTOA copy pass failed secure; recovered in burst '
-                    '(skipped test/copy CRC)'
+                if session.error and 'recovered in burst' in session.error:
+                    notes.append(session.error)
+            elif not session.matched:
+                raise RuntimeError(
+                    f'HTOA test/copy CRC mismatch '
+                    f'(test={session.test_crc} copy={session.copy_crc}); '
+                    f'secure retries exhausted'
                 )
-                test_crc = ''
-            if mode != 'burst':
-                copy_crc, peak, _ = analyze_wav_for_log(copy_wav, htoa_info.length_sectors)
-                if test_crc != copy_crc:
-                    max_htoa_retries = max(0, int(job.test_copy_max_retries))
-                    matched_htoa = False
-                    for htoa_attempt in range(max_htoa_retries):
-                        if defeat_cache:
-                            flush_drive_cache(
-                                job.device,
-                                job.disc_info,
-                                avoid_start=0,
-                                avoid_end=htoa_info.length_sectors,
-                            )
-                        # Re-run both passes so CRCs are from the same secure pair.
-                        _htoa_extract(test_wav, pass_mode='secure')
-                        test_crc = wav_pcm_crc(test_wav)
-                        self._unlink_quiet(test_wav)
-                        if defeat_cache:
-                            flush_drive_cache(
-                                job.device,
-                                job.disc_info,
-                                avoid_start=0,
-                                avoid_end=htoa_info.length_sectors,
-                            )
-                        _htoa_extract(copy_wav, pass_mode='secure')
-                        copy_crc, peak, _ = analyze_wav_for_log(
-                            copy_wav, htoa_info.length_sectors
-                        )
-                        if test_crc and copy_crc and test_crc == copy_crc:
-                            matched_htoa = True
+            else:
+                for line in session.attempt_log:
+                    if 'CRC match' in line and 'pass 1:' not in line:
+                        # "pass N: CRC match …" — N-1 is the retry count.
+                        try:
+                            pass_n = int(line.split(':', 1)[0].split()[-1])
+                        except ValueError:
+                            pass_n = 0
+                        if pass_n > 1:
                             notes.append(
-                                f'HTOA test/copy CRC matched on retry {htoa_attempt + 1}'
+                                f'HTOA test/copy CRC matched on retry {pass_n - 1}'
                             )
-                            break
-                    if not matched_htoa and test_crc != copy_crc:
-                        if job.burst_fallback:
-                            if defeat_cache:
-                                flush_drive_cache(
-                                    job.device,
-                                    job.disc_info,
-                                    avoid_start=0,
-                                    avoid_end=htoa_info.length_sectors,
-                                )
-                            _htoa_extract(copy_wav, pass_mode='burst')
-                            mode = 'burst'
-                            htoa_burst_recovered = True
-                            copy_crc, peak, _ = analyze_wav_for_log(
-                                copy_wav, htoa_info.length_sectors
-                            )
-                            notes.append(
-                                f'HTOA test/copy CRC mismatch '
-                                f'(test={test_crc} copy={copy_crc}); '
-                                f'recovered in burst'
-                            )
-                            # Final audio is burst — do not keep secure test CRC as verified.
-                            test_crc = ''
-                        else:
-                            raise RuntimeError(
-                                f'HTOA test/copy CRC mismatch '
-                                f'(test={test_crc} copy={copy_crc}); '
-                                f'secure retries exhausted'
-                            )
+            test_crc = session.test_crc
+            copy_crc = session.copy_crc
+            peak = session.peak
             wav_for_encode = copy_wav if copy_wav.is_file() else test_wav
         else:
             wav_for_encode = test_wav
-            copy_crc, peak, _ = analyze_wav_for_log(test_wav, htoa_info.length_sectors)
+            copy_crc, peak = analyze_wav_for_log(test_wav)
             test_crc = '' if mode == 'burst' else copy_crc
 
+        elapsed = time.monotonic() - t0
         safe_title = ''.join(c if c not in '<>:"/\\|?*' else '_' for c in title)
         dests = self._destinations_for_track(job, 1, filename=f'00 - {safe_title}')
         self._ensure_destination_dirs(dests)
@@ -250,49 +222,52 @@ class ExtractMixin:
             write_cover=True,
             on_progress=_htoa_progress,
         )
-        self._unlink_quiet(test_wav, copy_wav)
         primary_out = htoa_outputs[0] if htoa_outputs else None
 
         if primary_out is None:
+            self._unlink_quiet(test_wav, copy_wav)
             return False, None, [], notes
 
         if log_entry is not None:
-            if mode == 'burst':
-                log_entry.extract_mode = 'burst (-Z)'
-                log_entry.test_crc = ''
-                log_entry.copy_crc = copy_crc or test_crc
-                log_entry.crc_verified = None
-                if htoa_burst_recovered and not job.burst_mode:
-                    log_entry.had_errors = True
-                    log_entry.notes.append('Secure HTOA failed — burst (-Z) used for final audio')
-            elif job.test_and_copy and test_crc and copy_crc:
-                log_entry.extract_mode = f'{mode} (test & copy)'
-                log_entry.test_crc = test_crc
-                log_entry.copy_crc = copy_crc
-                log_entry.crc_verified = test_crc == copy_crc
-            else:
-                log_entry.extract_mode = mode
-                log_entry.test_crc = ''
-                log_entry.copy_crc = copy_crc or test_crc
-                log_entry.crc_verified = None
-            log_entry.peak_percent = peak
+            intentional_burst = bool(job.burst_mode)
+            extracted = _TrackExtract(
+                mode=mode,
+                test_crc=test_crc if dual_pass and not htoa_burst_recovered else '',
+                copy_crc=copy_crc or test_crc,
+                peak=peak,
+                elapsed=elapsed,
+                stats=ParanoiaStats(),
+                matched=bool(
+                    dual_pass
+                    and session is not None
+                    and session.matched
+                    and not htoa_burst_recovered
+                ),
+                copy_wav=wav_for_encode,
+                test_wav=test_wav,
+                dual_pass=dual_pass and not htoa_burst_recovered,
+                test_mode=(session.test_mode if session is not None else ''),
+                copy_mode=(
+                    session.copy_mode
+                    if session is not None
+                    else ('burst' if mode == 'burst' else mode)
+                ),
+                attempt_log=list(session.attempt_log) if session is not None else [],
+                expected_wav_bytes=44 + int(htoa_info.length_sectors) * 2352,
+            )
+            self._apply_extract_to_log(
+                log_entry,
+                extracted=extracted,
+                sectors=int(htoa_info.length_sectors),
+                expected_bytes=extracted.expected_wav_bytes,
+                test_and_copy=bool(job.test_and_copy and not job.burst_mode),
+                intentional_burst=intentional_burst,
+            )
             log_entry.output_path = primary_out
             log_entry.filename = primary_out.name
-            log_entry.status = 'OK'
             log_entry.notes.append('Hidden Track One Audio (non-silent pregap)')
-            if (
-                mode != 'burst'
-                and job.test_and_copy
-                and test_crc
-                and copy_crc
-                and test_crc != copy_crc
-            ):
-                log_entry.notes.append(
-                    f'HTOA test/copy CRC mismatch kept copy '
-                    f'(test={test_crc.upper()} copy={copy_crc.upper()})'
-                )
-                log_entry.had_errors = True
 
+        self._unlink_quiet(test_wav, copy_wav)
         saved = ', '.join(p.name for p in htoa_outputs)
         notes.append(f'HTOA saved: {saved}')
         report(
@@ -458,9 +433,6 @@ class ExtractMixin:
                 entry = rip_log.begin_track(
                     item.track.number,
                     title=f'Data ({item.track.cue_mode})',
-                    length_label=item.track.duration_label,
-                    start_sector=item.track.start_sector,
-                    length_sectors=item.track.length_sectors,
                 )
                 entry.filename = item.path.name
                 entry.output_path = item.path
@@ -635,9 +607,6 @@ class ExtractMixin:
                     log_entry = rip_log.begin_track(
                         track_no,
                         title=title_for_track(job.album, track_no),
-                        length_label=(toc_track.duration_label if toc_track else ''),
-                        start_sector=toc_track.start_sector if toc_track else 0,
-                        length_sectors=sectors,
                     )
 
                 test_wav = tmp_path / f'track{track_no:02d}_test.wav'
@@ -732,9 +701,6 @@ class ExtractMixin:
                                 f'(secure retries exhausted; enable Burst '
                                 f'Fallback to allow insecure recovery)'
                             ),
-                            test_crc=extracted.test_crc,
-                            copy_crc=extracted.copy_crc,
-                            attempt_log=extracted.attempt_log,
                         )
 
                 if extracted.mode == 'burst' and track_no not in burst_tracks:
@@ -916,312 +882,306 @@ class ExtractMixin:
             recovered.matched = True
             return recovered
 
-        max_retries = max(0, int(job.test_copy_max_retries))
-        attempts = 1 + max_retries if job.test_and_copy else 1
-
-        # Archival dual-pass → secure (-X); Normal → repair-tolerant; Burst handled above.
         extract_mode = job_extract_mode(job)
-        final_mode = 'secure' if job.test_and_copy else extract_mode
-        test_mode = ''
-        copy_mode = ''
-        test_crc = ''
-        copy_crc = ''
-        peak: float | None = None
-        elapsed = 0.0
-        matched = not job.test_and_copy
-        last_err: str | None = None
-        track_stats = ParanoiaStats()
-        attempt_log: list[str] = []
-        dual_pass = bool(job.test_and_copy)
 
-        for attempt in range(attempts):
-            if self._cancelled:
-                break
-            try:
-                attempt_stats = ParanoiaStats()
-                attempt_test_mode = ''
-                attempt_copy_mode = ''
-                attempt_t0 = time.monotonic()
+        # Normal / non-T&C: single extract (optional mid-pass burst via _rip_track).
+        if not job.test_and_copy:
+            t0 = time.monotonic()
+            report(
+                track_no,
+                RipState.RIPPING,
+                index=idx,
+                sub=0.0,
+                message=f'Extracting track {track_no}…',
+                total_units=total_units,
+            )
 
-                if job.test_and_copy:
-                    test_label = f'Testing track {track_no}' + (
-                        f' (retry {attempt})' if attempt else ''
-                    )
-                    report(
-                        track_no,
-                        RipState.RIPPING,
-                        index=idx,
-                        sub=0.0,
-                        message=f'{test_label}…',
-                        total_units=total_units,
-                    )
-
-                    def _test_progress(local: float, *, _label=test_label) -> None:
-                        local_c = max(0.0, min(1.0, local))
-                        report(
-                            track_no,
-                            RipState.RIPPING,
-                            index=idx,
-                            # Test pass owns most of the first half of the track unit.
-                            sub=0.32 * local_c,
-                            message=f'{_label}…',
-                            total_units=total_units,
-                        )
-
-                    # Secure-only: a burst test against a secure copy is not a real check.
-                    attempt_test_mode, st = self._rip_track(
-                        job.device,
-                        track_no,
-                        test_wav,
-                        job=job,
-                        expected_bytes=expected,
-                        min_ratio=job.min_wav_size_ratio,
-                        burst_fallback=False,
-                        force_mode='secure',
-                        sample_offset=job.sample_offset,
-                        on_extract_progress=_test_progress,
-                        expected_sectors=sectors,
-                    )
-                    attempt_stats.merge(st)
-                    report(
-                        track_no,
-                        RipState.RIPPING,
-                        index=idx,
-                        sub=0.33,
-                        message=f'Checking test CRC for track {track_no}…',
-                        total_units=total_units,
-                    )
-
-                    def _test_crc_tick(*, _tn=track_no, _idx=idx) -> None:
-                        report(
-                            _tn,
-                            RipState.RIPPING,
-                            index=_idx,
-                            sub=0.33,
-                            message=f'Checking test CRC for track {_tn}…',
-                            total_units=total_units,
-                            nudge=True,
-                        )
-
-                    with ProgressPulse(_test_crc_tick):
-                        test_crc = wav_pcm_crc(test_wav)
-                    self._unlink_quiet(test_wav)
-                    if defeat_cache:
-                        report(
-                            track_no,
-                            RipState.RIPPING,
-                            index=idx,
-                            sub=0.33,
-                            message='Defeating drive cache…',
-                            total_units=total_units,
-                        )
-                        avoid0, avoid1 = _track_avoid_span(job.disc_info, track_no)
-                        flush_drive_cache(
-                            job.device,
-                            job.disc_info,
-                            avoid_start=avoid0,
-                            avoid_end=avoid1,
-                        )
-
-                copy_label = (
-                    f'Copying track {track_no}'
-                    if job.test_and_copy
-                    else f'Extracting track {track_no}'
-                )
-                # Extract is the slow phase — give it most of the track unit so
-                # the banner keeps moving; verify/encode keep the last fifth.
-                copy_base = 0.35 if job.test_and_copy else 0.0
-                copy_span = 0.45 if job.test_and_copy else 0.78
+            def _single_progress(local: float) -> None:
+                local_c = max(0.0, min(1.0, local))
                 report(
                     track_no,
                     RipState.RIPPING,
                     index=idx,
-                    sub=copy_base,
-                    message=f'{copy_label}…',
+                    sub=0.78 * local_c,
+                    message=f'Extracting track {track_no}…',
                     total_units=total_units,
                 )
 
-                def _copy_progress(
-                    local: float,
-                    *,
-                    _label=copy_label,
-                    _base=copy_base,
-                    _span=copy_span,
-                ) -> None:
-                    local_c = max(0.0, min(1.0, local))
-                    report(
-                        track_no,
-                        RipState.RIPPING,
-                        index=idx,
-                        sub=_base + _span * local_c,
-                        message=f'{_label}…',
-                        total_units=total_units,
-                    )
-
-                attempt_copy_mode, st = self._rip_track(
-                    job.device,
-                    track_no,
-                    copy_wav,
-                    job=job,
-                    expected_bytes=expected,
-                    min_ratio=job.min_wav_size_ratio,
-                    burst_fallback=False if job.test_and_copy else job.burst_fallback,
-                    # Archival T&C stays secure-only; Normal/Burst use their own flags.
-                    force_mode='secure' if job.test_and_copy else extract_mode,
-                    sample_offset=job.sample_offset,
-                    on_burst=None
-                    if job.test_and_copy
-                    else (
-                        lambda: report(
-                            track_no,
-                            RipState.RIPPING,
-                            index=idx,
-                            sub=0.35,
-                            message=(f'Secure extract struggled on track {track_no} — burst mode…'),
-                            total_units=total_units,
-                        )
-                    ),
-                    on_extract_progress=_copy_progress,
-                    expected_sectors=sectors,
-                )
-                attempt_stats.merge(st)
-                pass_elapsed = time.monotonic() - attempt_t0
-                elapsed += pass_elapsed
-                report(
+            copy_mode, track_stats = self._rip_track(
+                job.device,
+                track_no,
+                copy_wav,
+                job=job,
+                expected_bytes=expected,
+                min_ratio=job.min_wav_size_ratio,
+                burst_fallback=job.burst_fallback,
+                force_mode=extract_mode,
+                sample_offset=job.sample_offset,
+                on_burst=lambda: report(
                     track_no,
                     RipState.RIPPING,
                     index=idx,
+                    sub=0.35,
+                    message=(f'Secure extract struggled on track {track_no} — burst mode…'),
+                    total_units=total_units,
+                ),
+                on_extract_progress=_single_progress,
+                expected_sectors=sectors,
+            )
+            elapsed = time.monotonic() - t0
+            report(
+                track_no,
+                RipState.RIPPING,
+                index=idx,
+                sub=0.81,
+                message=f'Checking CRC for track {track_no}…',
+                total_units=total_units,
+            )
+
+            def _single_crc_tick(*, _tn=track_no, _idx=idx) -> None:
+                report(
+                    _tn,
+                    RipState.RIPPING,
+                    index=_idx,
                     sub=0.81,
-                    message=f'Checking CRC for track {track_no}…',
+                    message=f'Checking CRC for track {_tn}…',
+                    total_units=total_units,
+                    nudge=True,
+                )
+
+            with ProgressPulse(_single_crc_tick):
+                copy_crc = wav_pcm_crc(copy_wav)
+            return _TrackExtract(
+                mode=copy_mode,
+                test_crc='',
+                copy_crc=copy_crc,
+                peak=None,
+                elapsed=elapsed,
+                stats=track_stats,
+                matched=True,
+                copy_wav=copy_wav,
+                test_wav=test_wav,
+                dual_pass=False,
+                test_mode='',
+                copy_mode=copy_mode,
+                attempt_log=[
+                    f'pass 1: single extract mode={copy_mode} '
+                    f'CRC={copy_crc.upper()} ({elapsed:.1f}s)'
+                ],
+                expected_wav_bytes=int(expected or 0),
+            )
+
+        track_stats = ParanoiaStats()
+        attempt_idx = {'n': 0}
+        t0 = time.monotonic()
+
+        def _extract_test(dest: Path) -> str:
+            attempt = attempt_idx['n']
+            test_label = f'Testing track {track_no}' + (
+                f' (retry {attempt})' if attempt else ''
+            )
+            report(
+                track_no,
+                RipState.RIPPING,
+                index=idx,
+                sub=0.0,
+                message=f'{test_label}…',
+                total_units=total_units,
+            )
+
+            def _test_progress(local: float, *, _label=test_label) -> None:
+                local_c = max(0.0, min(1.0, local))
+                report(
+                    track_no,
+                    RipState.RIPPING,
+                    index=idx,
+                    sub=0.32 * local_c,
+                    message=f'{_label}…',
                     total_units=total_units,
                 )
 
-                def _copy_crc_tick(*, _tn=track_no, _idx=idx) -> None:
-                    report(
-                        _tn,
-                        RipState.RIPPING,
-                        index=_idx,
-                        sub=0.81,
-                        message=f'Checking CRC for track {_tn}…',
-                        total_units=total_units,
-                        nudge=True,
-                    )
+            mode, st = self._rip_track(
+                job.device,
+                track_no,
+                dest,
+                job=job,
+                expected_bytes=expected,
+                min_ratio=job.min_wav_size_ratio,
+                burst_fallback=False,
+                force_mode='secure',
+                sample_offset=job.sample_offset,
+                on_extract_progress=_test_progress,
+                expected_sectors=sectors,
+            )
+            track_stats.merge(st)
+            report(
+                track_no,
+                RipState.RIPPING,
+                index=idx,
+                sub=0.33,
+                message=f'Checking test CRC for track {track_no}…',
+                total_units=total_units,
+            )
+            return mode
 
-                with ProgressPulse(_copy_crc_tick):
-                    copy_crc = wav_pcm_crc(copy_wav)
-                # Peak filled later from the shared AR/CTDB PCM pass.
+        def _extract_copy(dest: Path) -> str:
+            report(
+                track_no,
+                RipState.RIPPING,
+                index=idx,
+                sub=0.35,
+                message=f'Copying track {track_no}…',
+                total_units=total_units,
+            )
 
-                if not job.test_and_copy:
-                    matched = True
-                    dual_pass = False
-                    test_crc = ''
-                    test_mode = ''
-                    copy_mode = attempt_copy_mode
-                    final_mode = attempt_copy_mode
-                    track_stats = attempt_stats
-                    attempt_log.append(
-                        f'pass {attempt + 1}: single extract '
-                        f'mode={attempt_copy_mode} CRC={copy_crc.upper()} '
-                        f'({pass_elapsed:.1f}s)'
-                    )
-                    break
-
-                attempt_log.append(
-                    f'pass {attempt + 1}: test={attempt_test_mode}/'
-                    f'{test_crc.upper() or "?"} copy={attempt_copy_mode}/'
-                    f'{copy_crc.upper() or "?"} ({pass_elapsed:.1f}s)'
-                )
-
-                if test_crc and copy_crc and test_crc == copy_crc:
-                    matched = True
-                    test_mode = attempt_test_mode
-                    copy_mode = attempt_copy_mode
-                    final_mode = attempt_copy_mode
-                    track_stats = attempt_stats
-                    attempt_log.append(f'pass {attempt + 1}: CRC match {copy_crc.upper()}')
-                    break
-
-                matched = False
-                last_err = (
-                    f'Test/Copy CRC mismatch on track {track_no}: test={test_crc} copy={copy_crc}'
-                )
-                log.warning('%s', last_err)
-                notes.append(last_err)
-                track_stats = attempt_stats
-                test_mode = attempt_test_mode
-                copy_mode = attempt_copy_mode
-                final_mode = attempt_copy_mode
-                attempt_log.append(
-                    f'pass {attempt + 1}: CRC MISMATCH '
-                    f'test={test_crc.upper()} copy={copy_crc.upper()}'
-                )
-                self._unlink_quiet(test_wav, copy_wav)
-            except Exception as exc:
-                last_err = str(exc)
-                log.warning(
-                    'Track %s attempt %s failed: %s',
+            def _copy_progress(local: float) -> None:
+                local_c = max(0.0, min(1.0, local))
+                report(
                     track_no,
-                    attempt,
-                    exc,
+                    RipState.RIPPING,
+                    index=idx,
+                    sub=0.35 + 0.45 * local_c,
+                    message=f'Copying track {track_no}…',
+                    total_units=total_units,
                 )
-                attempt_log.append(f'pass {attempt + 1}: FAILED — {exc}')
-                self._unlink_quiet(test_wav, copy_wav)
-                if attempt + 1 >= attempts:
-                    break
 
-        if job.test_and_copy and not matched and job.burst_fallback and not self._cancelled:
+            mode, st = self._rip_track(
+                job.device,
+                track_no,
+                dest,
+                job=job,
+                expected_bytes=expected,
+                min_ratio=job.min_wav_size_ratio,
+                burst_fallback=False,
+                force_mode='secure',
+                sample_offset=job.sample_offset,
+                on_extract_progress=_copy_progress,
+                expected_sectors=sectors,
+            )
+            track_stats.merge(st)
+            report(
+                track_no,
+                RipState.RIPPING,
+                index=idx,
+                sub=0.81,
+                message=f'Checking CRC for track {track_no}…',
+                total_units=total_units,
+            )
+            attempt_idx['n'] += 1
+            return mode
+
+        def _flush() -> None:
+            if not defeat_cache:
+                return
+            report(
+                track_no,
+                RipState.RIPPING,
+                index=idx,
+                sub=0.33,
+                message='Defeating drive cache…',
+                total_units=total_units,
+            )
+            avoid0, avoid1 = _track_avoid_span(job.disc_info, track_no)
+            flush_drive_cache(
+                job.device,
+                job.disc_info,
+                avoid_start=avoid0,
+                avoid_end=avoid1,
+            )
+
+        def _test_crc_tick() -> None:
+            report(
+                track_no,
+                RipState.RIPPING,
+                index=idx,
+                sub=0.33,
+                message=f'Checking test CRC for track {track_no}…',
+                total_units=total_units,
+                nudge=True,
+            )
+
+        def _copy_crc_tick() -> None:
+            report(
+                track_no,
+                RipState.RIPPING,
+                index=idx,
+                sub=0.81,
+                message=f'Checking CRC for track {track_no}…',
+                total_units=total_units,
+                nudge=True,
+            )
+
+        def _on_mismatch(test_crc: str, copy_crc: str, _attempt: int) -> None:
+            msg = (
+                f'Test/Copy CRC mismatch on track {track_no}: '
+                f'test={test_crc} copy={copy_crc}'
+            )
+            log.warning('%s', msg)
+            notes.append(msg)
+
+        def _on_before_burst() -> None:
             report(
                 track_no,
                 RipState.RIPPING,
                 index=idx,
                 sub=0.40,
                 message=(
-                    f'Test & copy failed on track {track_no} — recovering that track in burst…'
+                    f'Test & copy failed on track {track_no} — '
+                    f'recovering that track in burst…'
                 ),
                 total_units=total_units,
             )
-            try:
-                recovered = self._extract_track_burst(
-                    job=job,
-                    track_no=track_no,
-                    copy_wav=copy_wav,
-                    expected=expected,
-                    sectors=sectors,
-                    idx=idx,
-                    total_units=total_units,
-                    report=report,
-                )
-                elapsed += recovered.elapsed
-                track_stats.merge(recovered.stats)
-                copy_crc = recovered.copy_crc or copy_crc
-                peak = recovered.peak if recovered.peak is not None else peak
-                final_mode = 'burst'
-                copy_mode = 'burst'
-                attempt_log.extend(recovered.attempt_log)
-                attempt_log.append(f'per-track burst recovery CRC={copy_crc.upper() or "?"}')
-                notes.append(
-                    f'Track {track_no}: recovered in burst after secure test & copy mismatch'
-                )
-            except Exception as exc:
-                last_err = str(exc)
-                attempt_log.append(f'per-track burst recovery FAILED — {exc}')
-                log.warning('Track %s burst recovery failed: %s', track_no, exc)
 
+        def _extract_burst(dest: Path) -> str:
+            recovered = self._extract_track_burst(
+                job=job,
+                track_no=track_no,
+                copy_wav=dest,
+                expected=expected,
+                sectors=sectors,
+                idx=idx,
+                total_units=total_units,
+                report=report,
+            )
+            track_stats.merge(recovered.stats)
+            notes.append(
+                f'Track {track_no}: recovered in burst after secure test & copy mismatch'
+            )
+            return 'burst'
+
+        session = run_secure_test_and_copy(
+            test_wav=test_wav,
+            copy_wav=copy_wav,
+            max_retries=max(0, int(job.test_copy_max_retries)),
+            burst_fallback=bool(job.burst_fallback),
+            extract_test=_extract_test,
+            extract_copy=_extract_copy,
+            extract_burst=_extract_burst if job.burst_fallback else None,
+            flush=_flush if defeat_cache else None,
+            is_cancelled=lambda: self._cancelled,
+            unlink=self._unlink_quiet,
+            test_crc_tick=_test_crc_tick,
+            copy_crc_tick=_copy_crc_tick,
+            on_mismatch=_on_mismatch,
+            on_before_burst=_on_before_burst,
+            label=f'track {track_no}',
+        )
+        elapsed = time.monotonic() - t0
         return _TrackExtract(
-            mode=final_mode,
-            test_crc=test_crc if dual_pass else '',
-            copy_crc=copy_crc,
-            peak=peak,
+            mode=session.mode,
+            test_crc=session.test_crc if not session.burst_recovered else '',
+            copy_crc=session.copy_crc,
+            peak=session.peak,
             elapsed=elapsed,
             stats=track_stats,
-            matched=matched,
+            matched=session.matched,
             copy_wav=copy_wav,
             test_wav=test_wav,
-            error=last_err,
-            dual_pass=dual_pass,
-            test_mode=test_mode,
-            copy_mode=copy_mode,
-            attempt_log=attempt_log,
+            error=session.error,
+            dual_pass=True,
+            test_mode=session.test_mode,
+            copy_mode=session.copy_mode,
+            attempt_log=session.attempt_log,
             expected_wav_bytes=int(expected or 0),
         )
 
@@ -1431,7 +1391,20 @@ class ExtractMixin:
         primary_mode = (
             force_mode if force_mode in ('secure', 'normal', 'burst') else 'secure'
         )
-        edge = _job_per_track_overread_span(job, track_number)
+        edge = None
+        disc = job.disc_info if job is not None else None
+        if disc is not None and disc.tracks:
+            toc = next((t for t in disc.tracks if t.number == track_number), None)
+            if toc is not None:
+                edge = per_track_overread_read_span(
+                    track_no=track_number,
+                    track_start=int(toc.start_sector),
+                    track_length=int(toc.length_sectors),
+                    first_track_no=int(disc.tracks[0].number),
+                    last_track_no=int(disc.tracks[-1].number),
+                    sample_offset=job.sample_offset,
+                    overread=job.overread,
+                )
         if edge is not None:
             read_start, read_end, toc_expected = edge
             progress_bytes = 44 + max(0, read_end - read_start) * 2352
@@ -1768,18 +1741,8 @@ class ExtractMixin:
         cdparanoia with ``-X`` can leave a large but truncated WAV after skips;
         prefer burst recovery on hard errors even when the process "finished".
         """
-        hard = (
-            stats.skips > 0
-            or stats.readerrs > 0
-            or stats.scratch > 0
-            or stats.cacheerrs > 0
-            or stats.hard_errors > 0
-        )
-        # Any non-zero exit with hard errors → burst (finished or not).
-        if stats.exit_code not in (None, 0) and hard:
-            return True
-        # Exit 0 but paranoia still reported hard errors → do not trust secure.
-        if stats.exit_code in (None, 0) and stats.hard_errors > 0:
+        # Any hard paranoia counters → do not trust secure (exit 0 or not).
+        if stats.hard_errors > 0:
             return True
         if stats.exit_code not in (None, 0):
             if expected_bytes and expected_bytes > 1000 and wav_path.is_file():

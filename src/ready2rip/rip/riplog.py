@@ -32,9 +32,6 @@ class TrackLogEntry:
     title: str = ''
     filename: str = ''
     output_path: Path | None = None
-    length_label: str = ''
-    start_sector: int = 0
-    length_sectors: int = 0
     # Human mode: e.g. "secure (test & copy)", "burst (full-disc after CRC mismatch)"
     extract_mode: str = 'secure'
     extract_seconds: float | None = None
@@ -174,17 +171,8 @@ class RipLog:
         number: int,
         *,
         title: str = '',
-        length_label: str = '',
-        start_sector: int = 0,
-        length_sectors: int = 0,
     ) -> TrackLogEntry:
-        entry = TrackLogEntry(
-            number=number,
-            title=title,
-            length_label=length_label,
-            start_sector=start_sector,
-            length_sectors=length_sectors,
-        )
+        entry = TrackLogEntry(number=number, title=title)
         self.tracks.append(entry)
         return entry
 
@@ -693,25 +681,21 @@ def analyze_pcm_for_log(pcm: bytes) -> tuple[str, float | None]:
     return f'{crc:08x}', peak_pct
 
 
-def analyze_wav_for_log(
-    wav_path: Path,
-    _length_sectors: int = 0,
-) -> tuple[str, float | None, float | None]:
-    """Return ``(crc32_hex, peak_percent, None)`` for a CDDA WAV file."""
+def analyze_wav_for_log(wav_path: Path) -> tuple[str, float | None]:
+    """Return ``(crc32_hex, peak_percent)`` for a CDDA WAV file."""
     try:
         with wave.open(str(wav_path), 'rb') as wf:
             if wf.getsampwidth() != 2:
                 raw = wf.readframes(wf.getnframes())
                 crc = zlib.crc32(raw) & 0xFFFFFFFF
-                return f'{crc:08x}', None, None
+                return f'{crc:08x}', None
             raw = wf.readframes(wf.getnframes())
-        crc, peak = analyze_pcm_for_log(raw)
-        return crc, peak, None
+        return analyze_pcm_for_log(raw)
     except Exception:
         try:
-            return _pcm_crc_from_raw(wav_path), None, None
+            return _pcm_crc_from_raw(wav_path), None
         except OSError:
-            return '', None, None
+            return '', None
 
 
 def extraction_speed_x(length_sectors: int, elapsed_seconds: float) -> float | None:

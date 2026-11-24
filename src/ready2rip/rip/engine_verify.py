@@ -30,9 +30,6 @@ class VerifyMixin:
                 entry = rip_log.begin_track(
                     track.number,
                     title=title_for_track(rip_log.album, track.number),
-                    length_label=track.duration_label,
-                    start_sector=track.start_sector,
-                    length_sectors=track.length_sectors,
                 )
                 entry.extract_mode = mode_label
                 entry.status = 'verify failed'
@@ -137,9 +134,6 @@ class VerifyMixin:
                     log_entry = rip_log.begin_track(
                         track.number,
                         title=title_for_track(rip_log.album, track.number),
-                        length_label=track.duration_label,
-                        start_sector=track.start_sector,
-                        length_sectors=track.length_sectors,
                     )
                     log_entry.extract_mode = mode_label
                     log_entry.quality_percent = image_quality

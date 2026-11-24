@@ -6,9 +6,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from ready2rip.disc.overread import per_track_overread_read_span
 from ready2rip.disc.probe import DiscInfo
-from ready2rip.rip.engine_types import RipJob
 
 log = logging.getLogger('ready2rip.rip.engine')
 
@@ -99,30 +97,4 @@ def _track_avoid_span(disc: DiscInfo | None, track_no: int) -> tuple[int | None,
             start = int(t.start_sector)
             return start, start + int(t.length_sectors)
     return None, None
-
-
-def _job_per_track_overread_span(job: RipJob | None, track_no: int) -> tuple[int, int, int] | None:
-    """Job-aware wrapper around :func:`per_track_overread_read_span`."""
-    if job is None:
-        return None
-    disc = job.disc_info
-    if disc is None or not disc.tracks:
-        return None
-    toc = None
-    for t in disc.tracks:
-        if t.number == track_no:
-            toc = t
-            break
-    if toc is None:
-        return None
-    return per_track_overread_read_span(
-        track_no=track_no,
-        track_start=int(toc.start_sector),
-        track_length=int(toc.length_sectors),
-        first_track_no=int(disc.tracks[0].number),
-        last_track_no=int(disc.tracks[-1].number),
-        sample_offset=job.sample_offset,
-        overread=job.overread,
-    )
-
 

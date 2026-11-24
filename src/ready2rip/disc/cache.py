@@ -44,9 +44,7 @@ def flush_drive_cache(
             try:
                 # Burst seek+read is enough to evict cache and is much faster than
                 # a paranoia pass whose audio we immediately discard.
-                _extract_span(
-                    device, span, out, timeout=timeout, quiet=True, burst=True
-                )
+                _extract_span(device, span, out, timeout=timeout, quiet=True)
                 return True
             except Exception as exc:
                 log.debug('Cache flush audio read failed: %s', exc)
@@ -65,9 +63,7 @@ def flush_drive_cache(
         with tempfile.TemporaryDirectory(prefix='ready2rip-flush-') as tmp:
             out = Path(tmp) / 'flush.wav'
             try:
-                _extract_span(
-                    device, span, out, timeout=timeout, quiet=True, burst=True
-                )
+                _extract_span(device, span, out, timeout=timeout, quiet=True)
             except Exception as exc:
                 log.debug('Cache flush overlapping read failed (non-fatal): %s', exc)
         # Overlapping audio flush must not report success — head may still be hot.
@@ -152,7 +148,6 @@ def _flush_via_data_or_seek(
         return False
     finally:
         mmc.close()
-    return False
 
 
 def _flush_span(
@@ -240,8 +235,8 @@ def _extract_span(
     *,
     timeout: int,
     quiet: bool = True,
-    burst: bool = False,
 ) -> None:
+    """Burst (-Z) seek+read used only for cache eviction (audio discarded)."""
     from ready2rip.util import find_cdparanoia
 
     binary = find_cdparanoia()
@@ -252,12 +247,8 @@ def _extract_span(
         '-w',
         '-d',
         device,
+        '-Z',
     ]
-    if burst:
-        cmd.append('-Z')  # raw burst — essential for reliable cache timing
-    else:
-        # Single token — "-z" "20" is misread as track 20 by cdparanoia.
-        cmd.append('--never-skip=20')
     if quiet:
         cmd.append('-q')
     cmd.extend([span, str(wav_path)])

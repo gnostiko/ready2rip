@@ -135,14 +135,6 @@ class EncodeMixin:
             )
         return apply_existing_files_policy(dests, job.existing_files)
 
-    @staticmethod
-    def _apply_existing_files_policy(
-        dests: list[EncodeDest],
-        policy: str | None,
-    ) -> list[EncodeDest]:
-        """Filter or rename destinations when output files already exist."""
-        return apply_existing_files_policy(dests, policy)
-
     def planned_audio_paths(self, job: RipJob) -> list[Path]:
         """Templated audio destinations (overwrite paths) for conflict checks."""
         probe = replace(job, existing_files='overwrite')
@@ -172,11 +164,6 @@ class EncodeMixin:
                 seen.add(key)
                 paths.append(dest.out_path)
         return paths
-
-    @staticmethod
-    def conflicting_paths(paths: list[Path]) -> list[Path]:
-        """Return existing files from *paths* (stable order)."""
-        return plan_conflicting_paths(paths)
 
     def _ensure_destination_dirs(self, dests: list[EncodeDest]) -> None:
         """Create every destination album folder (and its base) up front."""

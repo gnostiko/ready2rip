@@ -24,7 +24,7 @@ _REQUIRED = (
     '_prepare_artwork',
     '_retag_title',
     '_track_avoid_span',
-    '_job_per_track_overread_span',
+    'per_track_overread_read_span',
     'paranoia_flags_for_mode',
     'secure_paranoia_flags',
     'normal_paranoia_flags',

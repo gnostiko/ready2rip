@@ -11,7 +11,7 @@ or forced resample flags. Compression uses stock quality presets only.
     native ``aac`` with ``-q:a`` VBR (or ``-b:a`` for CBR presets).
     AAC-LC only; no HE-AAC, no custom filters.
   * QAAC — Apple AAC via ``qaac`` / Wine (opt-in; never bundled). Popular
-    TVBR / CVBR / CBR presets; ``--quality 2``.
+    TVBR / CVBR / CBR presets (encoder effort defaults to qaac ``-q 2``).
   * Opus — ``opusenc`` VBR + ``--music`` when available; ffmpeg ``libopus``
     fallback mirrors the same bitrate / VBR / audio application settings.
     (Opus packets are always 48 kHz internally; that is the codec, not a
@@ -30,7 +30,11 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 
-from ready2rip.settings_defs import normalize_aac_quality, normalize_qaac_quality
+from ready2rip.settings_defs import (
+    normalize_aac_quality,
+    normalize_qaac_quality,
+    normalize_wavpack_level,
+)
 from ready2rip.util import subprocess_env_for
 
 # WavPack preset → (wavpack CLI flags, ffmpeg -compression_level).
@@ -338,19 +342,13 @@ def aiff_encode_argv(wav_path: Path, out_path: Path) -> list[str]:
     ]
 
 
-def _normalize_wavpack_level(value: str | None) -> str:
-    from ready2rip.settings_defs import normalize_wavpack_level
-
-    return normalize_wavpack_level(value)
-
-
 def wavpack_encode_argv(
     wav_path: Path,
     out_path: Path,
     level: str = 'high',
 ) -> list[str]:
     """Lossless WavPack via ``wavpack`` CLI when present."""
-    preset = _normalize_wavpack_level(level)
+    preset = normalize_wavpack_level(level)
     flags, _ffmpeg_level = _WAVPACK_PRESETS.get(preset, _WAVPACK_PRESETS['high'])
     return [
         'wavpack',
@@ -368,7 +366,7 @@ def wavpack_ffmpeg_argv(
     level: str = 'high',
 ) -> list[str]:
     """ffmpeg ``wavpack`` fallback when the wavpack CLI is missing."""
-    preset = _normalize_wavpack_level(level)
+    preset = normalize_wavpack_level(level)
     _flags, compression = _WAVPACK_PRESETS.get(preset, _WAVPACK_PRESETS['high'])
     return [
         'ffmpeg',
@@ -418,7 +416,7 @@ def encode_command_summary(
         level = max(0, min(8, int(flac_compression)))
         return f'flac -{level} --verify (lossless; PCM unaltered)'
     if fmt == 'wavpack':
-        from ready2rip.settings_defs import normalize_wavpack_level, rip_log_wavpack_level
+        from ready2rip.settings_defs import rip_log_wavpack_level
 
         preset = normalize_wavpack_level(wavpack_compression)
         flags, ff_level = _WAVPACK_PRESETS.get(preset, _WAVPACK_PRESETS['high'])
@@ -439,17 +437,17 @@ def encode_command_summary(
         args = ' '.join(lame_args_for_mp3_quality(q))
         return f'lame --noreplaygain {args} (stock LAME; no resample/scale)'
     if fmt == 'aac':
-        from ready2rip.settings_defs import normalize_aac_quality, rip_log_aac_quality
+        from ready2rip.settings_defs import rip_log_aac_quality
 
         q = normalize_aac_quality(aac_quality)
         if prefer_fdk_aac():
             return f'ffmpeg -c:a libfdk_aac -afterburner 1 ({rip_log_aac_quality(q)}; stock AAC-LC)'
         return f'ffmpeg -c:a aac ({rip_log_aac_quality(q)}; stock AAC-LC; no FDK)'
     if fmt == 'qaac':
-        from ready2rip.settings_defs import normalize_qaac_quality, rip_log_qaac_quality
+        from ready2rip.settings_defs import rip_log_qaac_quality
 
         q = normalize_qaac_quality(qaac_quality)
-        return f'qaac --quality 2 ({rip_log_qaac_quality(q)}; Apple AAC-LC)'
+        return f'qaac ({rip_log_qaac_quality(q)}; Apple AAC-LC)'
     if fmt == 'opus':
         return f'opusenc --bitrate {int(opus_bitrate)} --vbr --music (stock Opus; no pre-process)'
     if fmt == 'wav':

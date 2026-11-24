@@ -58,14 +58,3 @@ class ProgressPulse:
 
     def __exit__(self, *_exc) -> None:
         self.stop()
-
-
-def pulse_while(
-    on_tick: Callable[[], None],
-    work: Callable[[], object],
-    *,
-    interval: float = 0.2,
-) -> object:
-    """Run *work* while pulsing *on_tick*."""
-    with ProgressPulse(on_tick, interval=interval):
-        return work()

@@ -67,12 +67,11 @@ def overread_span(
         return int(start_sector), int(end_sector)
     start = int(start_sector)
     end = int(end_sector)
-    # Non-zero offset needs samples past TOC edges (lead-in / lead-out).
-    if int(sample_offset) != 0:
-        if at_disc_start and overread.lead_in:
-            start -= margin
-        if at_disc_end and overread.lead_out:
-            end += margin
+    # margin > 0 ⇒ non-zero offset; widen into lead-in / lead-out when capable.
+    if at_disc_start and overread.lead_in:
+        start -= margin
+    if at_disc_end and overread.lead_out:
+        end += margin
     if end <= start:
         return int(start_sector), int(end_sector)
     return start, end
@@ -128,11 +127,8 @@ def probe_overread(
         from ready2rip.disc.mmc import MmcDevice
 
         with MmcDevice(device) as mmc:
-            # Lead-in: LBA -1 (0xFFFFFFFF as unsigned 32-bit).
+            # Lead-in: LBA -1 as unsigned 32-bit (0xFFFFFFFF).
             lead_in = mmc.read_raw_sectors(0xFFFFFFFF, 1) is not None
-            if not lead_in:
-                # Some firmwares accept signed-style -1 via high bit only.
-                lead_in = mmc.read_raw_sectors(-1 & 0xFFFFFFFF, 1) is not None
 
             lo = int(leadout_lba)
             if lo > 0:
@@ -144,11 +140,6 @@ def probe_overread(
     except Exception as exc:
         log.debug('Overread probe failed on %s: %s', device, exc)
     return OverreadCapability(lead_in=lead_in, lead_out=lead_out)
-
-
-def overread_is_used(sample_offset: int, overread: OverreadCapability) -> bool:
-    """True when a non-zero offset will widen TOC edges into lead-in/out."""
-    return int(sample_offset) != 0 and bool(overread.any)
 
 
 def overread_usage_label(sample_offset: int, overread: OverreadCapability) -> str:
