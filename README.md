@@ -2,7 +2,9 @@
 
 ready2rip is a secure CD ripper for Linux. It extracts with full cdparanoia, checks the result against AccurateRip, and tags the files from MusicBrainz or gnudb, along with any CD-TEXT, MCN, and ISRC the drive can read.
 
-<img width="1050" alt="ready2rip main window" src="docs/screenshots/01-main-window.png" />
+
+<img width="1050" height="750" alt="Screenshot From 2026-11-24 17-14-22" src="https://github.com/user-attachments/assets/3d333aec-1b46-40ed-8631-5802917037b7" />
+
 
 ## Install
 
